@@ -1,0 +1,95 @@
+"use server";
+
+import { headers } from "next/headers";
+import { eq } from "drizzle-orm";
+import { db, workspaces } from "@crumb/db";
+import { requireSession } from "@/lib/auth";
+import { stripeClient, STRIPE_PRICE_ID, STRIPE_PORTAL_RETURN_URL } from "@/lib/stripe";
+import { isCloud } from "@/lib/tier";
+
+export type CheckoutResult =
+  | { ok: true; url: string }
+  | { ok: false; error: string };
+
+function originFromHeaders(): string | null {
+  const h = headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host");
+  const proto = h.get("x-forwarded-proto") ?? (host?.startsWith("localhost") ? "http" : "https");
+  if (!host) return null;
+  return `${proto}://${host}`;
+}
+
+// Vendor admin clicks "Upgrade" — we ensure a Stripe customer exists for
+// the workspace (creates one on first run, stores the id), then mint a
+// Checkout session for the configured price. The session redirects back
+// to /settings/billing where the webhook will have already written the
+// subscription row before the redirect lands.
+export async function createCheckoutSession(): Promise<CheckoutResult> {
+  if (!isCloud()) return { ok: false, error: "Billing is a Cloud-only feature." };
+  const { workspace, user } = await requireSession();
+  if (user.role !== "admin") return { ok: false, error: "Only admins can manage billing." };
+
+  const stripe = stripeClient();
+  if (!stripe) return { ok: false, error: "Stripe isn't configured on this deployment." };
+  const priceId = STRIPE_PRICE_ID();
+  if (!priceId) return { ok: false, error: "STRIPE_PRICE_ID is unset." };
+
+  const origin = originFromHeaders();
+  if (!origin) return { ok: false, error: "Could not determine host." };
+
+  // Reuse the workspace's customer if we've created one before; otherwise
+  // create now and persist so future portal/checkout sessions hit the
+  // same Stripe customer record.
+  let customerId = workspace.stripeCustomerId;
+  if (!customerId) {
+    const customer = await stripe.customers.create({
+      email: user.email,
+      name: workspace.name,
+      metadata: { workspace_id: workspace.id, workspace_slug: workspace.slug },
+    });
+    customerId = customer.id;
+    await db.update(workspaces)
+      .set({ stripeCustomerId: customerId })
+      .where(eq(workspaces.id, workspace.id));
+  }
+
+  const session = await stripe.checkout.sessions.create({
+    customer: customerId,
+    mode: "subscription",
+    line_items: [{ price: priceId, quantity: 1 }],
+    success_url: `${origin}/settings/billing?stripe=success`,
+    cancel_url:  `${origin}/settings/billing?stripe=cancel`,
+    // Allows the customer to pick a quantity (seats) on the Checkout page.
+    // We don't expose seats in our UI yet; defaulting to 1 is fine for v1.
+    allow_promotion_codes: true,
+    metadata: { workspace_id: workspace.id, workspace_slug: workspace.slug },
+  });
+
+  if (!session.url) return { ok: false, error: "Stripe did not return a checkout URL." };
+  return { ok: true, url: session.url };
+}
+
+// Active subscribers click "Manage" — open the Stripe Customer Portal
+// (handles invoices, payment method, cancellation). Return URL brings
+// them back to /settings/billing.
+export async function createPortalSession(): Promise<CheckoutResult> {
+  if (!isCloud()) return { ok: false, error: "Billing is a Cloud-only feature." };
+  const { workspace, user } = await requireSession();
+  if (user.role !== "admin") return { ok: false, error: "Only admins can manage billing." };
+
+  const stripe = stripeClient();
+  if (!stripe) return { ok: false, error: "Stripe isn't configured on this deployment." };
+  if (!workspace.stripeCustomerId) {
+    return { ok: false, error: "No Stripe customer for this workspace yet — start with Upgrade." };
+  }
+
+  const origin = originFromHeaders();
+  if (!origin) return { ok: false, error: "Could not determine host." };
+
+  const session = await stripe.billingPortal.sessions.create({
+    customer: workspace.stripeCustomerId,
+    return_url: STRIPE_PORTAL_RETURN_URL(`${origin}/settings/billing`),
+  });
+
+  return { ok: true, url: session.url };
+}

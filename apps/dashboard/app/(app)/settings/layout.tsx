@@ -1,0 +1,23 @@
+import type { ReactNode } from "react";
+import { PageHead } from "@crumb/ui";
+import { getActiveSession } from "@/lib/server";
+import { SettingsNav } from "./SettingsNav";
+
+export const dynamic = "force-dynamic";
+
+export default async function SettingsLayout({ children }: { children: ReactNode }) {
+  const { workspace } = await getActiveSession();
+  return (
+    <>
+      <PageHead
+        crumb="Setup · vendor"
+        title="Workspace"
+        lede={`${workspace.name} · team, integrations, account mapping, branding.`}
+      />
+      <div className="cols-aside">
+        <SettingsNav />
+        <div className="col gap-5">{children}</div>
+      </div>
+    </>
+  );
+}

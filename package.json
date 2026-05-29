@@ -1,0 +1,29 @@
+{
+  "name": "crumb",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source B2B feedback platform — embed, triage, ship, notify.",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "dev": "pnpm --filter dashboard dev",
+    "build": "pnpm --filter dashboard build",
+    "start": "pnpm --filter dashboard start",
+    "lint": "pnpm -r lint",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter @crumb/db migrate",
+    "db:generate": "pnpm --filter @crumb/db generate",
+    "self-host:up": "docker compose up -d --build",
+    "self-host:logs": "docker compose logs -f dashboard",
+    "self-host:down": "docker compose down",
+    "db:push": "pnpm --filter @crumb/db push",
+    "db:seed": "pnpm --filter @crumb/db seed",
+    "db:studio": "pnpm --filter @crumb/db studio",
+    "widget:build": "pnpm --filter @crumb/widget build",
+    "widget:dev": "pnpm --filter @crumb/widget dev"
+  },
+  "packageManager": "pnpm@11.3.0",
+  "engines": {
+    "node": ">=20"
+  }
+}

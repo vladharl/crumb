@@ -1,0 +1,38 @@
+{
+  "name": "dashboard",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.98.0",
+    "@crumb/db": "workspace:*",
+    "@crumb/ui": "workspace:*",
+    "drizzle-orm": "^0.36.4",
+    "motion": "^11.18.2",
+    "next": "14.2.15",
+    "nodemailer": "^8.0.8",
+    "postgres": "^3.4.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "rrweb": "2.0.0-alpha.20",
+    "server-only": "^0.0.1",
+    "stripe": "^22.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^20.14.0",
+    "@types/nodemailer": "^8.0.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.5.4",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^2.1.9"
+  }
+}

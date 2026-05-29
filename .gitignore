@@ -1,0 +1,21 @@
+node_modules
+.next
+out
+dist
+build
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+apps/dashboard/public/widget.js
+apps/dashboard/public/widget.js.map
+packages/db/dist
+.DS_Store
+.pnpm-store
+coverage
+apps/dashboard/tests/e2e/.auth
+apps/dashboard/test-results
+apps/dashboard/playwright-report
+
+# Local Claude tooling state
+.claude/

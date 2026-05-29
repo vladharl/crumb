@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: crumb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-crumb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crumb}
+      POSTGRES_DB: ${POSTGRES_DB:-crumb}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - crumb-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crumb} -d ${POSTGRES_DB:-crumb}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+    image: crumb-dashboard:local
+    container_name: crumb-dashboard
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-crumb}:${POSTGRES_PASSWORD:-crumb}@postgres:5432/${POSTGRES_DB:-crumb}
+      CRUMB_WORKSPACE_SLUG: ${CRUMB_WORKSPACE_SLUG:-northbeam}
+      NODE_ENV: production
+    ports:
+      - "${DASHBOARD_PORT:-3000}:3000"
+
+volumes:
+  crumb-pg-data:

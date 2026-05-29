@@ -1,0 +1,83 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  typecheck-and-unit:
+    name: typecheck + unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 11.3.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: tsc --noEmit (dashboard + widget + db + ui)
+        run: |
+          (cd apps/dashboard && npx tsc --noEmit)
+          (cd apps/widget    && npx tsc --noEmit)
+          (cd packages/db    && npx tsc --noEmit)
+          (cd packages/ui    && npx tsc --noEmit)
+      - name: vitest
+        run: pnpm --filter dashboard test
+
+  # E2E gated behind a `run-e2e` PR label until the suite stabilizes.
+  # Spins up a fresh Postgres + applies migrations + seeds + boots the
+  # dashboard, then runs Playwright. Slow (~3-5 min); off the critical
+  # PR path on purpose.
+  e2e:
+    name: e2e (label-gated)
+    if: contains(github.event.pull_request.labels.*.name, 'run-e2e')
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: crumb
+          POSTGRES_PASSWORD: crumb
+          POSTGRES_DB: crumb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://crumb:crumb@localhost:5432/crumb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 11.3.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: apply schema + seed
+        run: |
+          pnpm db:push
+          pnpm db:seed
+      - name: install Playwright browsers
+        run: pnpm --filter dashboard exec playwright install --with-deps chromium
+      - name: build + start dashboard
+        run: |
+          pnpm --filter dashboard build
+          pnpm --filter dashboard start &
+          npx wait-on http://localhost:3000 -t 60000
+      - name: run e2e
+        run: pnpm --filter dashboard test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/dashboard/playwright-report
+          retention-days: 7

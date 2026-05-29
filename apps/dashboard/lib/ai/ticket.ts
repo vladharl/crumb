@@ -1,0 +1,137 @@
+import "server-only";
+import Anthropic from "@anthropic-ai/sdk";
+import { isCloud } from "@/lib/tier";
+
+// AI ticket drafting. Same model + gating pattern as lib/ai/cluster.ts.
+const MODEL = "claude-haiku-4-5-20251001";
+
+let cached: Anthropic | null | undefined;
+function clientOrNull(): Anthropic | null {
+  if (cached !== undefined) return cached;
+  const key = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!key) { cached = null; return null; }
+  cached = new Anthropic({ apiKey: key });
+  return cached;
+}
+
+export function ticketSuggestionConfigured(): boolean {
+  return isCloud() && clientOrNull() !== null;
+}
+
+export const TICKET_MODEL = MODEL;
+
+export type SuggestTicketInput = {
+  provider: "linear" | "jira" | "github";
+  item: { title: string; body: string; type: string };
+  // Up to 10 recent ticket titles from the target — gives the model the
+  // team's voice without paying for full bodies.
+  recentTickets: Array<{ identifier: string; title: string; stateName: string }>;
+  // GitHub-only repo context. Always fetched from the workspace's
+  // connected GitHub repo when present — feeds drafts targeting *any*
+  // provider, because teams often use GitHub for code + Linear/Jira
+  // for tickets.
+  repoContext?: {
+    repo: string;            // "owner/name"
+    readme: string | null;   // capped to 4000 chars upstream
+    topLevelTree: string | null; // comma-joined paths, capped 400 chars upstream
+  };
+};
+
+export type SuggestTicketResult = {
+  title: string;
+  body: string;
+  labels: string[] | null;
+  reason: string;
+  confidence: number;
+};
+
+// Caps mirror lib/ai/cluster.ts. Total prompt stays under ~8K input tokens.
+const ITEM_BODY_MAX = 1200;
+const README_MAX = 4000;
+const TREE_MAX = 400;
+const RECENT_MAX = 10;
+
+export async function suggestTicket(input: SuggestTicketInput): Promise<SuggestTicketResult | null> {
+  const client = clientOrNull();
+  if (!client) return null;
+
+  const itemBody = (input.item.body ?? "").slice(0, ITEM_BODY_MAX);
+  const tickets = input.recentTickets.slice(0, RECENT_MAX);
+  const readme = input.repoContext?.readme ? input.repoContext.readme.slice(0, README_MAX) : null;
+  const tree = input.repoContext?.topLevelTree ? input.repoContext.topLevelTree.slice(0, TREE_MAX) : null;
+
+  const recentBlock = tickets.length
+    ? tickets.map(t => `- [${t.stateName}] ${t.identifier}: ${t.title}`).join("\n")
+    : "(no recent tickets to learn voice from)";
+
+  const repoBlock = (readme || tree)
+    ? [
+        readme ? `\nProject README (truncated):\n"""\n${readme}\n"""` : "",
+        tree ? `\nRepo top-level paths: ${tree}` : "",
+      ].filter(Boolean).join("\n")
+    : "";
+
+  const providerLabel = input.provider === "linear" ? "Linear" : input.provider === "jira" ? "Jira" : "GitHub";
+
+  const prompt = `You draft engineering tickets for a vendor's ${providerLabel} workspace based on customer feedback received through Crumb.
+
+Recent tickets in the target project (for voice + label style):
+${recentBlock}
+${repoBlock}
+
+Customer feedback to convert into a ${providerLabel} ticket:
+- type: ${input.item.type}
+- title: ${input.item.title}
+- body: ${itemBody || "(no body)"}
+
+Write a clean engineering ticket. Match the voice of the recent tickets above. If the recent tickets use a labels convention, suggest 1-3 labels in that style (lowercase kebab-case unless the existing labels suggest otherwise).
+
+Respond with a single line of JSON only — no prose, no code fences. Schema:
+{"title": "<short imperative title>", "body": "<markdown body, 2-5 paragraphs>", "labels": ["..."] | null, "reason": "<one short sentence on why this framing>", "confidence": <0..1>}
+
+Rules:
+- Title is imperative, ≤80 chars, no trailing punctuation.
+- Body is markdown. Start with a one-sentence summary. Include "Reported via Crumb" attribution at the end. Don't quote the entire raw feedback — paraphrase + reference.
+- Labels can be null if recent tickets show no clear convention.
+- Reason ≤ 120 characters.
+- Confidence ≥ 0.6 means "I'm confident this matches the team's style"; below 0.6 means "best effort, vendor should review".`;
+
+  try {
+    const resp = await client.messages.create({
+      model: MODEL,
+      max_tokens: 800,
+      temperature: 0.4,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = resp.content
+      .filter(b => b.type === "text")
+      .map(b => (b as { text: string }).text)
+      .join("")
+      .trim();
+    if (!text) return null;
+
+    const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+    const parsed = JSON.parse(cleaned) as {
+      title?: string;
+      body?: string;
+      labels?: string[] | null;
+      reason?: string;
+      confidence?: number;
+    };
+
+    const title = (parsed.title ?? "").trim();
+    if (!title) return null;
+    const body = (parsed.body ?? "").trim();
+    const labels = Array.isArray(parsed.labels) ? parsed.labels.filter(l => typeof l === "string").slice(0, 5) : null;
+    const reason = (parsed.reason ?? "").slice(0, 240);
+    const confidence = typeof parsed.confidence === "number"
+      ? Math.min(1, Math.max(0, parsed.confidence))
+      : 0.6;
+
+    return { title, body, labels: labels && labels.length ? labels : null, reason, confidence };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[crumb/ai/ticket] suggestTicket failed:", err);
+    return null;
+  }
+}
