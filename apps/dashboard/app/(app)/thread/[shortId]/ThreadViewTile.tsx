@@ -4,6 +4,7 @@ import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
 import { ticketSuggestionConfigured } from "@/lib/ai/ticket";
 import { getReplayForItem } from "@/lib/replay/read";
+import { hasFeature } from "@/lib/entitlements";
 import { ThreadView, type ThreadData } from "./ThreadView";
 
 type WorkspaceForThread = {
@@ -11,6 +12,10 @@ type WorkspaceForThread = {
   linearInstalledAt: Date | null;
   jiraInstalledAt: Date | null;
   githubInstalledAt: Date | null;
+  // Billing columns drive the AI entitlement check below. The full session
+  // workspace row carries these; the type just narrows what loadThread uses.
+  planId: string;
+  subscriptionStatus: string | null;
 };
 
 async function loadThread(workspace: WorkspaceForThread, shortId: string, canManageInitiatives: boolean): Promise<ThreadData | null> {
@@ -227,7 +232,7 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       jiraInstalledAt:   workspace.jiraInstalledAt   ? workspace.jiraInstalledAt.toISOString()   : null,
       githubInstalledAt: workspace.githubInstalledAt ? workspace.githubInstalledAt.toISOString() : null,
     },
-    aiTicketAvailable: ticketSuggestionConfigured(),
+    aiTicketAvailable: ticketSuggestionConfigured() && hasFeature(workspace, "ai"),
     replay,
   };
 }

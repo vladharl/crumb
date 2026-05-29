@@ -4,6 +4,7 @@ import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { callerIpFromRequest, checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { suggestInitiative, clusterConfigured, CLUSTER_MODEL } from "@/lib/ai/cluster";
+import { hasFeature } from "@/lib/entitlements";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -178,7 +179,9 @@ export async function POST(req: Request) {
 
   // Fire-and-forget AI clustering. Customer doesn't wait for the LLM call
   // — the item is already saved. Errors get swallowed by the helper.
-  if (clusterConfigured()) {
+  // Gated on the deployment capability (cloud + key) AND this workspace's
+  // plan entitlement.
+  if (clusterConfigured() && hasFeature(ws, "ai")) {
     void autoCluster(ws.id, created!.id, created!.title, created!.body, created!.type);
   }
 

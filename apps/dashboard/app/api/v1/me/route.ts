@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db, accounts, accountUsers, items } from "@crumb/db";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
+import { hasFeature } from "@/lib/entitlements";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -83,7 +84,10 @@ export async function GET(req: Request) {
       accent: workspace.accent,
       launcher_bg: workspace.launcherBg,
       position: workspace.position,
-      session_record_enabled: workspace.sessionRecordEnabled ?? false,
+      // Only advertise recording to the widget when the workspace both
+      // toggled it on AND its plan entitles it — otherwise the recorder
+      // bundle would load and every chunk POST would 403.
+      session_record_enabled: (workspace.sessionRecordEnabled ?? false) && hasFeature(workspace, "session_record"),
     },
     account: {
       id: account.id,

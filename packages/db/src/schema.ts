@@ -433,4 +433,22 @@ export type NewReplaySession = typeof replaySessions.$inferInsert;
 export type ReplayChunk = typeof replayChunks.$inferSelect;
 export type NewReplayChunk = typeof replayChunks.$inferInsert;
 
+// ─── storage blobs (Postgres-backed blob store) ──────────────
+// Interim object store for Cloud: attachments + replay chunks can be kept
+// in Postgres so multiple app instances share storage without a filesystem
+// or S3 (selected via CRUMB_STORAGE_PROVIDER=postgres). Bytes are stored
+// base64-encoded in a text column — keeps us off postgres.js bytea encoding
+// quirks; the ~33% overhead is acceptable until a real S3/R2 adapter lands.
+// `key` is the opaque storage key the local provider also uses verbatim.
+export const storageBlobs = pgTable("storage_blobs", {
+  key: text("key").primaryKey(),
+  contentType: text("content_type").notNull(),
+  dataB64: text("data_b64").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type StorageBlob = typeof storageBlobs.$inferSelect;
+export type NewStorageBlob = typeof storageBlobs.$inferInsert;
+
 export const __sql = sql; // re-export for convenience

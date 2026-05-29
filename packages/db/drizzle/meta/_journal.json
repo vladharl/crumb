@@ -99,6 +99,13 @@
       "when": 1780700000000,
       "tag": "0013_replay_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1780800000000,
+      "tag": "0014_storage_blobs",
+      "breakpoints": true
     }
   ]
 }

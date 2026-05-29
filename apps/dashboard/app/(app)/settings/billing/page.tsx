@@ -2,7 +2,14 @@ import { Card, CardHead, Pill } from "@crumb/ui";
 import { getActiveSession } from "@/lib/server";
 import { isCloud } from "@/lib/tier";
 import { stripeConfigured, isActiveStatus } from "@/lib/stripe";
+import { workspaceFeatures, type Feature } from "@/lib/entitlements";
 import { UpgradeButton, ManageButton } from "./BillingActions";
+
+const FEATURE_LABEL: Record<Feature, string> = {
+  ai: "AI clustering + ticket drafts",
+  session_record: "Session Record (replay)",
+  integrations: "Linear / Jira / GitHub / Slack",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +85,21 @@ export default async function BillingPage() {
         <div className="col gap-1">
           <span className="eyebrow">Plan</span>
           <span className="serif text-md">{workspace.planId}</span>
+        </div>
+
+        <div className="col gap-2">
+          <span className="eyebrow">Includes</span>
+          {(() => {
+            const features = workspaceFeatures(workspace);
+            if (features.length === 0) {
+              return <span className="text-sm muted">Core feedback flow only — upgrade to unlock add-ons.</span>;
+            }
+            return (
+              <div className="row gap-2" style={{ flexWrap: "wrap" }}>
+                {features.map(f => <Pill key={f} ring ringFill>{FEATURE_LABEL[f]}</Pill>)}
+              </div>
+            );
+          })()}
         </div>
 
         <div className="row gap-6" style={{ flexWrap: "wrap" }}>

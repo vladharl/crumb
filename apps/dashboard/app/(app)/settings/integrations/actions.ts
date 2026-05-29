@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db, workspaces, workspaceUsers } from "@crumb/db";
 import { getActiveSession } from "@/lib/server";
+import { integrationsAllowed } from "@/lib/entitlements";
 import { buildAuthUrl as buildSlackAuthUrl, SLACK_REDIRECT_URL, slackConfigured } from "@/lib/slack/install";
 import {
   buildAuthUrl as buildLinearAuthUrl,
@@ -38,6 +39,7 @@ function resolveCallbackUrl(provider: "slack" | "linear" | "jira" | "github", ov
 export async function startSlackInstall(): Promise<never> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin") throw new Error("forbidden");
+  if (!integrationsAllowed(workspace)) throw new Error("plan_required");
   if (!slackConfigured()) throw new Error("slack_not_configured");
   const redirectUrl = resolveCallbackUrl("slack", SLACK_REDIRECT_URL());
   redirect(buildSlackAuthUrl(workspace.id, redirectUrl));
@@ -46,6 +48,7 @@ export async function startSlackInstall(): Promise<never> {
 export async function startLinearInstall(): Promise<never> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin") throw new Error("forbidden");
+  if (!integrationsAllowed(workspace)) throw new Error("plan_required");
   if (!linearConfigured()) throw new Error("linear_not_configured");
   const redirectUrl = resolveCallbackUrl("linear", LINEAR_REDIRECT_URL());
   redirect(buildLinearAuthUrl(workspace.id, redirectUrl));
@@ -75,6 +78,7 @@ export async function disconnectLinear(): Promise<{ ok: true } | { ok: false; er
 export async function startJiraInstall(): Promise<never> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin") throw new Error("forbidden");
+  if (!integrationsAllowed(workspace)) throw new Error("plan_required");
   if (!jiraConfigured()) throw new Error("jira_not_configured");
   const redirectUrl = resolveCallbackUrl("jira", JIRA_REDIRECT_URL());
   redirect(buildJiraAuthUrl(workspace.id, redirectUrl));
@@ -104,6 +108,7 @@ export async function disconnectJira(): Promise<{ ok: true } | { ok: false; erro
 export async function startGithubInstall(): Promise<never> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin") throw new Error("forbidden");
+  if (!integrationsAllowed(workspace)) throw new Error("plan_required");
   if (!githubConfigured()) throw new Error("github_not_configured");
   // GitHub Apps use a slug-based install URL (no redirect_uri arg — the
   // app's setup URL on GitHub holds the callback config).

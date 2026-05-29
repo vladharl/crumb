@@ -2,15 +2,20 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import type { StorageProvider } from "./storage/provider";
 import { localStorage_ } from "./storage/local";
+import { postgresStorage_ } from "./storage/postgres";
 
-// Pick by env. v1 ships only "local" — s3 adapter lands in a follow-up turn.
-// Both Cloud and self-host default here until s3 is wired.
+// Pick by env. "local" (default) = per-instance disk, fine for self-host.
+// "postgres" = blobs live in the DB so a multi-instance Cloud deployment
+// shares storage without a filesystem or S3. "s3"/R2 is a future adapter.
 function selectProvider(): StorageProvider {
   const choice = (process.env.CRUMB_STORAGE_PROVIDER ?? "local").toLowerCase();
-  if (choice !== "local") {
-    console.warn(`[crumb/storage] CRUMB_STORAGE_PROVIDER=${choice} is not implemented yet; falling back to local.`);
+  switch (choice) {
+    case "local":    return localStorage_;
+    case "postgres": return postgresStorage_;
+    default:
+      console.warn(`[crumb/storage] CRUMB_STORAGE_PROVIDER=${choice} is not implemented yet; falling back to local.`);
+      return localStorage_;
   }
-  return localStorage_;
 }
 
 let cached: StorageProvider | null = null;

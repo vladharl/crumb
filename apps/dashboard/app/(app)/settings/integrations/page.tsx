@@ -1,6 +1,7 @@
 import { Card, CardHead, Pill } from "@crumb/ui";
 import { getActiveSession } from "@/lib/server";
 import { isCloud } from "@/lib/tier";
+import { hasFeature, integrationsAllowed } from "@/lib/entitlements";
 import { slackConfigured } from "@/lib/slack/install";
 import { linearConfigured } from "@/lib/integrations/linear";
 import { jiraConfigured } from "@/lib/integrations/jira";
@@ -70,6 +71,13 @@ export default async function IntegrationsPage({
   const { workspace: ws, user } = await getActiveSession();
   const cloud = isCloud();
   const isAdmin = user.role === "admin";
+  // Per-workspace entitlements. Self-host: integrations stay creds-gated
+  // (integrationsAllowed → true); AI/session-record off. Cloud: plan-gated.
+  const integrationsEntitled = integrationsAllowed(ws);
+  const sessionRecordEntitled = hasFeature(ws, "session_record");
+  // On Cloud, integrations need the plan; surface that distinctly from the
+  // self-host "set ENV creds" message.
+  const integrationsPlanLocked = cloud && !integrationsEntitled;
 
   const slackInstalled = !!ws.slackBotToken;
   const slackCanInstall = slackConfigured();
@@ -97,6 +105,13 @@ export default async function IntegrationsPage({
 
   return (
     <>
+      {integrationsPlanLocked && (
+        <Banner
+          kind="ok"
+          text="Engineering ticket sync (Linear / Jira / GitHub) and Slack are available on the Team and Growth plans. Upgrade from Settings → Billing to connect them."
+        />
+      )}
+
       {/* ─── Linear ─────────────────────────────────────────── */}
       <Card>
         <CardHead
@@ -140,7 +155,7 @@ export default async function IntegrationsPage({
                 </p>
               )}
               <div className="row gap-2">
-                {isAdmin && linearCanInstall
+                {isAdmin && linearCanInstall && integrationsEntitled
                   ? <ConnectLinearButton />
                   : null}
               </div>
@@ -195,7 +210,7 @@ export default async function IntegrationsPage({
                 </p>
               )}
               <div className="row gap-2">
-                {isAdmin && jiraCanInstall
+                {isAdmin && jiraCanInstall && integrationsEntitled
                   ? <ConnectJiraButton />
                   : null}
               </div>
@@ -250,7 +265,7 @@ export default async function IntegrationsPage({
                 </p>
               )}
               <div className="row gap-2">
-                {isAdmin && githubCanInstall
+                {isAdmin && githubCanInstall && integrationsEntitled
                   ? <ConnectGithubButton />
                   : null}
               </div>
@@ -302,7 +317,7 @@ export default async function IntegrationsPage({
                 </p>
               )}
               <div className="row gap-2">
-                {isAdmin && slackCanInstall
+                {isAdmin && slackCanInstall && integrationsEntitled
                   ? <ConnectSlackButton />
                   : null}
               </div>
@@ -316,16 +331,16 @@ export default async function IntegrationsPage({
         <CardHead
           title="Session record"
           after={
-            cloud
+            sessionRecordEntitled
               ? (ws.sessionRecordEnabled ? <Pill ring ringFill>On</Pill> : <Pill>Off</Pill>)
-              : <Pill ring ringFill>Cloud</Pill>
+              : <Pill ring ringFill>{cloud ? "Growth plan" : "Cloud"}</Pill>
           }
         />
         <div className="card-body col gap-3">
           <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
             When a customer submits feedback, attach a video-like replay of their session so you can see what they were doing — no more guessing what "the page broke" means. All inputs are masked by default; password and email fields are never recorded. Sessions cap at 10 MB / 5,000 events / 30 minutes.
           </p>
-          {cloud ? (
+          {sessionRecordEntitled ? (
             <div className="row gap-3 center">
               <SessionRecordToggle enabled={ws.sessionRecordEnabled} disabled={!isAdmin} />
               <span className="text-sm">
@@ -334,12 +349,16 @@ export default async function IntegrationsPage({
                   : "Off — widget skips loading the recorder bundle."}
               </span>
             </div>
+          ) : cloud ? (
+            <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
+              Session record is on the <strong style={{ fontWeight: 500 }}>Growth</strong> plan. Upgrade from <a href="/settings/billing" style={{ color: "var(--ink)" }}>Settings → Billing</a> to enable it.
+            </p>
           ) : (
             <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
               Session record is available on Crumb Cloud. Self-host can wire it manually by setting a non-local <span className="mono">CRUMB_STORAGE_PROVIDER</span> and owning your own retention policy.
             </p>
           )}
-          {!isAdmin && cloud && (
+          {!isAdmin && sessionRecordEntitled && (
             <p className="text-xs muted" style={{ margin: 0 }}>Only workspace admins can change this setting.</p>
           )}
           <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>

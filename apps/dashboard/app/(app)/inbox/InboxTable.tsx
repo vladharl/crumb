@@ -80,12 +80,12 @@ function ageFrom(iso: string): string {
 type Tab = "all" | "open" | "mine";
 
 export function InboxTable({
-  rows, assignees, meId, isCloud, initiatives, canManageInitiatives, clusterEnabled,
+  rows, assignees, meId, aiEntitled, initiatives, canManageInitiatives, clusterEnabled,
 }: {
   rows: InboxRow[];
   assignees: Assignee[];
   meId: string;
-  isCloud: boolean;
+  aiEntitled: boolean;
   initiatives: InitiativeOption[];
   canManageInitiatives: boolean;
   clusterEnabled: boolean;
@@ -429,7 +429,7 @@ export function InboxTable({
         {/* Cluster these: AI-only feature. Hidden entirely on self-host;
             on Cloud, enabled when a key is set + at least one initiative
             exists, otherwise the disabled hint nudges setup. */}
-        {isCloud && canManageInitiatives && (
+        {aiEntitled && canManageInitiatives && (
           <div className="row gap-2 center">
             <Btn
               sm

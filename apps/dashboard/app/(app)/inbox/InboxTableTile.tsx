@@ -4,8 +4,8 @@ import {
 import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getActiveSession } from "@/lib/server";
-import { isCloud } from "@/lib/tier";
 import { clusterConfigured } from "@/lib/ai/cluster";
+import { hasFeature } from "@/lib/entitlements";
 import { InboxTable, type InboxRow, type Assignee, type InitiativeOption } from "./InboxTable";
 
 async function loadItems(workspaceId: string): Promise<InboxRow[]> {
@@ -110,16 +110,19 @@ export async function InboxTableTile() {
     loadInitiativeOptions(workspace.id),
   ]);
   const canManageInitiatives = me.role === "admin" || me.role === "pm";
+  // AI clustering is gated on the workspace's plan entitlement (cloud-only
+  // by construction) — controls whether the "Cluster selected" UI shows.
+  const aiEntitled = hasFeature(workspace, "ai");
 
   return (
     <InboxTable
       rows={rows}
       assignees={assignees}
       meId={me.id}
-      isCloud={isCloud()}
+      aiEntitled={aiEntitled}
       initiatives={initiativeOptions}
       canManageInitiatives={canManageInitiatives}
-      clusterEnabled={clusterConfigured() && initiativeOptions.length > 0}
+      clusterEnabled={aiEntitled && clusterConfigured() && initiativeOptions.length > 0}
     />
   );
 }

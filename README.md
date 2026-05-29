@@ -34,7 +34,9 @@ cp apps/dashboard/.env.local.example apps/dashboard/.env.local
 pnpm dev           # → http://localhost:3000
 ```
 
-The dashboard requires login. On a fresh DB, open **http://localhost:3000** and you'll be sent through `/onboard` to create the first workspace + admin. After `pnpm db:seed`, log in at **http://localhost:3000/login** as any seeded admin (e.g. `lina@northbeam.io`). Magic links go to whichever email provider is configured — by default that's stdout (read from the dev terminal or `docker compose logs dashboard`); set `CRUMB_EMAIL_PROVIDER=resend` for real delivery, see [Email delivery](#email-delivery). A 7-day session cookie is set; sign out clears it.
+The dashboard requires login — there are two distinct first-run paths, pick one:
+- **Fresh / empty DB** (skip `pnpm db:seed`): open **http://localhost:3000**; with no users yet you're sent to `/onboard` to create the first workspace + admin.
+- **Seeded demo** (`pnpm db:seed`): log in at **http://localhost:3000/login** as a seeded admin (e.g. `lina@northbeam.io`) — the seed creates the `northbeam` workspace + sample data. Magic links go to whichever email provider is configured — by default that's stdout (read from the dev terminal or `docker compose logs dashboard`); set `CRUMB_EMAIL_PROVIDER=resend` for real delivery, see [Email delivery](#email-delivery). A 7-day session cookie is set; sign out clears it.
 
 ### Self-host vs. Crumb Cloud
 
@@ -46,12 +48,16 @@ Crumb ships from one repo to two deployment shapes — same code, env-gated:
 | Magic-link auth | ✅ | ✅ |
 | Embed widget | ✅ | ✅ |
 | Magic-link emails (managed delivery) | stdout only | Resend (or other provider) |
-| Vendor-side Slack notifications | BYO Slack app | one-click OAuth |
-| Linear / Jira / GitHub ticket sync | BYO OAuth apps | one-click OAuth |
-| AI initiative clustering | gated | included |
-| Session Record (rrweb capture + in-thread replay) | gated | included |
+| Vendor-side Slack notifications | BYO Slack app | one-click OAuth · Team plan |
+| Linear / Jira / GitHub ticket sync | BYO OAuth apps | one-click OAuth · Team plan |
+| AI initiative clustering | — (Cloud-only) | Team plan |
+| Session Record (rrweb capture + in-thread replay) | — (Cloud-only) | Growth plan |
 
 Self-host is free and AGPL. The hosted tier at **[usecrumb.xyz](https://usecrumb.xyz)** runs the same source with `CRUMB_TIER=cloud` plus the API keys we hold so you don't have to.
+
+**Two kinds of gating** (see `lib/tier.ts` + `lib/entitlements.ts`):
+- **Capability-gated** — integrations and managed email unlock on *credentials present*. A self-hoster who registers their own OAuth app / SMTP relay gets them; Cloud just pre-supplies the creds.
+- **Plan-gated (Cloud-only)** — AI clustering/ticket drafts and Session Record require `CRUMB_TIER=cloud` **and** a workspace plan that includes them. On Cloud, the workspace's Stripe subscription drives this: `plan_id` (`free` | `team` | `growth`) comes from the price's `lookup_key`; an active sub on **Team** unlocks AI + integrations, **Growth** adds Session Record. A BYO key does *not* unlock these on self-host — by design, they're the paid differentiators.
 
 To run as Cloud yourself (e.g. for the hosted deployment):
 
@@ -59,8 +65,15 @@ To run as Cloud yourself (e.g. for the hosted deployment):
 CRUMB_TIER=cloud
 RESEND_API_KEY=re_xxxxxxxxxxxx
 CRUMB_EMAIL_FROM="Crumb <crumb@usecrumb.xyz>"
-# Slack / Linear / etc. credentials as added later
+CRUMB_STORAGE_PROVIDER=postgres   # share attachment + replay bytes across instances via the DB
+STRIPE_SECRET_KEY=sk_live_xxx     # billing — plans drive feature entitlements
+STRIPE_PRICE_ID=price_xxx         # price lookup_key must be "team" / "growth"
+STRIPE_WEBHOOK_SECRET=whsec_xxx
+ANTHROPIC_API_KEY=sk-ant-xxx      # AI clustering (Team plan)
+# Slack / Linear / Jira / GitHub OAuth-app credentials as added later
 ```
+
+**Storage:** default `local` (per-instance disk) is fine for single-node self-host. A multi-instance Cloud deployment must set `CRUMB_STORAGE_PROVIDER=postgres` so attachments + Session Record chunks live in the DB and every instance sees them (an S3/R2 adapter is the eventual home for large blobs).
 
 ### Email delivery
 

@@ -2,6 +2,7 @@ import "server-only";
 import { and, eq, sql } from "drizzle-orm";
 import { db, replaySessions, replayChunks, workspaces } from "@crumb/db";
 import { newStorageKey, putBytes } from "@/lib/storage";
+import { hasFeature } from "@/lib/entitlements";
 
 // Hard caps. Keep storage cost bounded; the recorder enforces matching
 // caps client-side so well-behaved widgets stop before the server has to
@@ -41,11 +42,18 @@ export async function recordChunk(input: ChunkInput): Promise<ChunkResult> {
   }
 
   const [ws] = await db
-    .select({ id: workspaces.id, sessionRecordEnabled: workspaces.sessionRecordEnabled })
+    .select({
+      id: workspaces.id,
+      sessionRecordEnabled: workspaces.sessionRecordEnabled,
+      planId: workspaces.planId,
+      subscriptionStatus: workspaces.subscriptionStatus,
+    })
     .from(workspaces)
     .where(eq(workspaces.slug, input.workspaceSlug))
     .limit(1);
   if (!ws) return { ok: false, status: 404, error: "workspace_not_found" };
+  // Plan entitlement first (cloud + paid plan), then the per-workspace toggle.
+  if (!hasFeature(ws, "session_record")) return { ok: false, status: 403, error: "session_record_not_entitled" };
   if (!ws.sessionRecordEnabled) return { ok: false, status: 403, error: "session_record_disabled" };
 
   // Serialize the chunk early so we know the byte size for cap accounting.
