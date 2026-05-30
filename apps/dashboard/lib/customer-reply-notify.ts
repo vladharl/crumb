@@ -3,6 +3,10 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db, workspaceUsers, notificationPreferences, items, accounts, workspaces } from "@crumb/db";
 import { sendCustomerReplyNotification } from "./email";
 import { resolveSlackUserId, sendDirectMessage, buildCustomerReplyBlocks } from "./slack/notify";
+import { openNullable } from "./crypto-at-rest";
+import { clearProviderInstall, isSlackRevokedError } from "./integrations/revoke";
+import { originFromHeaders } from "./origin";
+import { log } from "./log";
 
 // When a customer replies (via widget POST or inbound webhook), nudge the
 // vendor team. Recipients:
@@ -44,6 +48,14 @@ export async function notifyVendorsOfCustomerReply(opts: {
     .where(eq(items.id, opts.itemId))
     .limit(1);
   if (!ctx) return;
+  // Decrypt the bot token once. A malformed/un-decryptable token (e.g. a key
+  // rotated away) must not sink the whole notification — treat it as "no
+  // Slack" so we still fall through to email.
+  try {
+    ctx.slackBotToken = openNullable(ctx.slackBotToken);
+  } catch {
+    ctx.slackBotToken = null;
+  }
 
   // Pick recipient pool: assignee, or all admins. Pull slack fields so
   // we can route DMs without another query.
@@ -109,6 +121,7 @@ async function dispatchOne(
     channel: "email" | "slack";
   },
   ctx: {
+    workspaceId: string;
     shortId: string;
     title: string;
     workspaceName: string;
@@ -142,8 +155,13 @@ async function dispatchOne(
         blocks: msg.blocks,
       });
       if (sent.ok) return;
-      // eslint-disable-next-line no-console
-      console.warn(`[crumb/slack] DM to ${r.email} failed (${sent.error}); falling back to email`);
+      // A revoked/uninstalled Slack app reports token_revoked / account_inactive
+      // etc. — clear the install so the workspace stops trying and the UI shows
+      // disconnected. Best-effort; we still fall back to email below.
+      if (isSlackRevokedError(sent.error)) {
+        await clearProviderInstall(ctx.workspaceId, "slack").catch(() => {});
+      }
+      log.warn("slack DM failed; falling back to email", { scope: "crumb/slack", email: r.email, error: sent.error });
     }
     // Fall through to email if Slack lookup or send didn't work.
   }
@@ -158,17 +176,12 @@ async function dispatchOne(
     replyBody: opts.replyBody,
     dashboardThreadUrl,
   }).catch(err => {
-    // eslint-disable-next-line no-console
-    console.error(`[crumb/customer-reply] notify ${r.email} failed:`, err);
+    log.error("customer-reply notify failed", { scope: "crumb/customer-reply", email: r.email, err });
   });
 }
 
-// Helper: build "https://host" from a Request, used to construct the
-// dashboard thread URL inside the email.
+// Build "https://host" from a Request, used to construct the dashboard thread
+// URL inside the email. Thin wrapper over the shared helper.
 export function dashboardOriginFromHeaders(req: Request): string | null {
-  const h = req.headers;
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  const proto = h.get("x-forwarded-proto") ?? (host?.startsWith("localhost") ? "http" : "https");
-  if (!host) return null;
-  return `${proto}://${host}`;
+  return originFromHeaders(req.headers);
 }

@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { isCloud } from "@/lib/tier";
+import { log } from "@/lib/log";
 
 // AI ticket drafting. Same model + gating pattern as lib/ai/cluster.ts.
 const MODEL = "claude-haiku-4-5-20251001";
@@ -130,8 +131,7 @@ Rules:
 
     return { title, body, labels: labels && labels.length ? labels : null, reason, confidence };
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/ai/ticket] suggestTicket failed:", err);
+    log.error("suggestTicket failed", { scope: "crumb/ai/ticket", err });
     return null;
   }
 }

@@ -3,7 +3,7 @@ import { db, attachments } from "@crumb/db";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { getSession } from "@/lib/auth";
 import { newStorageKey, putBytes } from "@/lib/storage";
-import { callerIpFromRequest, checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -35,7 +35,7 @@ function contentTypeAllowed(ct: string): boolean {
 // client can include its id in the next reply submission.
 export async function POST(req: Request) {
   // Tighter limit for uploads — files cost storage + bandwidth.
-  const rl = checkRateLimit(`uploads:${callerIpFromRequest(req)}`, { capacity: 20, refillPerSec: 0.33 });
+  const rl = await checkRateLimitAsync(`uploads:${callerIpFromRequest(req)}`, { capacity: 20, refillPerSec: 0.33 });
   if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
 
   // Vendor side first — preferred when a dashboard cookie is present.

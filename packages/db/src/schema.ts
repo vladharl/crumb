@@ -10,6 +10,8 @@ import {
   unique,
   index,
   doublePrecision,
+  bigint,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 
 // ─── workspaces (vendor side) ────────────────────────────────
@@ -17,12 +19,14 @@ export const workspaces = pgTable("workspaces", {
   id: uuid("id").primaryKey().defaultRandom(),
   slug: varchar("slug", { length: 64 }).notNull().unique(),
   name: text("name").notNull(),
-  // Launcher circle background — the brown pill the dots sit inside.
-  launcherBg: varchar("launcher_bg", { length: 16 }).notNull().default("#4A2E1F"),
-  // The dot/mark color (the brand "loop" inside the launcher; also used
-  // sparingly as a brand accent on the dashboard).
+  // Launcher circle background — a warm ink the white loop mark sits inside.
+  launcherBg: varchar("launcher_bg", { length: 16 }).notNull().default("#1C1A17"),
+  // Brand accent — used for the unread pulse dot on the launcher and
+  // sparingly as an accent on the dashboard.
   accent: varchar("accent", { length: 16 }).notNull().default("#E27D3A"),
-  position: varchar("position", { length: 16 }).notNull().default("corner"),
+  position: varchar("position", { length: 16 }).notNull().default("corner"), // corner | pill | tab
+  // Opt-in glassmorphism launcher style (translucent + backdrop-blur).
+  launcherGlass: boolean("launcher_glass").notNull().default(false),
   nextItemSeq: integer("next_item_seq").notNull().default(1),
   // HS256 secret used to verify widget identity JWTs. 64 hex chars = 32 bytes.
   signingSecret: text("signing_secret").notNull().default(sql`encode(gen_random_bytes(32), 'hex')`),
@@ -147,6 +151,15 @@ export const accountUsers = pgTable("account_users", {
   name: text("name").notNull(),
   role: varchar("role", { length: 16 }).notNull().default("member"),
   initials: varchar("initials", { length: 4 }).notNull(),
+  // Per-customer email notification prefs (the widget's Notifications view).
+  // Each gates the matching customer-facing email; unsubscribedAll is the
+  // master mute flipped by the one-click unsubscribe link.
+  notifyReplies:   boolean("notify_replies").notNull().default(true),
+  notifyStatus:    boolean("notify_status").notNull().default(true),
+  notifyRoadmap:   boolean("notify_roadmap").notNull().default(true),
+  unsubscribedAll: boolean("unsubscribed_all").notNull().default(false),
+  // Capability token embedded in the unsubscribe link (no login needed).
+  unsubToken: varchar("unsub_token", { length: 64 }).notNull().default(sql`encode(gen_random_bytes(32), 'hex')`),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   uniqEmail: unique().on(t.workspaceId, t.email),
@@ -194,6 +207,21 @@ export const replies = pgTable("replies", {
   byItem: index("replies_item_idx").on(t.itemId, t.createdAt),
 }));
 
+// @-mentions on an internal note: one row per (reply, mentioned teammate).
+// Written when an internal reply is saved (parsed from the body against the
+// workspace's members). Powers the mention notification + the Notifications
+// "Mentions" filter. Customer-facing replies don't carry mentions.
+export const replyMentions = pgTable("reply_mentions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  replyId: uuid("reply_id").notNull().references(() => replies.id, { onDelete: "cascade" }),
+  workspaceUserId: uuid("workspace_user_id").notNull().references(() => workspaceUsers.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.replyId, t.workspaceUserId),
+  byUser: index("reply_mentions_user_idx").on(t.workspaceUserId),
+}));
+export type ReplyMention = typeof replyMentions.$inferSelect;
+
 // ─── status events (audit trail for status transitions) ─────
 export const statusEvents = pgTable("status_events", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -222,6 +250,13 @@ export const initiatives = pgTable("initiatives", {
   description: text("description"),
   status: varchar("status", { length: 16 }).notNull().default("open"), // open | in_progress | shipped | parked
   color: varchar("color", { length: 16 }),
+  // Public roadmap placement. null = not on the public roadmap; otherwise the
+  // Now/Next/Later column. is_public gates customer visibility in the widget.
+  roadmapColumn: varchar("roadmap_column", { length: 8 }), // null | now | next | later
+  // Manual sort position within a board column (lower = higher up). Set by
+  // drag-to-reorder on the Initiatives board.
+  roadmapOrder: integer("roadmap_order").notNull().default(0),
+  isPublic: boolean("is_public").notNull().default(false),
   ownerWorkspaceUserId: uuid("owner_workspace_user_id").references(() => workspaceUsers.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -450,5 +485,70 @@ export const storageBlobs = pgTable("storage_blobs", {
 
 export type StorageBlob = typeof storageBlobs.$inferSelect;
 export type NewStorageBlob = typeof storageBlobs.$inferInsert;
+
+// ─── usage counters (per-workspace cost metering) ────────────
+// One row per (workspace, metric, period). `period` is a UTC month key
+// ("YYYY-MM") so caps reset monthly without a cron. `count` is a running
+// total bumped via upsert at the metered boundary:
+//   - metric "ai"          → +1 per LLM inference (clustering + ticket drafts)
+//   - metric "replay_bytes"→ +N bytes per ingested replay chunk
+// Caps live in lib/entitlements + lib/usage; this table is just the meter.
+// Cloud-only in practice (the metered features are Cloud-gated), but the
+// table exists everywhere — self-host simply never checks a cap.
+export const usageCounters = pgTable("usage_counters", {
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  metric: varchar("metric", { length: 32 }).notNull(),
+  period: varchar("period", { length: 7 }).notNull(), // "YYYY-MM" (UTC)
+  // bigint for replay_bytes (can exceed 2^31 in a busy month); mode "number"
+  // keeps the JS surface a plain number (safe < 2^53 ≈ 9 PB).
+  count: bigint("count", { mode: "number" }).notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.workspaceId, t.metric, t.period] }),
+}));
+
+export type UsageCounter = typeof usageCounters.$inferSelect;
+
+// ─── webhook endpoints (outbound event subscriptions) ────────
+// Vendors register HTTPS endpoints to receive signed events when an item's
+// status changes (more event types can be added to `events` later). Each
+// endpoint has its own HMAC secret used to sign the payload
+// (X-Crumb-Signature: sha256=…). Delivery is best-effort with a short
+// in-process retry; `failure_count` / `last_status` surface health in the UI
+// and auto-pause a chronically failing endpoint.
+export const webhookEndpoints = pgTable("webhook_endpoints", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  url: text("url").notNull(),
+  // Per-endpoint signing secret (hex). Generated on create.
+  secret: text("secret").notNull(),
+  // Event types this endpoint receives. v1 emits "item.status_changed".
+  events: text("events").array().notNull().default(sql`'{"item.status_changed"}'`),
+  active: boolean("active").notNull().default(true),
+  lastStatus: integer("last_status"),
+  lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+  failureCount: integer("failure_count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  byWorkspace: index("webhook_endpoints_workspace_idx").on(t.workspaceId),
+}));
+
+export type WebhookEndpoint = typeof webhookEndpoints.$inferSelect;
+
+// ─── roadmap follows (customer subscribes to a public initiative) ────
+// One row per (account_user, initiative). When a vendor moves a followed
+// initiative's roadmap column or status, followers get a notification email.
+export const roadmapFollows = pgTable("roadmap_follows", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  initiativeId: uuid("initiative_id").notNull().references(() => initiatives.id, { onDelete: "cascade" }),
+  accountUserId: uuid("account_user_id").notNull().references(() => accountUsers.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniq: unique().on(t.initiativeId, t.accountUserId),
+  byInitiative: index("roadmap_follows_initiative_idx").on(t.initiativeId),
+}));
+
+export type RoadmapFollow = typeof roadmapFollows.$inferSelect;
 
 export const __sql = sql; // re-export for convenience

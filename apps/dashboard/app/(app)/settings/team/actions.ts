@@ -6,6 +6,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db, magicTokens, workspaceUsers } from "@crumb/db";
 import { requireSession } from "@/lib/auth";
 import { sendMagicLink } from "@/lib/email";
+import { isCloud } from "@/lib/tier";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const INVITE_TTL_DAYS = 7;
@@ -47,6 +48,22 @@ export async function inviteTeammate(formData: FormData): Promise<InviteResult> 
 
   let invitee = existing;
   if (!invitee) {
+    // Seat enforcement (Cloud only — self-host is unlimited). `seats` mirrors
+    // the Stripe subscription quantity; a fresh invite that would push the
+    // member count past it is blocked with a pointer to add seats. Re-inviting
+    // an existing member (above) never trips this.
+    if (isCloud()) {
+      const members = await db
+        .select({ id: workspaceUsers.id })
+        .from(workspaceUsers)
+        .where(eq(workspaceUsers.workspaceId, workspace.id));
+      if (members.length >= workspace.seats) {
+        return {
+          ok: false,
+          error: `Your plan includes ${workspace.seats} seat${workspace.seats === 1 ? "" : "s"}. Add seats in Billing to invite more teammates.`,
+        };
+      }
+    }
     const initials = name.split(/\s+/).filter(Boolean).slice(0, 2)
       .map(s => s[0]?.toUpperCase() ?? "").join("") || "?";
     const inserted = await db.insert(workspaceUsers).values({

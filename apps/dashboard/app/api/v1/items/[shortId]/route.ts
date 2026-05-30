@@ -3,7 +3,9 @@ import { db, items, accountUsers, workspaceUsers, replies, statusEvents, attachm
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { notifyVendorsOfCustomerReply, dashboardOriginFromHeaders } from "@/lib/customer-reply-notify";
-import { callerIpFromRequest, checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
+import { createReplySchema, parseJsonBody } from "@/lib/validation";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -90,16 +92,32 @@ export async function GET(req: Request, { params }: { params: { shortId: string 
     .where(eq(statusEvents.itemId, item.id))
     .orderBy(asc(statusEvents.at));
 
-  // Synthesize a "Submitted" event if none exists (for items created before
-  // the status_events table landed).
-  const submittedEvent = events.length === 0 ? [{
-    id: "synth-submitted",
-    from_status: null as string | null,
-    to_status: "open",
-    reason: null as string | null,
-    at: item.createdAt,
-    by_name: null as string | null,
-  }] : [];
+  // status_events only records transitions made through the dashboard, so a
+  // seeded / pre-table item can have a partial trail (e.g. just "review →
+  // planned") or none at all. Always anchor the timeline with a synthesized
+  // "Submitted" step at the item's creation time, unless the first recorded
+  // event is already the initial one (from_status === null). This guarantees
+  // every step shows a date instead of collapsing to the latest status.
+  const mappedEvents = events.map(e => ({
+    id: e.id,
+    from_status: e.fromStatus,
+    to_status: e.toStatus,
+    reason: e.reason,
+    at: e.at,
+    by_name: e.byName,
+  }));
+  const hasInitialEvent = mappedEvents.length > 0 && mappedEvents[0]!.from_status === null;
+  const timeline = hasInitialEvent ? mappedEvents : [
+    {
+      id: "synth-submitted",
+      from_status: null as string | null,
+      to_status: "open",
+      reason: null as string | null,
+      at: item.createdAt,
+      by_name: null as string | null,
+    },
+    ...mappedEvents,
+  ];
 
   return cors(NextResponse.json({
     item: {
@@ -127,38 +145,19 @@ export async function GET(req: Request, { params }: { params: { shortId: string 
         size_bytes: a.sizeBytes,
       })),
     })),
-    events: events.length > 0
-      ? events.map(e => ({
-          id: e.id,
-          from_status: e.fromStatus,
-          to_status: e.toStatus,
-          reason: e.reason,
-          at: e.at,
-          by_name: e.byName,
-        }))
-      : submittedEvent,
+    events: timeline,
   }));
 }
-
-type ReplyBody = {
-  workspace_slug?: string;
-  account_user_email?: string;
-  body?: string;
-  attachment_ids?: string[];
-};
 
 // ─── POST /api/v1/items/[shortId]/replies via this path ────────
 // Same shortId guarded by submitter; replies are always non-internal.
 export async function POST(req: Request, { params }: { params: { shortId: string } }) {
-  const rl = checkRateLimit(`reply:${callerIpFromRequest(req)}`);
+  const rl = await checkRateLimitAsync(`reply:${callerIpFromRequest(req)}`);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
 
-  let payload: ReplyBody;
-  try {
-    payload = await req.json();
-  } catch {
-    return fail(400, "invalid_json");
-  }
+  const parsed = await parseJsonBody(req, createReplySchema);
+  if (!parsed.ok) return fail(parsed.status, parsed.error);
+  const payload = parsed.data;
 
   const r = await resolveCustomer(req, {
     workspaceSlug: payload.workspace_slug ?? null,
@@ -167,7 +166,7 @@ export async function POST(req: Request, { params }: { params: { shortId: string
   if (!r.ok) return fail(r.status, r.error);
 
   // Per-workspace bucket — both must pass; looser cap than the per-IP one.
-  const wsRl = checkRateLimit(`reply:ws:${r.ctx.workspace.id}`, { capacity: 600, refillPerSec: 10 });
+  const wsRl = await checkRateLimitAsync(`reply:ws:${r.ctx.workspace.id}`, { capacity: 600, refillPerSec: 10 });
   if (!wsRl.ok) return tooManyRequests(wsRl.retryAfterSeconds);
 
   const body = (payload.body ?? "").trim();
@@ -215,8 +214,7 @@ export async function POST(req: Request, { params }: { params: { shortId: string
       dashboardOrigin: dashboardOriginFromHeaders(req),
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/widget-reply] notify failed:", err);
+    log.error("widget-reply notify failed", { scope: "crumb/widget-reply", err });
   }
 
   return cors(NextResponse.json({

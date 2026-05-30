@@ -111,8 +111,8 @@ async function resolveFromJwt(token: string): Promise<{ ok: true; ctx: CustomerC
     return { ok: false, status, error: `jwt_${result.reason}` };
   }
 
-  const { sub: email, name, account_name } = result.claims;
-  const ctx = await upsertAccountAndUser(ws.id, email, name ?? null, account_name);
+  const { sub: email, name, account_name, role } = result.claims;
+  const ctx = await upsertAccountAndUser(ws.id, email, name ?? null, account_name, role ?? null);
   return { ok: true, ctx: { workspace: ws, user: ctx.user, auth: "jwt" } };
 }
 
@@ -121,15 +121,20 @@ async function upsertAccountAndUser(
   email: string,
   name: string | null,
   accountName: string,
+  // Host-designated role from a verified JWT claim, if any. When present the
+  // host product is the source of truth and we (re)apply it on every load.
+  roleClaim?: "admin" | "member" | null,
 ): Promise<{ user: typeof accountUsers.$inferSelect; account: typeof accounts.$inferSelect }> {
   let [account] = await db
     .select()
     .from(accounts)
     .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.name, accountName)))
     .limit(1);
+  let accountCreated = false;
   if (!account) {
     const inserted = await db.insert(accounts).values({ workspaceId, name: accountName }).returning();
     account = inserted[0]!;
+    accountCreated = true;
   }
 
   let [user] = await db
@@ -142,14 +147,28 @@ async function upsertAccountAndUser(
     const initials = initialsSource
       .split(/\s+|@/).filter(Boolean).slice(0, 2)
       .map(s => s[0]?.toUpperCase() ?? "").join("") || "?";
+    // First admin bootstrap: the very first user of a brand-new account becomes
+    // its admin (otherwise no account would ever have one, since the JWT/email
+    // flow defaults everyone to "member"). An explicit JWT role claim wins.
+    const role = roleClaim ?? (accountCreated ? "admin" : "member");
     const inserted = await db.insert(accountUsers).values({
       workspaceId,
       accountId: account.id,
       email,
       name: name ?? email.split("@")[0]!,
       initials: initials.slice(0, 4),
+      role,
     }).returning();
     user = inserted[0]!;
+  } else if (roleClaim && user.role !== roleClaim) {
+    // Existing user + host asserts a role → host wins; re-apply so a
+    // widget-side change can't drift from the host's source of truth.
+    const [updated] = await db
+      .update(accountUsers)
+      .set({ role: roleClaim })
+      .where(eq(accountUsers.id, user.id))
+      .returning();
+    if (updated) user = updated;
   }
 
   return { user, account };

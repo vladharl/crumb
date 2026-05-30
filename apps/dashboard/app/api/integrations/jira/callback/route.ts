@@ -4,9 +4,13 @@ import { db, workspaces } from "@crumb/db";
 import {
   exchangeCode,
   fetchAccessibleResources,
+  listProjectsWithToken,
   verifyJiraState,
   JIRA_REDIRECT_URL,
 } from "@/lib/integrations/jira";
+import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
+import { seal } from "@/lib/crypto-at-rest";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -16,14 +20,6 @@ function redirectBack(req: Request, slug: string): Response {
   url.pathname = "/settings/integrations";
   url.search = `?jira=${slug}`;
   return NextResponse.redirect(url);
-}
-
-function callbackUrl(req: Request): string {
-  const override = JIRA_REDIRECT_URL();
-  if (override) return override;
-  const url = new URL(req.url);
-  url.search = "";
-  return url.toString();
 }
 
 export async function GET(req: Request) {
@@ -47,10 +43,9 @@ export async function GET(req: Request) {
 
   let token;
   try {
-    token = await exchangeCode(code, callbackUrl(req));
+    token = await exchangeCode(code, callbackUrlFromRequest("jira", JIRA_REDIRECT_URL(), req));
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/jira] code exchange failed:", err);
+    log.error("jira code exchange failed", { scope: "crumb/jira", err });
     return redirectBack(req, "error_exchange_failed");
   }
 
@@ -60,22 +55,33 @@ export async function GET(req: Request) {
   try {
     resources = await fetchAccessibleResources(token.access_token);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/jira] accessible-resources failed:", err);
+    log.error("jira accessible-resources failed", { scope: "crumb/jira", err });
     return redirectBack(req, "error_resources_failed");
   }
   const target = resources[0];
   if (!target) return redirectBack(req, "error_no_resources");
 
+  // Convenience: if the site has exactly one project, pre-select it as the
+  // default so the admin can create tickets immediately. Best-effort — a
+  // failure here must not break the connect.
+  let defaultProjectKey: string | null = null;
+  try {
+    const projects = await listProjectsWithToken(target.id, token.access_token);
+    if (projects.length === 1) defaultProjectKey = projects[0].key;
+  } catch (err) {
+    log.warn("jira project pre-select failed (non-fatal)", { scope: "crumb/jira", err });
+  }
+
   await db
     .update(workspaces)
     .set({
-      jiraAccessToken:    token.access_token,
-      jiraRefreshToken:   token.refresh_token,
-      jiraTokenExpiresAt: new Date(Date.now() + token.expires_in * 1000),
-      jiraCloudId:        target.id,
-      jiraSiteUrl:        target.url,
-      jiraInstalledAt:    new Date(),
+      jiraAccessToken:       seal(token.access_token),
+      jiraRefreshToken:      seal(token.refresh_token),
+      jiraTokenExpiresAt:    new Date(Date.now() + token.expires_in * 1000),
+      jiraCloudId:           target.id,
+      jiraSiteUrl:           target.url,
+      jiraDefaultProjectKey: defaultProjectKey,
+      jiraInstalledAt:       new Date(),
     })
     .where(eq(workspaces.id, ws.id));
 

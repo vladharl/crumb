@@ -80,11 +80,12 @@ function ageFrom(iso: string): string {
 type Tab = "all" | "open" | "mine";
 
 export function InboxTable({
-  rows, assignees, meId, aiEntitled, initiatives, canManageInitiatives, clusterEnabled,
+  rows, assignees, meId, canWrite, aiEntitled, initiatives, canManageInitiatives, clusterEnabled,
 }: {
   rows: InboxRow[];
   assignees: Assignee[];
   meId: string;
+  canWrite: boolean;
   aiEntitled: boolean;
   initiatives: InitiativeOption[];
   canManageInitiatives: boolean;
@@ -253,6 +254,7 @@ export function InboxTable({
         }}>
           <span className="fw-med">{selected.size} selected</span>
 
+          {canWrite ? (<>
           <label className="row gap-2 center text-sm" style={{ flex: "0 0 auto" }}>
             <span className="muted">Status</span>
             <select
@@ -303,6 +305,9 @@ export function InboxTable({
                 ))}
               </select>
             </label>
+          )}
+          </>) : (
+            <span className="text-sm muted">Viewers can't modify items.</span>
           )}
 
           <div style={{ flex: 1 }} />

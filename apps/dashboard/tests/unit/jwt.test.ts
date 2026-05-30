@@ -76,4 +76,65 @@ describe("lib/jwt", () => {
     expect(verify("a.b", SECRET).ok).toBe(false);
     expect(verify("", SECRET).ok).toBe(false);
   });
+
+  it("rejects a token issued in the future (beyond skew)", () => {
+    const token = sign({
+      iss: "northbeam",
+      sub: "lina@northbeam.io",
+      account_name: "Northbeam",
+      iat: nowSec() + 600, // 10 min in the future
+      exp: nowSec() + 4200,
+    }, SECRET);
+    const r = verify(token, SECRET);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("iat");
+  });
+
+  it("rejects a token whose lifetime exceeds the max TTL", () => {
+    const iat = nowSec();
+    const token = sign({
+      iss: "northbeam",
+      sub: "lina@northbeam.io",
+      account_name: "Northbeam",
+      iat,
+      exp: iat + 30 * 24 * 60 * 60, // 30 days — over the 7-day cap
+    }, SECRET);
+    const r = verify(token, SECRET);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("ttl");
+  });
+
+  it("accepts a normal short-lived token with iat", () => {
+    const iat = nowSec();
+    const token = sign({
+      iss: "northbeam",
+      sub: "lina@northbeam.io",
+      account_name: "Northbeam",
+      iat,
+      exp: iat + 3600,
+    }, SECRET);
+    expect(verify(token, SECRET).ok).toBe(true);
+  });
+
+  it("accepts a short-lived token with no iat", () => {
+    const token = sign({
+      iss: "northbeam",
+      sub: "lina@northbeam.io",
+      account_name: "Northbeam",
+      exp: nowSec() + 3600, // 1h, within the cap → fine even without iat
+    }, SECRET);
+    expect(verify(token, SECRET).ok).toBe(true);
+  });
+
+  it("rejects a far-future token even when iat is absent (no TTL bypass)", () => {
+    const token = sign({
+      iss: "northbeam",
+      sub: "lina@northbeam.io",
+      account_name: "Northbeam",
+      exp: nowSec() + 365 * 24 * 60 * 60, // exp far out, no iat → bounded vs now
+    }, SECRET);
+    const r = verify(token, SECRET);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("ttl");
+  });
 });

@@ -245,6 +245,10 @@ function humanError(code: string): string {
     case "provider_list_failed":   return "Couldn't load targets from the provider.";
     case "not_configured":         return "AI drafting isn't configured on this deployment.";
     case "draft_failed":           return "The model didn't return a usable draft. Try writing manually.";
+    case "ai_cap_reached":         return "You've reached this month's AI usage limit. It resets on the 1st.";
+    case "linear_revoked":
+    case "jira_revoked":
+    case "github_revoked":         return "That integration was disconnected. Reconnect it in Settings → Integrations.";
     case "forbidden":              return "Only admins and PMs can create tickets.";
     default:                       return "Something went wrong.";
   }

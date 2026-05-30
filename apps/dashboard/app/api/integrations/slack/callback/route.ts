@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import { exchangeCode, verifySlackState, SLACK_REDIRECT_URL } from "@/lib/slack/install";
+import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
+import { seal } from "@/lib/crypto-at-rest";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,16 +20,6 @@ function redirectBack(req: Request, slug: string): Response {
   url.pathname = "/settings/integrations";
   url.search = `?slack=${slug}`;
   return NextResponse.redirect(url);
-}
-
-function callbackUrl(req: Request): string {
-  const override = SLACK_REDIRECT_URL();
-  if (override) return override;
-  const url = new URL(req.url);
-  // Drop query string before round-tripping back to Slack's token endpoint
-  // — Slack matches the exact redirect_uri sent on the auth step.
-  url.search = "";
-  return url.toString();
 }
 
 export async function GET(req: Request) {
@@ -55,10 +48,9 @@ export async function GET(req: Request) {
 
   let result;
   try {
-    result = await exchangeCode(code, callbackUrl(req));
+    result = await exchangeCode(code, callbackUrlFromRequest("slack", SLACK_REDIRECT_URL(), req));
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/slack] code exchange failed:", err);
+    log.error("slack code exchange failed", { scope: "crumb/slack", err });
     return redirectBack(req, "error_exchange_failed");
   }
 
@@ -67,7 +59,7 @@ export async function GET(req: Request) {
     .set({
       slackTeamId: result.team.id,
       slackTeamName: result.team.name,
-      slackBotToken: result.access_token,
+      slackBotToken: seal(result.access_token),
       slackBotUserId: result.bot_user_id,
       slackInstalledAt: new Date(),
     })

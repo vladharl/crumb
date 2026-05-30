@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
-import { db, items } from "@crumb/db";
+import { db, items, workspaces } from "@crumb/db";
 import { verifyWebhook } from "@/lib/integrations/github";
-import { callerIpFromRequest, checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { clearProviderInstall } from "@/lib/integrations/revoke";
+import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -26,7 +28,7 @@ type IssuesEvent = {
 };
 
 export async function POST(req: Request) {
-  const rl = checkRateLimit(`github-webhook:${callerIpFromRequest(req)}`);
+  const rl = await checkRateLimitAsync(`github-webhook:${callerIpFromRequest(req)}`);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
 
   const raw = await req.text();
@@ -36,6 +38,25 @@ export async function POST(req: Request) {
   }
 
   const eventName = req.headers.get("x-github-event");
+
+  // Revocation signal: the App was uninstalled or suspended. GitHub posts an
+  // `installation` event; we clear the matching workspace's install so it
+  // shows disconnected (and stops minting tokens against a dead installation).
+  if (eventName === "installation") {
+    let ev: { action?: string; installation?: { id?: number } };
+    try { ev = JSON.parse(raw); } catch { return NextResponse.json({ error: "invalid_json" }, { status: 400 }); }
+    if ((ev.action === "deleted" || ev.action === "suspend") && ev.installation?.id != null) {
+      const installId = String(ev.installation.id);
+      const [ws] = await db
+        .select({ id: workspaces.id })
+        .from(workspaces)
+        .where(eq(workspaces.githubAppInstallId, installId))
+        .limit(1);
+      if (ws) await clearProviderInstall(ws.id, "github");
+    }
+    return NextResponse.json({ received: true });
+  }
+
   if (eventName !== "issues") {
     return NextResponse.json({ received: true });
   }
@@ -65,8 +86,7 @@ export async function POST(req: Request) {
         eq(items.externalTicketId, ticketRef),
       ));
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/github] webhook DB update failed:", err);
+    log.error("github webhook DB update failed", { scope: "crumb/github", ticketRef, err });
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });
   }
 

@@ -3,6 +3,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import { signState, verifyState } from "./state";
+import { seal, open } from "../crypto-at-rest";
+import { clearProviderInstall, IntegrationAuthError } from "./revoke";
 
 // Atlassian Cloud OAuth 2.0 (3LO).
 // Docs: https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/
@@ -134,6 +136,13 @@ export async function refreshToken(workspaceId: string, currentRefreshToken: str
   });
   if (!resp.ok) {
     const text = await resp.text();
+    // 400/401 from the token endpoint means the refresh token is dead —
+    // revoked, expired, or the user reinstalled elsewhere. Clear the install
+    // so Settings shows "disconnected" instead of failing every call forever.
+    if (resp.status === 400 || resp.status === 401) {
+      await clearProviderInstall(workspaceId, "jira");
+      throw new IntegrationAuthError("jira", String(resp.status));
+    }
     throw new Error(`jira_refresh_failed: ${resp.status} ${text.slice(0, 200)}`);
   }
   const token = (await resp.json()) as TokenResponse;
@@ -148,8 +157,8 @@ export async function refreshToken(workspaceId: string, currentRefreshToken: str
   await db
     .update(workspaces)
     .set({
-      jiraAccessToken:    token.access_token,
-      jiraRefreshToken:   token.refresh_token,
+      jiraAccessToken:    seal(token.access_token),
+      jiraRefreshToken:   seal(token.refresh_token),
       jiraTokenExpiresAt: expiresAt,
       jiraCloudId:        target.id,
       jiraSiteUrl:        target.url,
@@ -184,9 +193,9 @@ async function getValidToken(workspace: {
       .where(eq(workspaces.id, workspace.id))
       .limit(1);
     if (!row?.jiraCloudId) return null;
-    return { accessToken: workspace.jiraAccessToken, cloudId: row.jiraCloudId };
+    return { accessToken: open(workspace.jiraAccessToken), cloudId: row.jiraCloudId };
   }
-  const refreshed = await refreshToken(workspace.id, workspace.jiraRefreshToken);
+  const refreshed = await refreshToken(workspace.id, open(workspace.jiraRefreshToken));
   return { accessToken: refreshed.accessToken, cloudId: refreshed.cloudId };
 }
 
@@ -201,8 +210,14 @@ export type JiraProject = { id: string; key: string; name: string };
 export async function listProjects(workspace: Parameters<typeof getValidToken>[0]): Promise<JiraProject[]> {
   const t = await getValidToken(workspace);
   if (!t) return [];
-  const resp = await fetch(`${apiBase(t.cloudId)}/project/search?maxResults=50&orderBy=name`, {
-    headers: { authorization: `Bearer ${t.accessToken}`, accept: "application/json" },
+  return listProjectsWithToken(t.cloudId, t.accessToken);
+}
+
+// Token-based variant — used right after the OAuth callback, before the
+// workspace row holds the (sealed) tokens `getValidToken` would read.
+export async function listProjectsWithToken(cloudId: string, accessToken: string): Promise<JiraProject[]> {
+  const resp = await fetch(`${apiBase(cloudId)}/project/search?maxResults=50&orderBy=name`, {
+    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
   });
   if (!resp.ok) throw new Error(`jira_list_projects_failed: ${resp.status}`);
   const data = (await resp.json()) as { values: Array<{ id: string; key: string; name: string }> };

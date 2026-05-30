@@ -83,15 +83,26 @@ type ThreadData = {
 type View =
   | { kind: "list" }
   | { kind: "admin" }
+  | { kind: "roadmap" }
+  | { kind: "settings" }
   | { kind: "compose"; type: ItemType; title: string; body: string }
   | { kind: "thread"; shortId: string; reply: string }
   | { kind: "confirm"; shortId: string };
 
+type RoadmapEntry = { id: string; short_id: string; name: string; description: string | null; status: string; following: boolean };
+type RoadmapData = { columns: { now: RoadmapEntry[]; next: RoadmapEntry[]; later: RoadmapEntry[] } };
+
+type NotifPrefs = { replies: boolean; status: boolean; roadmap: boolean; unsubscribed_all: boolean };
 type Me = {
   user: { id: string; name: string; email: string; initials: string; role: string };
-  workspace: { slug: string; name: string; accent?: string; launcher_bg?: string; position?: string; session_record_enabled?: boolean };
+  workspace: { slug: string; name: string; accent?: string; launcher_bg?: string; launcher_glass?: boolean; position?: string; session_record_enabled?: boolean };
   account: { id: string; name: string; member_count: number };
   is_account_admin: boolean;
+  has_roadmap?: boolean;
+  // Only true when the deployment can actually send email — gates the
+  // Notifications view (no point offering prefs we can't deliver).
+  email_enabled?: boolean;
+  notifications?: NotifPrefs;
   members: Array<{ id: string; name: string; email: string; initials: string; role: string; item_count: number }>;
 };
 
@@ -147,11 +158,11 @@ function readConfig(): Config | null {
 // coordinates themselves stay on the same 32-unit grid as the rest of
 // the brand so the composition reads the same as the dashboard mark.
 const LOOP_LAUNCHER = `<svg viewBox="-5 -5 42 42" aria-hidden="true">
-  <circle cx="16" cy="3"  r="3.0" opacity="0.45"/>
-  <circle cx="28" cy="11" r="3.5" opacity="0.62"/>
-  <circle cx="28" cy="22" r="4.0" opacity="0.80"/>
-  <circle cx="17" cy="29" r="4.5" opacity="0.94"/>
-  <circle cx="4"  cy="22" r="5.0"/>
+  <circle cx="16" cy="3"  r="2.6" opacity="0.30"/>
+  <circle cx="28" cy="11" r="3.1" opacity="0.46"/>
+  <circle cx="28" cy="22" r="3.6" opacity="0.62"/>
+  <circle cx="17" cy="29" r="4.1" opacity="0.80"/>
+  <circle cx="4"  cy="22" r="4.6" opacity="0.95"/>
 </svg>`;
 
 const LOOP_HEAD = `<svg viewBox="0 0 32 32" aria-hidden="true">
@@ -176,6 +187,8 @@ const ICONS = {
   expand:   `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h4v4M13 3l-5 5M7 13H3v-4M3 13l5-5"/></svg>`,
   collapse: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 7H9V3M9 7l4-4M3 9h4v4M7 9l-4 4"/></svg>`,
   attach:   `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 7L7.5 12.5a3 3 0 0 1-4.24-4.24L9 2.5a2 2 0 0 1 2.83 2.83L6 10.78"/></svg>`,
+  gear:     `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.4v1.7M8 12.9v1.7M14.6 8h-1.7M3.1 8H1.4M12.66 3.34l-1.2 1.2M4.54 11.46l-1.2 1.2M12.66 12.66l-1.2-1.2M4.54 4.54l-1.2-1.2"/></svg>`,
+  trash:    `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M5 4.5l.5 8h5l.5-8"/></svg>`,
 };
 
 const TYPES: Array<{ key: ItemType; label: string; icon: string }> = [
@@ -272,13 +285,12 @@ function init(config: Config) {
   // (top/inline) reveal a workspace-name label + CTA via CSS once we set the
   // host's `data-pos`.
   //
-  // We hold the launcher invisible until /me returns (or MAX_BOOT_MS fires),
-  // *then* reveal it already in its configured layout with the loading
-  // shimmer playing in place. Otherwise the launcher would flash in the
-  // corner first and visibly jump to top/inline — that mid-mount jump was
-  // both ugly and made the loading animation look like it happened in the
-  // wrong spot.
-  host.setAttribute("data-pos", "corner"); // safe default for the MAX_BOOT fallback
+  // The launcher reveals immediately using branding cached from a prior visit
+  // (or the corner default on first-ever load), then refreshes when /me
+  // resolves. On repeat visits the cached position is correct, so there's no
+  // corner→bar jump; only a brand-new visitor configured for top/inline sees
+  // a one-time settle. This keeps first paint off the /me round-trip.
+  host.setAttribute("data-pos", "corner"); // safe default before cache/me apply
   const launcher = document.createElement("button");
   launcher.className = "launcher";
   launcher.setAttribute("aria-label", "Open Crumb feedback");
@@ -385,24 +397,39 @@ function init(config: Config) {
   // Apply branding (colors, position, name) BEFORE we reveal the launcher,
   // so the loading shimmer plays in the final layout. Then, after the
   // minimum visible boot duration, settle into the static state.
-  function settleLauncher(opts: {
+  // Apply branding (colors / position / name) to the launcher. Idempotent —
+  // called once on first paint with cached/default values, then again when
+  // /me returns with the authoritative values.
+  function applyBranding(opts: {
     dot?: string | null;
     bg?: string | null;
     position?: string | null;
     workspaceName?: string | null;
+    glass?: boolean | null;
   }) {
     if (opts.dot) launcher.style.setProperty("--crumb-accent", opts.dot);
     if (opts.bg)  launcher.style.setProperty("--crumb-launcher-bg", opts.bg);
-    if (opts.position === "top" || opts.position === "inline" || opts.position === "corner") {
+    if (opts.position === "corner" || opts.position === "pill" || opts.position === "tab") {
       host.setAttribute("data-pos", opts.position);
     }
     if (opts.workspaceName && launcherNameEl) {
       launcherNameEl.textContent = `Share feedback for ${opts.workspaceName}`;
     }
+    if (opts.glass != null) launcher.classList.toggle("glass", opts.glass);
+  }
 
-    // Reveal in-place and start the shimmer. The launcher was hidden via
-    // opacity:0 until we knew the position, so the wave plays in the final
-    // layout (no corner→bar jump).
+  function settleLauncher(opts: {
+    dot?: string | null;
+    bg?: string | null;
+    position?: string | null;
+    workspaceName?: string | null;
+    glass?: boolean | null;
+  }) {
+    applyBranding(opts);
+
+    // Reveal in-place (opacity transition is the entrance) and play a brief
+    // branded shimmer, then settle. We no longer gate reveal on /me, so this
+    // fires immediately on load.
     launcher.style.opacity = "1";
     launcher.style.pointerEvents = "auto";
     startBootShimmer();
@@ -442,11 +469,57 @@ function init(config: Config) {
   let view: View = { kind: "list" };
   let thread: ThreadData | null = null;
   let threadState: AsyncState = { kind: "idle" };
+  let roadmap: RoadmapData | null = null;
+  let roadmapState: AsyncState = { kind: "idle" };
   let submitState: AsyncState = { kind: "idle" };
   let me: Me | null = null;
   let meState: AsyncState = { kind: "idle" };
+  let memberMsg: string | null = null;
 
   const setView = (v: View) => { view = v; render(); };
+
+  // ── branding cache (instant first paint) ──────────────────
+  // Persist /me branding so repeat visits paint the launcher with the correct
+  // colors/position immediately — no waiting on the /me round-trip.
+  type CachedBrand = { accent?: string; launcher_bg?: string; launcher_glass?: boolean; position?: string; name?: string };
+  function brandKey(): string { return `crumb_brand:${config.workspace}`; }
+  function readCachedBrand(): CachedBrand | null {
+    try { return JSON.parse(localStorage.getItem(brandKey()) || "null"); } catch { return null; }
+  }
+  function writeCachedBrand(b: CachedBrand): void {
+    try { localStorage.setItem(brandKey(), JSON.stringify(b)); } catch { /* storage blocked */ }
+  }
+
+  // ── unread watermark (vendor → customer reply signal) ──────
+  // localStorage map { short_id: lastSeenReplyCount } per workspace+user. An
+  // item is "unread" when its reply_count grew since the customer last opened
+  // its thread — i.e. the vendor (or an inbound email) replied while they were
+  // away. Drives the launcher badge so a reply is visible on next page load
+  // without reopening every thread. Best-effort: if storage is blocked
+  // (incognito), getSeen() returns {} and the badge falls back to "any item
+  // with replies" — the prior behavior.
+  function seenKey(): string {
+    return `crumb_seen:${config.workspace}:${config.userEmail || "jwt"}`;
+  }
+  // Cached so render() (called on every interaction/animation tick) doesn't
+  // re-parse localStorage each time. The cache holds the live object; writes
+  // mutate it in place.
+  let seenCache: Record<string, number> | null = null;
+  function getSeen(): Record<string, number> {
+    if (seenCache) return seenCache;
+    let m: Record<string, number>;
+    try { m = JSON.parse(localStorage.getItem(seenKey()) || "{}") || {}; } catch { m = {}; }
+    seenCache = m;
+    return m;
+  }
+  // Record the count seen for a thread. Pass the freshly-loaded thread's
+  // message count — not the (possibly-unloaded) list — so deep-link / boot
+  // opens clear the badge correctly.
+  function markThreadSeen(shortId: string, count: number) {
+    const m = getSeen();
+    m[shortId] = count;
+    try { localStorage.setItem(seenKey(), JSON.stringify(m)); } catch { /* storage blocked — cache still updated */ }
+  }
 
   // ── network ────────────────────────────────────────────
   function authHeaders(): Record<string, string> {
@@ -517,10 +590,124 @@ function init(config: Config) {
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       thread = data as ThreadData;
       threadState = { kind: "idle" };
+      // Viewing the thread clears its unread state — snapshot the just-loaded
+      // message count (same units as the list's reply_count) so the launcher
+      // badge drops this item, even on a deep-link open before the list loads.
+      markThreadSeen(shortId, Array.isArray(thread.messages) ? thread.messages.length : 0);
     } catch (err) {
       threadState = { kind: "error", message: err instanceof Error ? err.message : "Could not load" };
     }
     render();
+  }
+
+  async function fetchRoadmap() {
+    roadmapState = { kind: "loading" };
+    render();
+    try {
+      const u = withAuthParams(new URL(`${config.apiBase}/api/v1/roadmap`));
+      const res = await fetch(u.toString(), { headers: authHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      roadmap = data as RoadmapData;
+      roadmapState = { kind: "idle" };
+    } catch (err) {
+      roadmapState = { kind: "error", message: err instanceof Error ? err.message : "Could not load" };
+    }
+    render();
+  }
+
+  async function toggleFollow(initiativeId: string, follow: boolean) {
+    // Optimistic flip in the cached roadmap, then persist.
+    if (roadmap) {
+      for (const col of ["now", "next", "later"] as const) {
+        const e = roadmap.columns[col].find(x => x.id === initiativeId);
+        if (e) e.following = follow;
+      }
+      render();
+    }
+    try {
+      await fetch(`${config.apiBase}/api/v1/roadmap`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: authBody({ initiative_id: initiativeId, follow }),
+      });
+    } catch {
+      // Revert on failure.
+      void fetchRoadmap();
+    }
+  }
+
+  // ── customer notification prefs ──
+  async function saveNotif(patch: Partial<NotifPrefs>) {
+    if (!me) return;
+    if (!me.notifications) me.notifications = { replies: true, status: true, roadmap: true, unsubscribed_all: false };
+    Object.assign(me.notifications, patch); // optimistic
+    render();
+    try {
+      const res = await fetch(`${config.apiBase}/api/v1/notifications`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: authBody(patch),
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      void fetchMe(); // fall back to server truth
+    }
+  }
+
+  // ── account member management (admins) ──
+  async function setMemberRole(id: string, role: "admin" | "member") {
+    if (!me) return;
+    memberMsg = null;
+    const m = me.members.find(x => x.id === id);
+    const prev = m?.role;
+    if (m) { m.role = role; render(); }
+    try {
+      const res = await fetch(`${config.apiBase}/api/v1/members`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: authBody({ target_user_id: id, role }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (m && prev) m.role = prev;
+        memberMsg = data?.error === "last_admin" ? "An account needs at least one admin." : "Couldn't change that role.";
+        render();
+      }
+    } catch {
+      void fetchMe();
+    }
+  }
+
+  async function removeMember(id: string) {
+    if (!me) return;
+    memberMsg = null;
+    const idx = me.members.findIndex(x => x.id === id);
+    if (idx < 0) return;
+    const removed = me.members[idx]!;
+    me.members.splice(idx, 1);
+    me.account.member_count = Math.max(0, me.account.member_count - 1);
+    render();
+    try {
+      const res = await fetch(`${config.apiBase}/api/v1/members`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: authBody({ target_user_id: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        me.members.splice(idx, 0, removed);
+        me.account.member_count += 1;
+        memberMsg = data?.error === "has_items"
+          ? "This teammate has feedback on file and can't be removed."
+          : data?.error === "last_admin"
+            ? "An account needs at least one admin."
+            : "Couldn't remove that teammate.";
+        render();
+      }
+    } catch {
+      void fetchMe();
+    }
   }
 
   async function submitNew(t: Extract<View, { kind: "compose" }>) {
@@ -640,14 +827,17 @@ function init(config: Config) {
     panel.classList.toggle("expanded", open && expanded);
     scrim.classList.toggle("show", open && expanded);
 
-    // Unread-ish badge on launcher: replies on items, summed
-    const unreadCount = items?.reduce((n, it) => n + (it.reply_count > 0 && it.status !== "shipped" ? 1 : 0), 0) ?? 0;
+    // Unread badge on launcher: items whose reply_count grew since the
+    // customer last opened that thread (a vendor/inbound reply they haven't seen).
+    const seen = getSeen();
+    const unreadCount = items?.reduce((n, it) => n + (it.reply_count > (seen[it.short_id] ?? 0) ? 1 : 0), 0) ?? 0;
     const existingBadge = launcher.querySelector(".badge");
     if (existingBadge) existingBadge.remove();
     if (unreadCount > 0 && !open) {
+      // A pulsing attention dot (not a count) — the exact unread items are
+      // surfaced inside the list. Cleaner + draws the eye only when new.
       const b = document.createElement("span");
       b.className = "badge";
-      b.textContent = String(Math.min(unreadCount, 9));
       launcher.appendChild(b);
     }
 
@@ -655,18 +845,22 @@ function init(config: Config) {
 
     if (view.kind === "list") renderList();
     else if (view.kind === "admin") renderAdmin();
+    else if (view.kind === "roadmap") renderRoadmap();
+    else if (view.kind === "settings") renderSettings();
     else if (view.kind === "compose") renderCompose(view);
     else if (view.kind === "thread") renderThread(view);
     else if (view.kind === "confirm") renderConfirm(view);
   }
 
-  function tabStripHtml(active: "feedback" | "admin"): string {
-    if (!me?.is_account_admin) return "";
-    return `
-      <div class="tabs">
-        <button class="tab" data-act="tab" data-tab="feedback" aria-selected="${active === "feedback"}">Your feedback</button>
-        <button class="tab" data-act="tab" data-tab="admin" aria-selected="${active === "admin"}">Admin</button>
-      </div>`;
+  function tabStripHtml(active: "feedback" | "roadmap" | "admin"): string {
+    const showRoadmap = !!me?.has_roadmap;
+    const showAdmin = !!me?.is_account_admin;
+    // No tabs when there's nothing beyond the feedback list.
+    if (!showRoadmap && !showAdmin) return "";
+    let tabs = `<button class="tab" data-act="tab" data-tab="feedback" aria-selected="${active === "feedback"}">Your feedback</button>`;
+    if (showRoadmap) tabs += `<button class="tab" data-act="tab" data-tab="roadmap" aria-selected="${active === "roadmap"}">Roadmap</button>`;
+    if (showAdmin) tabs += `<button class="tab" data-act="tab" data-tab="admin" aria-selected="${active === "admin"}">Admin</button>`;
+    return `<div class="tabs">${tabs}</div>`;
   }
 
   function header(title: string, sub?: string, withBack = false, expandable = false): string {
@@ -676,6 +870,7 @@ function init(config: Config) {
           ? `<button class="back" aria-label="Back" data-act="back">${ICONS.back}</button>`
           : `<span class="brand-mark">${LOOP_HEAD}</span>`}
         <div class="title">${escapeHtml(title)}${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ""}</div>
+        ${(!withBack && me?.email_enabled) ? `<button class="close" aria-label="Notification settings" data-act="open-settings">${ICONS.gear}</button>` : ""}
         ${expandable ? `<button class="close" aria-label="${expanded ? "Collapse" : "Expand"}" data-act="toggle-expand">${expanded ? ICONS.collapse : ICONS.expand}</button>` : ""}
         <button class="close" aria-label="Close" data-act="close">${ICONS.x}</button>
       </div>`;
@@ -690,7 +885,7 @@ function init(config: Config) {
     let bodyHtml = tabStripHtml("feedback");
 
     if (isLoading) {
-      bodyHtml += `<div class="spinner"></div>`;
+      bodyHtml += `<div class="skeleton">${`<div class="skel row"></div>`.repeat(4)}</div>`;
     } else if (!items || items.length === 0) {
       bodyHtml += `
         <div class="empty">
@@ -735,22 +930,30 @@ function init(config: Config) {
       panel.innerHTML = `
         ${header(config.accountName)}
         ${tabStripHtml("admin")}
-        <div class="body"><div class="spinner"></div></div>`;
+        <div class="body"><div class="skeleton"><div class="skel row"></div><div class="skel row"></div></div></div>`;
       return;
     }
 
+    const isAdmin = me.is_account_admin;
     const membersHtml = me.members.length === 0
       ? `<p class="text-sm muted" style="margin:0">No teammates yet.</p>`
-      : `<div class="members">${me.members.map(m => `
-          <div class="member-row">
+      : `<div class="members">${me.members.map(m => {
+          const self = m.id === me!.user.id;
+          const controls = (isAdmin && !self)
+            ? `<div class="member-actions">
+                 <button class="member-role" data-act="member-role" data-id="${escapeHtml(m.id)}" data-next="${m.role === "admin" ? "member" : "admin"}" title="Change role">${m.role === "admin" ? "Admin" : "Member"}</button>
+                 <button class="member-remove" data-act="member-remove" data-id="${escapeHtml(m.id)}" aria-label="Remove ${escapeHtml(m.name)}">${ICONS.trash}</button>
+               </div>`
+            : (m.role === "admin" ? `<span class="role-pill">admin</span>` : `<span class="member-count">${m.item_count}</span>`);
+          return `<div class="member-row">
             <span class="member-avatar">${escapeHtml(m.initials)}</span>
             <div class="member-meta">
-              <span class="member-name">${escapeHtml(m.name)}${m.id === me!.user.id ? ` <span class="member-you">you</span>` : ""}</span>
+              <span class="member-name">${escapeHtml(m.name)}${self ? ` <span class="member-you">you</span>` : ""}</span>
               <span class="member-email">${escapeHtml(m.email)}</span>
             </div>
-            ${m.role === "admin" ? `<span class="role-pill">admin</span>` : ""}
-            <span class="member-count">${m.item_count}</span>
-          </div>`).join("")}
+            ${controls}
+          </div>`;
+        }).join("")}
         </div>`;
 
     panel.innerHTML = `
@@ -763,29 +966,79 @@ function init(config: Config) {
             <span class="admin-card-title">Members</span>
             <span class="admin-card-sub">${me.account.member_count} on ${escapeHtml(me.account.name)}</span>
           </div>
+          ${memberMsg ? `<div class="err" style="margin-bottom:10px">${escapeHtml(memberMsg)}</div>` : ""}
           ${membersHtml}
-        </section>
-
-        <section class="admin-card">
-          <div class="admin-card-head">
-            <span class="admin-card-title">Connected channels</span>
-            <span class="badge-inline">Coming soon</span>
-          </div>
-          <p class="text-sm muted" style="margin:0;line-height:1.5">
-            Connect Acme's Slack workspace, email digest, or a webhook. Notifications follow your team where they already work.
-          </p>
-        </section>
-
-        <section class="admin-card">
-          <div class="admin-card-head">
-            <span class="admin-card-title">Defaults for new teammates</span>
-            <span class="badge-inline">Coming soon</span>
-          </div>
-          <p class="text-sm muted" style="margin:0;line-height:1.5">
-            Set who sees what when a new teammate joins, and who gets notified on what.
-          </p>
+          ${isAdmin ? `<p class="set-sub" style="margin:12px 2px 0">Teammates appear here automatically when they open the widget. Change a role or remove someone above.</p>` : ""}
         </section>
       </div>`;
+  }
+
+  function renderSettings() {
+    const n: NotifPrefs = me?.notifications ?? { replies: true, status: true, roadmap: true, unsubscribed_all: false };
+    const paused = n.unsubscribed_all;
+    const toggleRow = (key: "replies" | "status" | "roadmap", label: string, sub: string) => {
+      const on = n[key] && !paused;
+      return `<div class="set-row${paused ? " disabled" : ""}">
+        <div class="set-meta"><span class="set-label">${label}</span><span class="set-sub">${sub}</span></div>
+        <button class="sw ${on ? "on" : ""}" role="switch" aria-checked="${on}" data-act="notif-toggle" data-key="${key}"${paused ? " disabled" : ""}></button>
+      </div>`;
+    };
+    panel.innerHTML = `
+      ${header("Notifications", config.accountName, true)}
+      <div class="body">
+        <p class="lede" style="margin:0 0 14px">Choose which emails ${escapeHtml(me?.workspace.name ?? "we")} sends you about your feedback.</p>
+        ${toggleRow("replies", "Replies", "When the team replies on your feedback")}
+        ${toggleRow("status", "Status changes", "When your feedback moves (planned, shipped…)")}
+        ${toggleRow("roadmap", "Roadmap updates", "When a roadmap item you follow changes")}
+        <div class="set-divider"></div>
+        <div class="set-row">
+          <div class="set-meta"><span class="set-label">Pause all email</span><span class="set-sub">Mute every notification above</span></div>
+          <button class="sw ${paused ? "on" : ""}" role="switch" aria-checked="${paused}" data-act="notif-pause"></button>
+        </div>
+      </div>`;
+  }
+
+  function renderRoadmap() {
+    const isLoading = roadmapState.kind === "loading" && roadmap === null;
+    let bodyHtml = tabStripHtml("roadmap");
+
+    if (isLoading) {
+      bodyHtml += `<div class="skeleton"><div class="skel row"></div><div class="skel row"></div></div>`;
+    } else if (roadmapState.kind === "error") {
+      bodyHtml += `<div class="err">${escapeHtml(roadmapState.message)}</div>`;
+    } else if (roadmap) {
+      const cols = [["now", "Now"], ["next", "Next"], ["later", "Later"]] as const;
+      const total = cols.reduce((n, [k]) => n + roadmap!.columns[k].length, 0);
+      if (total === 0) {
+        bodyHtml += `
+          <div class="empty">
+            <span class="icon">${ICONS.idea}</span>
+            <h2>Nothing here yet</h2>
+            <p>This team hasn't shared a public roadmap yet — check back soon.</p>
+          </div>`;
+      } else {
+        bodyHtml += `<div class="rm-board">` + cols.map(([key, label]) => {
+          const entries = roadmap!.columns[key];
+          if (entries.length === 0) return "";
+          return `
+            <div class="rm-col">
+              <div class="rm-col-head">${label}</div>
+              ${entries.map(e => `
+                <div class="rm-card">
+                  <div class="rm-card-top">
+                    <span class="rm-name">${escapeHtml(e.name)}</span>
+                    <button class="rm-follow${e.following ? " on" : ""}" data-act="follow" data-id="${escapeHtml(e.id)}" data-following="${e.following ? "1" : "0"}">${e.following ? "Following" : "Follow"}</button>
+                  </div>
+                  ${e.description ? `<p class="rm-desc">${escapeHtml(e.description)}</p>` : ""}
+                </div>`).join("")}
+            </div>`;
+        }).join("") + `</div>`;
+      }
+    }
+
+    panel.innerHTML = `
+      ${header("Roadmap", config.accountName)}
+      <div class="body">${bodyHtml}</div>`;
   }
 
   function renderCompose(v: Extract<View, { kind: "compose" }>) {
@@ -841,7 +1094,7 @@ function init(config: Config) {
     let footMeta = "";
 
     if (isLoading) {
-      body = `<div class="spinner"></div>`;
+      body = `<div class="skeleton"><div class="skel row"></div><div class="skel row" style="height:96px"></div><div class="skel row" style="height:64px"></div></div>`;
     } else if (threadState.kind === "error") {
       body = `<div class="err">${escapeHtml(threadState.message)}</div>`;
     } else if (thread) {
@@ -857,7 +1110,7 @@ function init(config: Config) {
             <div class="meta">
               <span class="avatar">${escapeHtml(m.author_initials)}</span>
               <span>${escapeHtml(m.author_name)}</span>
-              <span style="margin-left:auto">${ageFrom(m.created_at)}</span>
+              <span class="when">${ageFrom(m.created_at)}</span>
             </div>
             ${m.body ? `<p>${escapeHtml(m.body)}</p>` : ""}
             ${atts ? `<div class="attachments">${atts}</div>` : ""}
@@ -969,14 +1222,45 @@ function init(config: Config) {
     if (act === "toggle-expand") { expanded = !expanded; render(); return; }
     if (act === "back") {
       submitState = { kind: "idle" };
+      memberMsg = null;
       expanded = false;
       setView({ kind: "list" });
       return;
     }
     if (act === "tab") {
       const t = target.dataset.tab;
+      memberMsg = null;
       if (t === "admin") setView({ kind: "admin" });
       else if (t === "feedback") setView({ kind: "list" });
+      else if (t === "roadmap") { setView({ kind: "roadmap" }); if (roadmap === null) fetchRoadmap(); }
+      return;
+    }
+    if (act === "open-settings") { memberMsg = null; setView({ kind: "settings" }); return; }
+    if (act === "notif-toggle") {
+      const key = target.dataset.key;
+      if ((key === "replies" || key === "status" || key === "roadmap") && me?.notifications && !me.notifications.unsubscribed_all) {
+        saveNotif({ [key]: !me.notifications[key] } as Partial<NotifPrefs>);
+      }
+      return;
+    }
+    if (act === "notif-pause") {
+      saveNotif({ unsubscribed_all: !(me?.notifications?.unsubscribed_all ?? false) });
+      return;
+    }
+    if (act === "member-role") {
+      const id = target.dataset.id;
+      const next = target.dataset.next;
+      if (id && (next === "admin" || next === "member")) setMemberRole(id, next);
+      return;
+    }
+    if (act === "member-remove") {
+      const id = target.dataset.id;
+      if (id) removeMember(id);
+      return;
+    }
+    if (act === "follow") {
+      const id = target.dataset.id;
+      if (id) toggleFollow(id, target.dataset.following !== "1");
       return;
     }
     if (act === "new") {
@@ -1050,9 +1334,10 @@ function init(config: Config) {
 
   launcher.addEventListener("click", () => {
     open = !open;
-    if (open && items === null) {
-      // Fire both in parallel; render() inside fetchList shows the panel once
-      // items arrive. /me has usually already finished from the init kickoff.
+    if (open) {
+      // Always refresh on open so the list (and any new vendor replies) is
+      // current. render() inside fetchList shows the panel once items arrive;
+      // /me has usually already finished from the init kickoff.
       if (me === null && meState.kind !== "loading") fetchMe();
       fetchList();
     } else {
@@ -1060,44 +1345,49 @@ function init(config: Config) {
     }
   });
 
-  // Kick off /me on init so we have branding (accent + launcher_bg) and the
-  // loading animation can settle even before the customer first clicks. Hold
-  // the boot state for a minimum 1.4s (one full pulse cycle) so customers
-  // actually see the animation — on localhost /me responds in <50ms and
-  // would otherwise vanish before anyone notices.
+  // First paint must NOT wait on the /me round-trip (which can be 1–3s on a
+  // cold serverless function or dev compile). We reveal the launcher
+  // immediately using branding cached from a previous visit — or safe corner
+  // defaults on the very first ever load — then refresh colors/position in
+  // place when /me resolves and cache it for next time.
   const bootStartedAt = Date.now();
-  const MIN_BOOT_MS = 2000; // Two full pulse cycles (1.2s × ~2) so customers
-                            // see the loading wave clearly even on instant LANs.
-  const MAX_BOOT_MS = 3500;
+  const MIN_BOOT_MS = 600; // brief branded entrance shimmer, not a loading gate
 
-  let settled = false;
-  const settleOnce = (
-    dot: string | null,
-    bg: string | null,
-    position: string | null,
-    workspaceName: string | null,
-  ) => {
-    if (settled) return;
-    settled = true;
-    settleLauncher({ dot, bg, position, workspaceName });
-  };
+  const cachedBrand = readCachedBrand();
+  settleLauncher({
+    dot: cachedBrand?.accent ?? null,
+    bg: cachedBrand?.launcher_bg ?? null,
+    position: cachedBrand?.position ?? null,
+    workspaceName: cachedBrand?.name ?? null,
+    glass: cachedBrand?.launcher_glass ?? null,
+  });
 
-  // Reveal the launcher as soon as /me returns (settleLauncher itself
-  // enforces the MIN_BOOT_MS shimmer floor internally). The safety timeout
-  // is the fallback for a stalled /me — we'd rather show an unbranded
-  // corner launcher than leave the customer with nothing.
   fetchMe().then(() => {
-    settleOnce(
-      me?.workspace.accent ?? null,
-      me?.workspace.launcher_bg ?? null,
-      me?.workspace.position ?? null,
-      me?.workspace.name ?? null,
-    );
-    if (me?.workspace.session_record_enabled) {
-      ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken());
+    if (me) {
+      applyBranding({
+        dot: me.workspace.accent ?? null,
+        bg: me.workspace.launcher_bg ?? null,
+        position: me.workspace.position ?? null,
+        workspaceName: me.workspace.name ?? null,
+        glass: me.workspace.launcher_glass ?? false,
+      });
+      writeCachedBrand({
+        accent: me.workspace.accent,
+        launcher_bg: me.workspace.launcher_bg,
+        launcher_glass: me.workspace.launcher_glass,
+        position: me.workspace.position,
+        name: me.workspace.name,
+      });
+      if (me.workspace.session_record_enabled) {
+        ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken());
+      }
     }
   });
-  setTimeout(() => settleOnce(null, null, null, null), MAX_BOOT_MS);
+
+  // Background-load the list once on boot so the launcher can surface an
+  // unread badge for replies that arrived while the customer was away —
+  // before they ever open the panel. Cheap single GET; failures are silent.
+  fetchList();
 
   // Honor `?crumb_open=FB-N` on initial load — the deep-link target in
   // customer notification emails. Pops the panel straight to that thread.

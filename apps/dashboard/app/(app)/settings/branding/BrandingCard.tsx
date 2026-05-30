@@ -2,10 +2,10 @@
 
 import { useState, useTransition, useEffect, useRef } from "react";
 import { animate } from "motion";
-import { Btn, Card, CardHead, Field, Pill } from "@crumb/ui";
+import { Btn, Card, CardHead, Field, Pill, Switch } from "@crumb/ui";
 import { saveBranding } from "./actions";
 
-type Pos = "corner" | "top" | "inline";
+type Pos = "corner" | "pill" | "tab";
 
 function readableOn(hex: string): string {
   const c = hex.replace("#", "");
@@ -47,24 +47,27 @@ const SkelTile = ({ h = 28 }: { h?: number }) => (
 // The same loop mark the widget mounts in its launcher. Sized for the
 // 44px preview circle so the dots breathe inside the chip without
 // crowding the edge.
-function LoopMark({ dotColor, size = 22 }: { dotColor: string; size?: number }) {
+function LoopMark({ dotColor, size = 24 }: { dotColor: string; size?: number }) {
   return (
     <svg viewBox="-5 -5 42 42" aria-hidden="true" style={{ width: size, height: size, overflow: "visible" }}>
-      <circle cx="16" cy="3"  r="3.0" opacity="0.45" fill={dotColor} />
-      <circle cx="28" cy="11" r="3.5" opacity="0.62" fill={dotColor} />
-      <circle cx="28" cy="22" r="4.0" opacity="0.80" fill={dotColor} />
-      <circle cx="17" cy="29" r="4.5" opacity="0.94" fill={dotColor} />
-      <circle cx="4"  cy="22" r="5.0" fill={dotColor} />
+      <circle cx="16" cy="3"  r="2.6" opacity="0.30" fill={dotColor} />
+      <circle cx="28" cy="11" r="3.1" opacity="0.46" fill={dotColor} />
+      <circle cx="28" cy="22" r="3.6" opacity="0.62" fill={dotColor} />
+      <circle cx="17" cy="29" r="4.1" opacity="0.80" fill={dotColor} />
+      <circle cx="4"  cy="22" r="4.6" opacity="0.95" fill={dotColor} />
     </svg>
   );
 }
 
 function BrandingPreview({
-  name, dotColor, launcherBg, pos,
+  name, dotColor, launcherBg, pos, glass,
 }: {
-  name: string; dotColor: string; launcherBg: string; pos: Pos;
+  name: string; dotColor: string; launcherBg: string; pos: Pos; glass: boolean;
 }) {
-  const fg = readableOn(dotColor);
+  // Label text ("Feedback") sits on the launcher background, so its contrast
+  // is against launcherBg — not the dot color.
+  const fg = readableOn(launcherBg);
+  const glassCls = glass ? " glass" : "";
 
   // Drive the preview loop mark with the same animation strategy as the
   // live widget so vendors see exactly what their customers will:
@@ -151,50 +154,29 @@ function BrandingPreview({
         <div style={{ height: 12 }} />
         <SkelTile h={42} />
 
-        {pos === "top" && (
-          <div className="preview-launcher preview-launcher--top" style={{
-            position: "absolute", left: 0, right: 0, top: 0,
-            background: launcherBg, color: readableOn(launcherBg),
-            padding: "6px 14px",
-            fontSize: "var(--fs-2xs)", letterSpacing: "0.04em",
-            display: "flex", alignItems: "center", gap: 10,
-            fontFamily: "var(--font-body)", fontWeight: 500,
+        {pos === "pill" && (
+          <div className={`preview-launcher preview-launcher--pill${glassCls}`} style={{
+            ["--lb" as string]: launcherBg, color: fg,
+            position: "absolute", right: 14, bottom: 14,
+            height: 48, padding: "0 18px 0 15px", borderRadius: 999,
+            display: "flex", alignItems: "center", gap: 9,
+            fontFamily: "var(--font-body)", fontWeight: 500, whiteSpace: "nowrap",
           }}>
-            <LoopMark dotColor={dotColor} size={14} />
-            <span style={{ flex: 1, position: "relative", zIndex: 1 }}>{name} · we read every reply.</span>
-            <span style={{
-              padding: "2px 8px",
-              border: `1px solid ${readableOn(launcherBg)}`,
-              borderRadius: 999,
-              opacity: 0.85,
-              position: "relative", zIndex: 1,
-            }}>Share feedback</span>
+            <LoopMark dotColor={dotColor} size={20} />
+            <span style={{ fontSize: 14 }}>Feedback</span>
           </div>
         )}
 
-        {pos === "inline" && (
-          <div className="preview-launcher preview-launcher--inline" style={{
-            position: "absolute", left: "50%", bottom: 14,
-            transform: "translateX(-50%)",
-            background: launcherBg,
-            padding: "10px 12px",
-            borderRadius: 10,
-            display: "flex", alignItems: "center", gap: 10,
-            fontFamily: "var(--font-body)",
-            whiteSpace: "nowrap",
-            color: fg,
+        {pos === "tab" && (
+          <div className={`preview-launcher preview-launcher--tab${glassCls}`} style={{
+            ["--lb" as string]: launcherBg, color: fg,
+            position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)",
+            padding: "15px 8px", borderRadius: "12px 0 0 12px",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
+            fontFamily: "var(--font-body)", fontWeight: 500,
           }}>
-            <LoopMark dotColor={dotColor} size={16} />
-            <span className="text-xs" style={{ flex: 1, position: "relative", zIndex: 1 }}>
-              Feedback for <span className="serif">{name}</span>
-            </span>
-            <span style={{
-              padding: "4px 10px", borderRadius: "var(--r-sm)",
-              fontSize: "var(--fs-2xs)", fontWeight: 500,
-              letterSpacing: "0.04em",
-              border: `1px solid ${fg}`, opacity: 0.85,
-              position: "relative", zIndex: 1,
-            }}>Share →</span>
+            <LoopMark dotColor={dotColor} size={20} />
+            <span style={{ fontSize: 13, writingMode: "vertical-rl", letterSpacing: "0.02em" }}>Feedback</span>
           </div>
         )}
 
@@ -205,46 +187,56 @@ function BrandingPreview({
               padding: "4px 8px", borderRadius: "var(--r-sm)",
               fontFamily: "var(--font-body)", fontSize: "var(--fs-2xs)",
               fontWeight: 500, letterSpacing: "0.04em",
-              marginBottom: 4, whiteSpace: "nowrap",
+              marginBottom: 6, whiteSpace: "nowrap",
             }}>
               Feedback for {name}
             </span>
-            <span className="preview-launcher preview-launcher--corner" style={{
-              width: 44, height: 44, borderRadius: 999,
-              background: launcherBg,
+            <span className={`preview-launcher preview-launcher--corner${glassCls}`} style={{
+              ["--lb" as string]: launcherBg,
+              width: 54, height: 54, borderRadius: "50%",
               display: "grid", placeItems: "center",
             }}>
-              <LoopMark dotColor={dotColor} />
+              <LoopMark dotColor={dotColor} size={24} />
             </span>
           </div>
         )}
       </div>
 
-      {/* Clean modern depth for the preview launcher chips — mirrors the
-          widget's launcher CSS. Linear/Vercel style: precision shadows +
-          hairline rim, no specular shine.
-          Note: don't set position:absolute on the base — the corner chip
-          sits in a flex row next to the "Feedback for…" label and needs
-          to flow naturally. Top + inline use absolute positioning set
-          inline on the element itself. */}
-      <style>{`
+      {/* Liquid-glass treatment — byte-for-byte the same recipe as the widget's
+          .launcher CSS (apps/widget/src/styles.ts), driven by --lb so what the
+          vendor picks here is what their customers see. Keep the two in sync.
+          dangerouslySetInnerHTML (not a text child) so React doesn't HTML-escape
+          the CSS — `content: ""` and `>` selectors would otherwise become
+          &quot;/&gt; in SSR, breaking the rules AND the hydration match. */}
+      <style dangerouslySetInnerHTML={{ __html: `
         .preview-launcher {
+          position: relative;
+          background: color-mix(in srgb, var(--lb) 82%, transparent);
+          -webkit-backdrop-filter: blur(14px) saturate(0.95);
+          backdrop-filter: blur(14px) saturate(0.95);
+          border: 1px solid rgba(255, 255, 255, 0.10);
           box-shadow:
-            0 1px 0 rgba(0, 0, 0, 0.04),
-            0 2px 6px rgba(0, 0, 0, 0.08),
-            0 8px 20px rgba(0, 0, 0, 0.08),
-            inset 0 1px 0 rgba(255, 255, 255, 0.08);
-          border: 1px solid rgba(0, 0, 0, 0.08);
+            0 1px 2px rgba(16, 18, 23, 0.12),
+            0 6px 18px rgba(16, 18, 23, 0.16),
+            inset 0 1px 0 rgba(255, 255, 255, 0.12);
         }
-        .preview-launcher--top {
-          box-shadow:
-            0 1px 0 rgba(0, 0, 0, 0.04),
-            0 4px 12px rgba(0, 0, 0, 0.06),
-            inset 0 1px 0 rgba(255, 255, 255, 0.06);
-          border: 0;
-          border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+        .preview-launcher::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          z-index: 0;
+          background: linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0) 40%);
         }
-      `}</style>
+        .preview-launcher > svg, .preview-launcher > span { position: relative; z-index: 1; }
+        .preview-launcher.glass {
+          background: color-mix(in srgb, var(--lb) 62%, transparent);
+          backdrop-filter: blur(18px) saturate(1.5);
+          -webkit-backdrop-filter: blur(18px) saturate(1.5);
+          border: 1px solid rgba(255, 255, 255, 0.22);
+        }
+      ` }} />
     </div>
   );
 }
@@ -281,18 +273,21 @@ export function BrandingCard({
   initialAccent,
   initialLauncherBg,
   initialPosition,
+  initialGlass,
   initialProductUrl,
 }: {
   initialName: string;
   initialAccent: string;
   initialLauncherBg: string;
   initialPosition: Pos;
+  initialGlass: boolean;
   initialProductUrl: string | null;
 }) {
   const [name, setName] = useState(initialName);
   const [accent, setAccent] = useState(initialAccent);
   const [launcherBg, setLauncherBg] = useState(initialLauncherBg);
   const [pos, setPos] = useState<Pos>(initialPosition);
+  const [glass, setGlass] = useState(initialGlass);
   const [productUrl, setProductUrl] = useState(initialProductUrl ?? "");
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -321,7 +316,7 @@ export function BrandingCard({
       );
     }
     startTransition(async () => {
-      const res = await saveBranding({ name, accent, launcherBg, position: pos, productUrl });
+      const res = await saveBranding({ name, accent, launcherBg, launcherGlass: glass, position: pos, productUrl });
       if (res.ok) setSavedAt(Date.now());
       else setError(res.error);
     });
@@ -344,7 +339,7 @@ export function BrandingCard({
             <input className="input" value={name} onChange={e => setName(e.target.value)} />
           </Field>
 
-          <Field label="Launcher color" help="The pill the dots sit inside. Defaults to a deep brown.">
+          <Field label="Launcher color" help="The launcher the dots sit inside. Defaults to a deep ink.">
             <ColorPicker value={launcherBg} onChange={setLauncherBg} />
           </Field>
 
@@ -352,16 +347,27 @@ export function BrandingCard({
             <ColorPicker value={accent} onChange={setAccent} />
           </Field>
 
-          <Field label="Widget position" help="Where customers see the launcher in your product.">
+          <Field label="Launcher style" help="How customers open the widget in your product.">
             <div className="seg" style={{ width: "100%" }}>
-              {(["corner", "top", "inline"] as const).map(k => (
+              {([
+                { k: "corner", label: "FAB" },
+                { k: "pill", label: "Pill" },
+                { k: "tab", label: "Side-tab" },
+              ] as const).map(({ k, label }) => (
                 <button
                   key={k}
                   aria-selected={pos === k}
                   onClick={() => setPos(k)}
-                  style={{ flex: 1, textTransform: "capitalize" }}
-                >{k}</button>
+                  style={{ flex: 1 }}
+                >{label}</button>
               ))}
+            </div>
+          </Field>
+
+          <Field label="Glass effect" help="Frosted, translucent launcher that blends into busy or dark host pages.">
+            <div className="row gap-2 center">
+              <Switch on={glass} onClick={() => setGlass(g => !g)} />
+              <span className="text-sm muted">{glass ? "On" : "Off"}</span>
             </div>
           </Field>
 
@@ -415,7 +421,7 @@ export function BrandingCard({
           </div>
         </div>
 
-        <BrandingPreview name={name} dotColor={accent} launcherBg={launcherBg} pos={pos} />
+        <BrandingPreview name={name} dotColor={accent} launcherBg={launcherBg} pos={pos} glass={glass} />
       </div>
     </Card>
   );

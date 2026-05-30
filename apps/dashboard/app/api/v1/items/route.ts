@@ -2,9 +2,13 @@ import { NextResponse } from "next/server";
 import { db, workspaces, items, replies, statusEvents, initiatives, initiativeSuggestions, replaySessions } from "@crumb/db";
 import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
-import { callerIpFromRequest, checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { suggestInitiative, clusterConfigured, CLUSTER_MODEL } from "@/lib/ai/cluster";
 import { hasFeature } from "@/lib/entitlements";
+import { createItemSchema, parseJsonBody } from "@/lib/validation";
+import { consumeAi } from "@/lib/usage";
+import { log } from "@/lib/log";
+import type { Workspace } from "@crumb/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -39,10 +43,14 @@ export async function GET(req: Request) {
       status: items.status,
       createdAt: items.createdAt,
       updatedAt: items.updatedAt,
+      // Fully-qualified raw refs, NOT ${items.id}/${replies.*}: inside a raw
+      // subquery template drizzle renders interpolated columns unqualified, so
+      // ${items.id} -> "id" resolves to replies.id (the inner table's own id)
+      // instead of the outer item — silently making every count 0.
       replyCount: sql<number>`(
-        SELECT COUNT(*)::int FROM ${replies}
-        WHERE ${replies.itemId} = ${items.id}
-          AND ${replies.internal} = false
+        SELECT COUNT(*)::int FROM replies
+        WHERE replies.item_id = items.id
+          AND replies.internal = false
       )`,
     })
     .from(items)
@@ -65,40 +73,19 @@ export async function GET(req: Request) {
   }));
 }
 
-type CreateBody = {
-  workspace_slug?: string;
-  account_user_email?: string;
-  account_user_name?: string;
-  account_name?: string;
-  type?: "bug" | "idea" | "question";
-  title?: string;
-  body?: string;
-  // Optional replay session linker. The widget includes this only after at
-  // least one chunk has flushed — avoids creating dead empty rows when the
-  // recorder is enabled but never emits anything before submit.
-  session_token?: string;
-};
-
-const ALLOWED_TYPES = new Set(["bug", "idea", "question"]);
-
 // ─── POST /api/v1/items ────────────────────────────────────────
 // Creates an item. JWT-authed if the Bearer header is present; otherwise
-// trusts body fields (for the demo embed).
+// trusts body fields (for the demo embed). The `session_token` field is an
+// optional replay-session linker — the widget includes it only after ≥1
+// chunk has flushed, avoiding dead empty rows.
 export async function POST(req: Request) {
   // Rate-limit before parsing — keep spammy clients cheap.
-  const rl = checkRateLimit(`items:${callerIpFromRequest(req)}`);
+  const rl = await checkRateLimitAsync(`items:${callerIpFromRequest(req)}`);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
 
-  let payload: CreateBody;
-  try {
-    payload = await req.json();
-  } catch {
-    return fail(400, "invalid_json");
-  }
-
-  const { workspace_slug, account_user_email, account_user_name, account_name, type, title, body, session_token } = payload;
-  if (!type || !ALLOWED_TYPES.has(type)) return fail(400, "invalid_type");
-  if (!title || !title.trim()) return fail(400, "missing_title");
+  const parsed = await parseJsonBody(req, createItemSchema);
+  if (!parsed.ok) return fail(parsed.status, parsed.error);
+  const { workspace_slug, account_user_email, account_user_name, account_name, type, title, body, session_token } = parsed.data;
 
   const r = await resolveCustomer(req, {
     workspaceSlug: workspace_slug ?? null,
@@ -111,7 +98,7 @@ export async function POST(req: Request) {
   const user = r.ctx.user;
 
   // Per-workspace bucket — looser cap than the per-IP one; both must pass.
-  const wsRl = checkRateLimit(`items:ws:${ws.id}`, { capacity: 600, refillPerSec: 10 });
+  const wsRl = await checkRateLimitAsync(`items:ws:${ws.id}`, { capacity: 600, refillPerSec: 10 });
   if (!wsRl.ok) return tooManyRequests(wsRl.retryAfterSeconds);
 
   const [bumped] = await db
@@ -172,8 +159,7 @@ export async function POST(req: Request) {
           .where(eq(replaySessions.id, replay.id));
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[crumb/replay] linking session_token failed:", err);
+      log.error("linking replay session_token failed", { scope: "crumb/replay", err });
     }
   }
 
@@ -182,7 +168,7 @@ export async function POST(req: Request) {
   // Gated on the deployment capability (cloud + key) AND this workspace's
   // plan entitlement.
   if (clusterConfigured() && hasFeature(ws, "ai")) {
-    void autoCluster(ws.id, created!.id, created!.title, created!.body, created!.type);
+    void autoCluster(ws, created!.id, created!.title, created!.body, created!.type);
   }
 
   return cors(NextResponse.json({
@@ -194,7 +180,7 @@ export async function POST(req: Request) {
 }
 
 async function autoCluster(
-  workspaceId: string,
+  ws: Workspace,
   itemId: string,
   title: string,
   body: string,
@@ -204,8 +190,17 @@ async function autoCluster(
     const candidates = await db
       .select({ id: initiatives.id, name: initiatives.name, description: initiatives.description })
       .from(initiatives)
-      .where(and(eq(initiatives.workspaceId, workspaceId), ne(initiatives.status, "parked")));
+      .where(and(eq(initiatives.workspaceId, ws.id), ne(initiatives.status, "parked")));
     if (candidates.length === 0) return;
+
+    // Monthly AI cost cap — atomically consume one unit; skip silently once
+    // the workspace is over budget (the item is already saved; clustering is
+    // best-effort).
+    const consumed = await consumeAi(ws);
+    if (!consumed.ok) {
+      log.warn("ai cap reached — skipping autoCluster", { scope: "crumb/ai", workspaceId: ws.id, cap: consumed.cap });
+      return;
+    }
 
     const guess = await suggestInitiative(
       { title, body, type },
@@ -221,7 +216,6 @@ async function autoCluster(
       model: CLUSTER_MODEL,
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/ai] autoCluster failed:", err);
+    log.error("autoCluster failed", { scope: "crumb/ai", err });
   }
 }

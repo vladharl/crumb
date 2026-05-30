@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db, items } from "@crumb/db";
 import { verifyWebhook } from "@/lib/integrations/jira";
-import { callerIpFromRequest, checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -26,7 +27,7 @@ type JiraWebhookEvent = {
 };
 
 export async function POST(req: Request) {
-  const rl = checkRateLimit(`jira-webhook:${callerIpFromRequest(req)}`);
+  const rl = await checkRateLimitAsync(`jira-webhook:${callerIpFromRequest(req)}`);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
 
   const raw = await req.text();
@@ -67,8 +68,7 @@ export async function POST(req: Request) {
         eq(items.externalTicketId, key),
       ));
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/jira] webhook DB update failed:", err);
+    log.error("jira webhook DB update failed", { scope: "crumb/jira", key, err });
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });
   }
 

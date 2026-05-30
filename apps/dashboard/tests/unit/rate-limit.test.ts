@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimit, checkRateLimitAsync, __resetRedisForTests } from "@/lib/rate-limit";
 
 // Tests run against a module-scoped in-memory Map keyed on test-unique
 // strings so each test owns its own bucket and they don't interact.
@@ -56,5 +56,24 @@ describe("lib/rate-limit checkRateLimit", () => {
     expect(checkRateLimit(a, { capacity: 2, refillPerSec: 0.01 }).ok).toBe(false);
     // `b` is untouched.
     expect(checkRateLimit(b, { capacity: 2, refillPerSec: 0.01 }).ok).toBe(true);
+  });
+});
+
+describe("lib/rate-limit checkRateLimitAsync", () => {
+  const orig = process.env.CRUMB_REDIS_URL;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.CRUMB_REDIS_URL;
+    else process.env.CRUMB_REDIS_URL = orig;
+    __resetRedisForTests();
+  });
+
+  it("falls back to the in-memory bucket when CRUMB_REDIS_URL is unset", async () => {
+    delete process.env.CRUMB_REDIS_URL;
+    __resetRedisForTests();
+    const k = `vitest:rl-async:${Date.now()}`;
+    const r1 = await checkRateLimitAsync(k, { capacity: 1, refillPerSec: 0.01 });
+    expect(r1.ok).toBe(true);
+    const r2 = await checkRateLimitAsync(k, { capacity: 1, refillPerSec: 0.01 });
+    expect(r2.ok).toBe(false);
   });
 });

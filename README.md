@@ -40,7 +40,7 @@ The dashboard requires login — there are two distinct first-run paths, pick on
 
 ### Self-host vs. Crumb Cloud
 
-Crumb ships from one repo to two deployment shapes — same code, env-gated:
+Crumb ships from one repo to two deployment shapes — a **community** build for self-host and a **cloud** build for the hosted tier:
 
 | Capability | Self-host (default) | Crumb Cloud |
 | --- | --- | --- |
@@ -53,9 +53,15 @@ Crumb ships from one repo to two deployment shapes — same code, env-gated:
 | AI initiative clustering | — (Cloud-only) | Team plan |
 | Session Record (rrweb capture + in-thread replay) | — (Cloud-only) | Growth plan |
 
-Self-host is free and AGPL. The hosted tier at **[usecrumb.xyz](https://usecrumb.xyz)** runs the same source with `CRUMB_TIER=cloud` plus the API keys we hold so you don't have to.
+Self-host is free and AGPL. The hosted tier at **[usecrumb.xyz](https://usecrumb.xyz)** runs the same source built as the `cloud` edition, plus the API keys we hold so you don't have to.
 
-**Two kinds of gating** (see `lib/tier.ts` + `lib/entitlements.ts`):
+**Build-time edition vs. runtime tier** — two distinct knobs:
+- **`CRUMB_EDITION`** (build-time, default `community`) decides *what compiles in*. The `community` build physically excludes the cloud-only code — the Stripe billing UI + webhook, the session-replay APIs, and the heavy `stripe` / `@anthropic-ai/sdk` SDKs — so the self-host image never ships them (those routes 404). The `cloud` build includes everything. Build with `pnpm --filter dashboard build:community` (default) or `build:cloud`.
+- **`CRUMB_TIER`** (runtime, default self-host) decides *behavior within the cloud edition* — per-workspace plan gating, managed creds, etc.
+
+The cloud-only route source lives in `apps/dashboard/ee/` (still AGPL — offered, not hidden) and is overlaid into the build by `apps/dashboard/scripts/apply-ee.mjs`: `build:cloud` copies it into `app/`, `build:community` strips it. `pnpm dev` builds the cloud edition so you get every feature locally; the SDK swap relies on webpack, so a Turbopack `next dev --turbo` would behave as cloud regardless.
+
+**Two kinds of runtime gating** (within the cloud edition — see `lib/tier.ts` + `lib/entitlements.ts`):
 - **Capability-gated** — integrations and managed email unlock on *credentials present*. A self-hoster who registers their own OAuth app / SMTP relay gets them; Cloud just pre-supplies the creds.
 - **Plan-gated (Cloud-only)** — AI clustering/ticket drafts and Session Record require `CRUMB_TIER=cloud` **and** a workspace plan that includes them. On Cloud, the workspace's Stripe subscription drives this: `plan_id` (`free` | `team` | `growth`) comes from the price's `lookup_key`; an active sub on **Team** unlocks AI + integrations, **Growth** adds Session Record. A BYO key does *not* unlock these on self-host — by design, they're the paid differentiators.
 
@@ -115,7 +121,7 @@ The dashboard exposes `POST /api/v1/inbound/reply` accepting a generic JSON shap
 
 ### Subscription billing (Cloud)
 
-Crumb Cloud monetizes via Stripe — same source code as self-host, an extra wiring layer for paying customers. Self-host doesn't show any billing UI (the `/settings/billing` page renders the AGPL "you're free" copy).
+Crumb Cloud monetizes via Stripe. The community (self-host) edition omits billing entirely: the `/settings/billing` page and the Stripe webhook aren't compiled in (they live in `apps/dashboard/ee/`), the Billing nav item is hidden, and the `stripe` SDK is excluded from the bundle. Build the `cloud` edition (`CRUMB_EDITION=cloud`) to get them.
 
 To wire Stripe on a Cloud deployment:
 
@@ -147,6 +153,23 @@ CRUMB_RATE_LIMIT_REFILL_PER_SEC=1     # tokens per second
 ```
 
 Exhausted buckets return `429 rate_limited` with a `Retry-After` header. The limiter is process-local — fine for single-VM self-host. Cloud multi-instance swaps in a Redis-backed implementation behind the same helper.
+
+### Connecting integrations (one-click on Cloud)
+
+Slack, Linear, Jira, and GitHub all connect through a **single central OAuth app per provider**, read
+from env — there's no per-workspace app to register. So on **Crumb Cloud** (where we set those env vars
+once) connecting is genuinely one-click: a workspace admin opens **Settings → Integrations**, clicks
+*Connect*, approves on the provider, and lands back connected. **Self-host is BYO** — each operator
+registers their own provider apps and sets the same env vars (per-provider stanzas below). Connecting
+is gated to workspace admins, and on Cloud it requires the Team plan.
+
+**Redirect URL — one knob:** every OAuth callback is `{origin}/api/integrations/<provider>/callback`.
+By default the origin is inferred from the request (`x-forwarded-host`). Behind a proxy/load balancer
+that's brittle, so set **`CRUMB_APP_URL`** to the dashboard's public origin (e.g.
+`https://app.yourdomain.com`) — it becomes the canonical origin for all provider callbacks (precedence:
+`CRUMB_APP_URL` → per-provider `*_REDIRECT_URL` → request host). Register that exact callback URL in
+each provider's app. If a connect attempt can't proceed (provider not configured, plan required, not an
+admin), the Connect button now shows the reason inline instead of silently doing nothing.
 
 ### Slack notifications
 
@@ -316,6 +339,9 @@ Override anything via env or a `.env` file at the repo root:
 | `DASHBOARD_PORT`       | `3000`         | Host port for the dashboard                                 |
 | `CRUMB_WORKSPACE_SLUG` | `northbeam`    | Workspace the dashboard renders (until auth lands)          |
 | `CRUMB_SKIP_MIGRATIONS`| _(unset)_      | Set to `1` to skip the migrate step on container startup    |
+| `CRUMB_EDITION`        | `community`    | **Build arg** (not runtime): `community` self-host build or `cloud`. See [Self-host vs. Crumb Cloud](#self-host-vs-crumb-cloud) |
+
+`CRUMB_EDITION` is consumed at `--build` time (passed through to the Dockerfile by `docker-compose.yml`), so changing it requires a rebuild: `CRUMB_EDITION=cloud docker compose up -d --build`. The default community build omits the Stripe-billing and session-replay routes and their SDKs.
 
 To seed sample data into a fresh self-hosted deploy:
 
@@ -328,6 +354,58 @@ DATABASE_URL=postgres://crumb:crumb@localhost:5432/crumb pnpm db:seed
 For a real deployment, point `DATABASE_URL` at your own managed Postgres and skip the `postgres` service.
 
 The hosted tier (when it ships) runs the same code with auth, billing, and AI clustering layered on top.
+
+### Health checks
+
+Two probes for load balancers / orchestrators:
+
+- `GET /api/health` — **liveness**: always `200 {ok:true}` while the process is up. Restart the container if this fails.
+- `GET /api/health/ready` — **readiness**: `200` only when Postgres is reachable, else `503`. Route traffic only to ready instances.
+
+The bundled `docker-compose.yml` already wires the dashboard container healthcheck to `/api/health/ready`.
+
+### Secrets from files
+
+Every sensitive env var also accepts a `*_FILE` companion pointing at a file whose contents are the value — the Docker/Kubernetes secrets convention. The entrypoint loads `FOO` from `FOO_FILE` at startup (for both the migrate step and the server) unless `FOO` is already set directly. Example with Docker secrets:
+
+```yaml
+services:
+  dashboard:
+    environment:
+      DATABASE_URL_FILE: /run/secrets/db_url
+      CRUMB_ENCRYPTION_KEY_FILE: /run/secrets/enc_key
+      STRIPE_SECRET_KEY_FILE: /run/secrets/stripe_key
+    secrets: [db_url, enc_key, stripe_key]
+secrets:
+  db_url:    { file: ./secrets/db_url }
+  enc_key:   { file: ./secrets/enc_key }
+  stripe_key:{ file: ./secrets/stripe_key }
+```
+
+For production, set `CRUMB_ENCRYPTION_KEY` (`openssl rand -hex 32`) so integration tokens are encrypted at rest — see `apps/dashboard/.env.local.example`, which documents every variable.
+
+### Backups & restore
+
+Crumb keeps everything in Postgres (with `CRUMB_STORAGE_PROVIDER=postgres`, that includes attachment + replay bytes), so a single `pg_dump` is a full backup.
+
+```bash
+# Back up (compressed custom format)
+docker compose exec -T postgres pg_dump -U crumb -Fc crumb > crumb-$(date +%F).dump
+
+# Restore into a fresh DB
+docker compose exec -T postgres pg_restore -U crumb -d crumb --clean --if-exists < crumb-2026-01-01.dump
+```
+
+Schedule the dump however you like (host cron, a sidecar) and ship the file off-box. Migrations are forward-only and run on startup; restoring a dump from an older release, then deploying the newer image, applies any pending migrations automatically.
+
+### Maintenance cron
+
+To prune orphaned uploads + replay sessions (and enforce replay retention), set `CRUMB_INTERNAL_SWEEP_SECRET` and hit the cleanup endpoint on a schedule:
+
+```bash
+curl -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" \
+  http://localhost:3000/api/v1/internal/replay-sweep
+```
 
 ## License
 

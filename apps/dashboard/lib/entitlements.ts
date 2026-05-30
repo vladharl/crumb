@@ -1,7 +1,11 @@
 import "server-only";
 import type { Workspace } from "@crumb/db";
 import { isCloud, isSelfHost } from "./tier";
-import { isActiveStatus } from "./stripe";
+// Use the @/ specifier (not "./stripe") so the community-edition webpack alias
+// in next.config swaps this for the SDK-free stub. A relative import here would
+// drag the real lib/stripe.ts (and the `stripe` package) into every bundle,
+// since entitlements is imported app-wide.
+import { isActiveStatus } from "@/lib/stripe";
 
 // Per-workspace feature entitlements. The tier gate (`isCloud()`) answers
 // "is this deployment the hosted product?"; this layer answers "is THIS

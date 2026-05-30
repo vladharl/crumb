@@ -3,35 +3,43 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Ic } from "@crumb/ui";
+import { useConfirm } from "@/components/confirm";
 import { startSlackInstall, disconnectSlack } from "./actions";
+import { isRedirectError, connectErrorMessage } from "./connect-shared";
 
 export function ConnectSlackButton({ disabled }: { disabled?: boolean }) {
   const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
   return (
-    <Btn
-      sm
-      variant="primary"
-      icon={<Ic.plug style={{ width: 12, height: 12 }} />}
-      disabled={disabled || pending}
-      onClick={() => startTransition(async () => {
-        // Server action will throw a NEXT_REDIRECT — that's expected.
-        // Errors propagating past that mean misconfig; surface generic
-        // failure (the user sees the integrations page render with no
-        // change, which is the same result as a real OAuth abort).
-        try {
-          await startSlackInstall();
-        } catch {
-          // no-op: redirect or known failure
-        }
-      })}
-    >
-      {pending ? "Opening Slack…" : "Connect Slack"}
-    </Btn>
+    <div className="col gap-1">
+      <Btn
+        sm
+        variant="primary"
+        icon={<Ic.plug style={{ width: 12, height: 12 }} />}
+        disabled={disabled || pending}
+        onClick={() => startTransition(async () => {
+          setError(null);
+          try {
+            // Success path redirects to Slack (NEXT_REDIRECT, re-thrown below);
+            // a returned result means a gating failure we can explain.
+            const r = await startSlackInstall();
+            if (r) setError(connectErrorMessage(r.error));
+          } catch (e) {
+            if (isRedirectError(e)) throw e;
+            setError("Couldn't start the connection. Please try again.");
+          }
+        })}
+      >
+        {pending ? "Opening Slack…" : "Connect Slack"}
+      </Btn>
+      {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
+    </div>
   );
 }
 
 export function DisconnectSlackButton({ teamName }: { teamName: string | null }) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   return (
@@ -39,8 +47,13 @@ export function DisconnectSlackButton({ teamName }: { teamName: string | null })
       <Btn
         sm
         disabled={pending}
-        onClick={() => {
-          if (!confirm(`Disconnect Crumb from ${teamName ?? "Slack"}? Vendor notifications will revert to email.`)) return;
+        onClick={async () => {
+          if (!(await confirm({
+            title: `Disconnect Crumb from ${teamName ?? "Slack"}?`,
+            body: "Vendor notifications will revert to email.",
+            confirmLabel: "Disconnect",
+            destructive: true,
+          }))) return;
           startTransition(async () => {
             setError(null);
             const r = await disconnectSlack();

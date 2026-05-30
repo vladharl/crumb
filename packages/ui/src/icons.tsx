@@ -8,6 +8,12 @@ export const Ic = {
       <path d="M2 9.5V13a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 14 13V9.5M2 9.5l2-6h8l2 6M2 9.5h3.5l1 1.5h3l1-1.5H14" />
     </svg>
   ),
+  chart: (p: IconProps) => (
+    <svg {...p} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 14h12" />
+      <path d="M4 14V8M8 14V3M12 14v-5" />
+    </svg>
+  ),
   chat: (p: IconProps) => (
     <svg {...p} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
       <path d="M14 11.5a1.5 1.5 0 0 1-1.5 1.5H6l-3 2.5V13H3.5A1.5 1.5 0 0 1 2 11.5v-7A1.5 1.5 0 0 1 3.5 3h9A1.5 1.5 0 0 1 14 4.5z" />

@@ -5,106 +5,43 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1779726989644,
-      "tag": "0000_handy_cammi",
+      "when": 1700000000000,
+      "tag": "0000_baseline",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "7",
-      "when": 1779731335132,
-      "tag": "0001_shiny_venom",
+      "when": 1781000000000,
+      "tag": "0001_webhook_endpoints",
       "breakpoints": true
     },
     {
       "idx": 2,
       "version": "7",
-      "when": 1779734844326,
-      "tag": "0002_workable_ezekiel",
+      "when": 1781000001000,
+      "tag": "0002_normal_zarda",
       "breakpoints": true
     },
     {
       "idx": 3,
       "version": "7",
-      "when": 1779761095902,
-      "tag": "0003_tiresome_whistler",
+      "when": 1781000002000,
+      "tag": "0003_spicy_richard_fisk",
       "breakpoints": true
     },
     {
       "idx": 4,
       "version": "7",
-      "when": 1779761982484,
-      "tag": "0004_slim_bucky",
+      "when": 1781000003000,
+      "tag": "0004_fantastic_gunslinger",
       "breakpoints": true
     },
     {
       "idx": 5,
       "version": "7",
-      "when": 1779880000000,
-      "tag": "0005_launcher_bg",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1780000000000,
-      "tag": "0006_notification_prefs",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1780100000000,
-      "tag": "0007_attachments",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1780200000000,
-      "tag": "0008_billing",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1780300000000,
-      "tag": "0009_initiatives",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1780400000000,
-      "tag": "0010_init_suggestions",
-      "breakpoints": true
-    },
-    {
-      "idx": 11,
-      "version": "7",
-      "when": 1780500000000,
-      "tag": "0011_slack",
-      "breakpoints": true
-    },
-    {
-      "idx": 12,
-      "version": "7",
-      "when": 1780600000000,
-      "tag": "0012_engineering_integrations",
-      "breakpoints": true
-    },
-    {
-      "idx": 13,
-      "version": "7",
-      "when": 1780700000000,
-      "tag": "0013_replay_sessions",
-      "breakpoints": true
-    },
-    {
-      "idx": 14,
-      "version": "7",
-      "when": 1780800000000,
-      "tag": "0014_storage_blobs",
+      "when": 1781000004000,
+      "tag": "0005_mysterious_jubilee",
       "breakpoints": true
     }
   ]

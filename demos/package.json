@@ -1,0 +1,29 @@
+{
+  "name": "@crumb/demos",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Demo content pipeline — Playwright captures the seeded app, Remotion polishes it into README GIFs, PNG screenshots, and a landing-page video. NOT a pnpm workspace member (kept out of app build/CI).",
+  "scripts": {
+    "seed": "pnpm -C .. db:seed",
+    "capture": "tsx capture/run.ts",
+    "gif": "bash scripts/to-gif.sh",
+    "video": "remotion render remotion/index.ts LandingHero out/landing.mp4 && remotion render remotion/index.ts LandingHero out/landing.webm",
+    "all": "pnpm run seed && pnpm run capture && pnpm run gif && pnpm run video",
+    "browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}

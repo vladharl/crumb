@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, replaySessions, replayChunks, workspaces } from "@crumb/db";
 import { newStorageKey, putBytes } from "@/lib/storage";
 import { hasFeature } from "@/lib/entitlements";
+import { checkReplayBytesCap, incrementUsage } from "@/lib/usage";
 
 // Hard caps. Keep storage cost bounded; the recorder enforces matching
 // caps client-side so well-behaved widgets stop before the server has to
@@ -106,6 +107,14 @@ export async function recordChunk(input: ChunkInput): Promise<ChunkResult> {
     return { ok: false, status: 413, error: "session_events_exceeded" };
   }
 
+  // Monthly per-workspace storage cap — bounds total replay cost on top of
+  // the per-session hard caps above. 429 (not 413) signals a quota, not a
+  // malformed/oversized single session.
+  const monthly = await checkReplayBytesCap(ws, chunkSize);
+  if (!monthly.allowed) {
+    return { ok: false, status: 429, error: "replay_monthly_quota_exceeded" };
+  }
+
   // Persist bytes. The local storage adapter's only error mode is disk
   // full; let it throw and the route returns 500 (provider retry safe).
   const storageKey = newStorageKey("events.json");
@@ -142,6 +151,10 @@ export async function recordChunk(input: ChunkInput): Promise<ChunkResult> {
       endedAt:    input.endedAt,
     })
     .where(eq(replaySessions.id, session.id));
+
+  // Meter the bytes for the monthly cap. After the write so we never charge
+  // for a chunk we failed to persist.
+  await incrementUsage(ws.id, "replay_bytes", chunkSize);
 
   return { ok: true, sessionId: session.id, chunkId, capped: false };
 }

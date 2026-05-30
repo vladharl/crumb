@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Btn, Card, CardHead, Ic, Pill } from "@crumb/ui";
+import { useConfirm } from "@/components/confirm";
 import { unlinkExternalTicket } from "./actions";
 import { ExternalTicketModal } from "./ExternalTicketModal";
 
@@ -46,6 +47,7 @@ const STALE_MS = 24 * 60 * 60 * 1000;
 
 export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailable, workspace, item }: ExternalTicketTileProps) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [modalOpen, setModalOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
@@ -68,8 +70,13 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
     const syncedAt = item.externalSyncedAt ? new Date(item.externalSyncedAt) : null;
     const stale = syncedAt ? (Date.now() - syncedAt.getTime() > STALE_MS) : false;
 
-    function onUnlink() {
-      if (!confirm(`Unlink this item from ${item.externalTicketId}? The ticket in ${providerLabel} stays; the link from this Crumb item is removed.`)) return;
+    async function onUnlink() {
+      if (!(await confirm({
+        title: `Unlink ${item.externalTicketId}?`,
+        body: `The ticket in ${providerLabel} stays; only the link from this Crumb item is removed.`,
+        confirmLabel: "Unlink",
+        destructive: true,
+      }))) return;
       startTransition(async () => {
         const r = await unlinkExternalTicket(itemShortId);
         if (r.ok) router.refresh();

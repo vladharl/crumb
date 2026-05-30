@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardHead, Field, Pill, Switch } from "@crumb/ui";
 import { savePreferences, type PrefsInput } from "./actions";
 
@@ -37,6 +38,7 @@ export function PreferencesCard({
   isCloud: boolean;
   slackInstalled: boolean;
 }) {
+  const router = useRouter();
   const [prefs, setPrefs] = useState<PrefsState>(initial);
   const [pending, startTransition] = useTransition();
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -80,17 +82,17 @@ export function PreferencesCard({
           <div className="seg" style={{ width: "100%" }}>
             {(["email", "slack", "none"] as const).map(v => {
               const isSlack = v === "slack";
-              // Slack is selectable only when the workspace has installed
-              // the integration. Otherwise we keep the option visible but
-              // disabled with a hover hint pointing to settings.
+              // Slack is selectable only when the workspace has installed the
+              // integration. When it isn't, the option stays visible but acts
+              // as a shortcut to Settings → Integrations instead of a dead
+              // click, so vendors can go connect it in one tap.
               const slackBlocked = isSlack && !slackInstalled;
-              const disabled = pending || slackBlocked;
               return (
                 <button
                   key={v}
                   aria-selected={prefs.delivery === v}
-                  onClick={() => !slackBlocked && update("delivery", v)}
-                  disabled={disabled}
+                  onClick={() => slackBlocked ? router.push("/settings/integrations") : update("delivery", v)}
+                  disabled={pending}
                   title={slackBlocked ? "Connect Slack in Settings → Integrations to enable" : undefined}
                 >
                   {v === "email" ? "Email" : v === "slack" ? "Slack" : "None"}

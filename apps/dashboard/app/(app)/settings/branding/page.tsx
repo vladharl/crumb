@@ -10,7 +10,8 @@ export default async function BrandingPage() {
       initialName={ws.name}
       initialAccent={ws.accent}
       initialLauncherBg={ws.launcherBg}
-      initialPosition={ws.position as "corner" | "top" | "inline"}
+      initialPosition={(["corner", "pill", "tab"].includes(ws.position) ? ws.position : "corner") as "corner" | "pill" | "tab"}
+      initialGlass={ws.launcherGlass}
       initialProductUrl={ws.productUrl}
     />
   );

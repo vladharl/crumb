@@ -1,15 +1,35 @@
 "use server";
 
-import { db, items, replies, accountUsers, statusEvents, attachments, workspaces, ticketSuggestions } from "@crumb/db";
+import { db, items, replies, replyMentions, accountUsers, workspaceUsers, statusEvents, attachments, workspaces, ticketSuggestions } from "@crumb/db";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { getActiveSession } from "@/lib/server";
+import { originFromHeaders } from "@/lib/origin";
 import { sendReplyNotification, sendStatusChangeNotification } from "@/lib/email";
+import { notifyMentioned, parseMentionIds } from "@/lib/mention-notify";
 import { buildReplyAddress } from "@/lib/reply-token";
 import * as Linear from "@/lib/integrations/linear";
 import * as Jira from "@/lib/integrations/jira";
 import * as Github from "@/lib/integrations/github";
 import { suggestTicket, ticketSuggestionConfigured, TICKET_MODEL } from "@/lib/ai/ticket";
+import { open } from "@/lib/crypto-at-rest";
+import { consumeAi } from "@/lib/usage";
+import { IntegrationAuthError, clearProviderInstall } from "@/lib/integrations/revoke";
+import { emitStatusChanged } from "@/lib/webhooks";
+import { log } from "@/lib/log";
+
+// On a provider auth failure (revoked/expired token), clear the install so
+// Settings shows "disconnected", and return a typed `<provider>_revoked`
+// error. Returns null for any other error so the caller's normal handling
+// runs. (Jira also self-clears in its refresh path; clearing again is a no-op.)
+async function handleRevoke(err: unknown, workspaceId: string): Promise<{ ok: false; error: string } | null> {
+  if (err instanceof IntegrationAuthError) {
+    await clearProviderInstall(workspaceId, err.provider);
+    return { ok: false, error: `${err.provider}_revoked` };
+  }
+  return null;
+}
 
 function inboundReplyAddressFor(itemShortId: string, signingSecret: string): string | null {
   const domain = process.env.CRUMB_INBOUND_DOMAIN?.trim();
@@ -43,6 +63,12 @@ export async function createReply(input: {
 
   const { workspace, user } = await getActiveSession();
 
+  // Viewers are read-only EXCEPT internal notes: a customer-facing reply
+  // requires admin/pm. (Internal notes + @mentions stay open to all roles.)
+  if (!input.internal && user.role !== "admin" && user.role !== "pm") {
+    return { ok: false as const, error: "forbidden" };
+  }
+
   // Fetch the item + submitter in one query so we have everything the
   // notification email needs without a second round-trip.
   const [row] = await db
@@ -50,7 +76,11 @@ export async function createReply(input: {
       id: items.id,
       title: items.title,
       status: items.status,
+      submitterId: accountUsers.id,
       submitterEmail: accountUsers.email,
+      submitterNotifyReplies: accountUsers.notifyReplies,
+      submitterUnsub: accountUsers.unsubscribedAll,
+      submitterUnsubToken: accountUsers.unsubToken,
     })
     .from(items)
     .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
@@ -81,13 +111,40 @@ export async function createReply(input: {
 
   await db.update(items).set({ updatedAt: new Date() }).where(eq(items.id, row.id));
 
+  // @-mentions live only on internal notes. Parse the body against teammates,
+  // record the matches, and notify them (excluding the author). Best-effort.
+  if (input.internal && created) {
+    const teammates = await db
+      .select({ id: workspaceUsers.id, name: workspaceUsers.name })
+      .from(workspaceUsers)
+      .where(eq(workspaceUsers.workspaceId, workspace.id));
+    const mentionedIds = parseMentionIds(body, teammates).filter(id => id !== user.id);
+    if (mentionedIds.length > 0) {
+      await db
+        .insert(replyMentions)
+        .values(mentionedIds.map(id => ({ replyId: created.id, workspaceUserId: id })))
+        .onConflictDoNothing();
+      void notifyMentioned({
+        workspaceId: workspace.id,
+        itemShortId: input.itemShortId,
+        itemTitle: row.title,
+        noteBody: body,
+        byName: user.name,
+        mentionedUserIds: mentionedIds,
+        dashboardOrigin: originFromHeaders(headers()),
+      });
+    }
+  }
+
   revalidatePath(`/thread/${input.itemShortId}`);
   revalidatePath("/inbox");
 
-  // Fire the customer notification asynchronously. Don't fail the action
-  // if email delivery hiccups — the reply is already in the DB.
-  if (!input.internal) {
+  // Fire the customer notification asynchronously. Don't fail the action if
+  // email delivery hiccups — the reply is already in the DB. Honor the
+  // submitter's notification prefs (skip if muted or replies are off).
+  if (!input.internal && !row.submitterUnsub && row.submitterNotifyReplies) {
     try {
+      const origin = originFromHeaders(headers());
       await sendReplyNotification({
         to: row.submitterEmail,
         workspaceName: workspace.name,
@@ -98,10 +155,10 @@ export async function createReply(input: {
         statusLabel: STATUS_LABELS[row.status as Status],
         productUrl: workspace.productUrl,
         inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
+        unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=replies` : null,
       });
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[crumb/reply] notification failed:", err);
+      log.error("reply notification failed", { scope: "crumb/reply", err });
     }
   }
 
@@ -125,12 +182,19 @@ export async function updateStatus(input: {
   }
 
   const { workspace, user } = await getActiveSession();
+  // Status changes are a manage action — viewers can't.
+  if (user.role !== "admin" && user.role !== "pm") return { ok: false as const, error: "forbidden" };
   const [row] = await db
     .select({
       id: items.id,
       title: items.title,
+      type: items.type,
       currentStatus: items.status,
+      submitterId: accountUsers.id,
       submitterEmail: accountUsers.email,
+      submitterNotifyStatus: accountUsers.notifyStatus,
+      submitterUnsub: accountUsers.unsubscribedAll,
+      submitterUnsubToken: accountUsers.unsubToken,
     })
     .from(items)
     .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
@@ -155,23 +219,39 @@ export async function updateStatus(input: {
   revalidatePath(`/thread/${input.itemShortId}`);
   revalidatePath("/inbox");
 
-  // Email the customer; never let a flaky provider undo a status write.
-  try {
-    await sendStatusChangeNotification({
-      to: row.submitterEmail,
-      workspaceName: workspace.name,
-      vendorName: user.name,
-      itemShortId: input.itemShortId,
-      itemTitle: row.title,
-      fromStatus: row.currentStatus as Status,
-      toStatus: input.status,
-      reason,
-      productUrl: workspace.productUrl,
-      inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
-    });
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/status] notification failed:", err);
+  // Fan out to registered webhook endpoints — fire-and-forget, never blocks
+  // or fails the status write.
+  void emitStatusChanged(workspace.id, {
+    type: "item.status_changed",
+    workspace: workspace.slug,
+    item: { short_id: input.itemShortId, title: row.title, type: row.type },
+    from_status: row.currentStatus,
+    to_status: input.status,
+    reason,
+    at: new Date().toISOString(),
+  });
+
+  // Email the customer; never let a flaky provider undo a status write. Honor
+  // the submitter's prefs (skip if muted or status updates are off).
+  if (!row.submitterUnsub && row.submitterNotifyStatus) {
+    try {
+      const origin = originFromHeaders(headers());
+      await sendStatusChangeNotification({
+        to: row.submitterEmail,
+        workspaceName: workspace.name,
+        vendorName: user.name,
+        itemShortId: input.itemShortId,
+        itemTitle: row.title,
+        fromStatus: row.currentStatus as Status,
+        toStatus: input.status,
+        reason,
+        productUrl: workspace.productUrl,
+        inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
+        unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=status` : null,
+      });
+    } catch (err) {
+      log.error("status notification failed", { scope: "crumb/status", err });
+    }
   }
 
   return { ok: true as const };
@@ -226,10 +306,11 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
 
     let issue;
     try {
-      issue = await Linear.createIssue(token, { teamId, title, description: body });
+      issue = await Linear.createIssue(open(token), { teamId, title, description: body });
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[crumb/linear] createIssue failed:", err);
+      const rv = await handleRevoke(err, workspace.id);
+      if (rv) return rv;
+      log.error("linear createIssue failed", { scope: "crumb/linear", err });
       return { ok: false, error: "provider_create_failed" };
     }
 
@@ -261,8 +342,9 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
     try {
       issue = await Jira.createIssue(workspace, { projectKey, title, description: body });
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[crumb/jira] createIssue failed:", err);
+      const rv = await handleRevoke(err, workspace.id);
+      if (rv) return rv;
+      log.error("jira createIssue failed", { scope: "crumb/jira", err });
       return { ok: false, error: "provider_create_failed" };
     }
 
@@ -292,8 +374,7 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
     try {
       issue = await Github.createIssue(workspace.githubAppInstallId, repo, { title, body });
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[crumb/github] createIssue failed:", err);
+      log.error("github createIssue failed", { scope: "crumb/github", err });
       return { ok: false, error: "provider_create_failed" };
     }
 
@@ -355,15 +436,16 @@ export async function listProviderTargets(provider: Provider): Promise<
     const token = workspace.linearAccessToken;
     if (!token) return { ok: false, error: "linear_not_connected" };
     try {
-      const teams = await Linear.listTeams(token);
+      const teams = await Linear.listTeams(open(token));
       return {
         ok: true,
         targets: teams.map(t => ({ id: t.id, label: `${t.name} (${t.key})` })),
         defaultTarget: workspace.linearTeamId ?? null,
       };
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[crumb/linear] listTeams failed:", err);
+      const rv = await handleRevoke(err, workspace.id);
+      if (rv) return rv;
+      log.error("linear listTeams failed", { scope: "crumb/linear", err });
       return { ok: false, error: "provider_list_failed" };
     }
   }
@@ -380,8 +462,9 @@ export async function listProviderTargets(provider: Provider): Promise<
         defaultTarget: workspace.jiraDefaultProjectKey ?? null,
       };
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[crumb/jira] listProjects failed:", err);
+      const rv = await handleRevoke(err, workspace.id);
+      if (rv) return rv;
+      log.error("jira listProjects failed", { scope: "crumb/jira", err });
       return { ok: false, error: "provider_list_failed" };
     }
   }
@@ -396,8 +479,7 @@ export async function listProviderTargets(provider: Provider): Promise<
         defaultTarget: workspace.githubDefaultRepo ?? null,
       };
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[crumb/github] listInstallationRepos failed:", err);
+      log.error("github listInstallationRepos failed", { scope: "crumb/github", err });
       return { ok: false, error: "provider_list_failed" };
     }
   }
@@ -420,6 +502,9 @@ export async function suggestExternalTicket(
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
   if (!ticketSuggestionConfigured()) return { ok: false, error: "not_configured" };
+
+  // Monthly AI cost cap (shared budget with clustering) — atomic consume.
+  if (!(await consumeAi(workspace)).ok) return { ok: false, error: "ai_cap_reached" };
 
   const [item] = await db
     .select({
@@ -446,10 +531,11 @@ export async function suggestExternalTicket(
     }
     providerTarget = workspace.linearTeamId;
     try {
-      recentTickets = await Linear.listRecentIssues(workspace.linearAccessToken, workspace.linearTeamId, 10);
+      recentTickets = await Linear.listRecentIssues(open(workspace.linearAccessToken), workspace.linearTeamId, 10);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[crumb/ai] listRecentIssues(Linear) failed (non-fatal):", err);
+      // Even on this best-effort path, a revoked token should clear the install.
+      if (err instanceof IntegrationAuthError) void clearProviderInstall(workspace.id, err.provider);
+      log.warn("listRecentIssues(Linear) failed (non-fatal)", { scope: "crumb/ai", err });
     }
   } else if (provider === "jira") {
     if (!workspace.jiraAccessToken || !workspace.jiraDefaultProjectKey) {
@@ -459,8 +545,7 @@ export async function suggestExternalTicket(
     try {
       recentTickets = await Jira.listRecentIssues(workspace, workspace.jiraDefaultProjectKey, 10);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[crumb/ai] listRecentIssues(Jira) failed (non-fatal):", err);
+      log.warn("listRecentIssues(Jira) failed (non-fatal)", { scope: "crumb/ai", err });
     }
   } else if (provider === "github") {
     if (!workspace.githubAppInstallId || !workspace.githubDefaultRepo) {
@@ -470,8 +555,7 @@ export async function suggestExternalTicket(
     try {
       recentTickets = await Github.listRecentIssues(workspace.githubAppInstallId, workspace.githubDefaultRepo, 10);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[crumb/ai] listRecentIssues(GitHub) failed (non-fatal):", err);
+      log.warn("listRecentIssues(GitHub) failed (non-fatal)", { scope: "crumb/ai", err });
     }
   }
 
@@ -484,8 +568,7 @@ export async function suggestExternalTicket(
     try {
       repoContext = await Github.getRepoContext(workspace.githubAppInstallId, workspace.githubDefaultRepo);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[crumb/ai] getRepoContext failed (non-fatal):", err);
+      log.warn("getRepoContext failed (non-fatal)", { scope: "crumb/ai", err });
     }
   }
 
@@ -531,7 +614,7 @@ export async function updateProviderDefault(provider: Provider, target: string):
     // Re-fetch the team name to keep the cached label fresh.
     let teamName: string | null = null;
     try {
-      const teams = await Linear.listTeams(workspace.linearAccessToken);
+      const teams = await Linear.listTeams(open(workspace.linearAccessToken));
       teamName = teams.find(t => t.id === target)?.name ?? null;
     } catch {
       // Non-fatal — we still write the id.

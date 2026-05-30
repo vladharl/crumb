@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { isCloud } from "@/lib/tier";
+import { log } from "@/lib/log";
 
 // Pinned model — Haiku is plenty for classification and ~10x cheaper than
 // Sonnet. Bump deliberately after testing.
@@ -116,8 +117,7 @@ Rules:
       reason: (parsed.reason ?? "").slice(0, 240),
     };
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/ai] cluster call failed:", err);
+    log.error("cluster call failed", { scope: "crumb/ai", err });
     return null;
   }
 }

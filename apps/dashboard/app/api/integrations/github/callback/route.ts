@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
-import { fetchInstallationMeta, verifyGithubState } from "@/lib/integrations/github";
+import { fetchInstallationMeta, listInstallationRepos, verifyGithubState } from "@/lib/integrations/github";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,9 +45,18 @@ export async function GET(req: Request) {
   try {
     meta = await fetchInstallationMeta(installationId);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/github] fetchInstallationMeta failed:", err);
+    log.error("github fetchInstallationMeta failed", { scope: "crumb/github", err });
     return redirectBack(req, "error_meta_failed");
+  }
+
+  // Convenience: if the install grants access to exactly one repo, pre-select
+  // it as the default so the admin can create issues immediately. Best-effort.
+  let defaultRepo: string | null = null;
+  try {
+    const repos = await listInstallationRepos(installationId);
+    if (repos.length === 1) defaultRepo = repos[0].fullName;
+  } catch (err) {
+    log.warn("github repo pre-select failed (non-fatal)", { scope: "crumb/github", err });
   }
 
   await db
@@ -54,6 +64,7 @@ export async function GET(req: Request) {
     .set({
       githubAppInstallId:      installationId,
       githubAppInstallAccount: meta.account.login,
+      githubDefaultRepo:       defaultRepo,
       githubInstalledAt:       new Date(),
     })
     .where(eq(workspaces.id, ws.id));

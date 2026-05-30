@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark, Ic } from "@crumb/ui";
+import { ConfirmProvider } from "@/components/confirm";
 
 type NavLink = {
   id: string;
@@ -18,12 +19,12 @@ const PRIMARY: NavLink[] = [
     match: p => p === "/inbox" || p.startsWith("/thread") },
   { id: "accounts", href: "/accounts",      label: "Accounts",      icon: Ic.building,
     match: p => p.startsWith("/accounts") },
-  { id: "initiatives", href: "/initiatives", label: "Initiatives",   icon: Ic.link,
+  { id: "initiatives", href: "/initiatives", label: "Initiatives",   icon: Ic.road,
     match: p => p.startsWith("/initiatives") },
+  { id: "insights", href: "/insights",     label: "Insights",      icon: Ic.chart,
+    match: p => p === "/insights" },
   { id: "notifs",   href: "/notifications", label: "Notifications", icon: Ic.bell,
     match: p => p === "/notifications" },
-  { id: "roadmap",  href: "/roadmap",       label: "Roadmap",       icon: Ic.road,
-    match: p => p === "/roadmap" },
 ];
 
 const SECONDARY: NavLink[] = [
@@ -53,6 +54,7 @@ export function AppShell({ user, children }: { user: ShellUser; children: ReactN
   const label = active?.label ?? "";
 
   return (
+    <ConfirmProvider>
     <div className="app">
       <div className="nav-mobile-bar">
         <button className="menu-btn" onClick={() => setOpen(true)} aria-label="Open menu">
@@ -129,5 +131,6 @@ export function AppShell({ user, children }: { user: ShellUser; children: ReactN
         {children}
       </main>
     </div>
+    </ConfirmProvider>
   );
 }

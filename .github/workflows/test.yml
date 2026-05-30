@@ -28,6 +28,27 @@ jobs:
       - name: vitest
         run: pnpm --filter dashboard test
 
+  # Compile BOTH editions so a broken cloud-lib stub, a missing ee/ overlay
+  # file, or a webpack-alias regression fails the PR rather than only the
+  # edition someone happened to build locally.
+  build-editions:
+    name: build (community + cloud)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 11.3.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: build community (strips ee/ overlay, stubs cloud SDKs)
+        run: pnpm --filter dashboard build:community
+      - name: build cloud (applies ee/ overlay, real cloud SDKs)
+        run: pnpm --filter dashboard build:cloud
+
   # E2E gated behind a `run-e2e` PR label until the suite stabilizes.
   # Spins up a fresh Postgres + applies migrations + seeds + boots the
   # dashboard, then runs Playwright. Slow (~3-5 min); off the critical
@@ -70,7 +91,7 @@ jobs:
         run: pnpm --filter dashboard exec playwright install --with-deps chromium
       - name: build + start dashboard
         run: |
-          pnpm --filter dashboard build
+          pnpm --filter dashboard build:cloud
           pnpm --filter dashboard start &
           npx wait-on http://localhost:3000 -t 60000
       - name: run e2e

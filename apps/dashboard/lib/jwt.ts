@@ -13,6 +13,9 @@ export type IdentityClaims = {
   name?: string;
   /** Customer-side account name (e.g. "Acme Co"). */
   account_name: string;
+  /** Optional host-designated account role. When present, the host product is
+   *  the source of truth for admin status (re-applied on every widget load). */
+  role?: "admin" | "member";
   /** Expiry (seconds since epoch). Required. */
   exp: number;
   /** Issued-at (seconds since epoch). Required to bound clock skew. */
@@ -44,9 +47,20 @@ export function sign(claims: IdentityClaims, secret: string): string {
 
 export type VerifyResult =
   | { ok: true; claims: IdentityClaims }
-  | { ok: false; reason: "shape" | "signature" | "expired" | "json" };
+  | { ok: false; reason: "shape" | "signature" | "expired" | "json" | "iat" | "ttl" };
 
-export function verify(token: string, secret: string, opts: { clockSkewSec?: number } = {}): VerifyResult {
+// A leaked identity token is only as dangerous as it is long-lived. We
+// recommend ~1h tokens in the docs; this caps the accepted lifetime so a
+// vendor who accidentally mints a multi-year token (or an attacker who
+// forges one with a valid secret) still can't ride it forever. Only enforced
+// when `iat` is present (the documented minting example always sets it).
+const DEFAULT_MAX_TTL_SEC = 7 * 24 * 60 * 60; // 7 days
+
+export function verify(
+  token: string,
+  secret: string,
+  opts: { clockSkewSec?: number; maxTtlSec?: number } = {},
+): VerifyResult {
   const parts = token.split(".");
   if (parts.length !== 3) return { ok: false, reason: "shape" };
   const [h, p, s] = parts;
@@ -69,6 +83,17 @@ export function verify(token: string, secret: string, opts: { clockSkewSec?: num
   const now = Math.floor(Date.now() / 1000);
   const skew = opts.clockSkewSec ?? 30;
   if (claims.exp + skew < now) return { ok: false, reason: "expired" };
+
+  // Bound the lifetime so a leaked/forged token can't be long-lived.
+  const maxTtl = opts.maxTtlSec ?? DEFAULT_MAX_TTL_SEC;
+  if (typeof claims.iat === "number") {
+    if (claims.iat - skew > now) return { ok: false, reason: "iat" }; // future-dated
+    if (claims.exp - claims.iat > maxTtl) return { ok: false, reason: "ttl" };
+  } else {
+    // No iat to anchor against — bound exp relative to now instead, so a
+    // token can't claim a far-future expiry to dodge the cap.
+    if (claims.exp - now > maxTtl + skew) return { ok: false, reason: "ttl" };
+  }
 
   // Required shape:
   if (!claims.iss || !claims.sub || !claims.account_name) return { ok: false, reason: "shape" };

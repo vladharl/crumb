@@ -1,10 +1,17 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
-import { db, initiatives, workspaces, items, workspaceUsers, initiativeSuggestions } from "@crumb/db";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { db, initiatives, workspaces, items, accounts, workspaceUsers, initiativeSuggestions } from "@crumb/db";
+import { headers } from "next/headers";
 import { getActiveSession } from "@/lib/server";
+import { originFromHeaders } from "@/lib/origin";
 import { suggestInitiative, clusterConfigured, CLUSTER_MODEL } from "@/lib/ai/cluster";
+import { aiCap, consumeAi } from "@/lib/usage";
+import { notifyRoadmapFollowers } from "@/lib/roadmap-notify";
+
+const ROADMAP_COLUMNS = new Set(["now", "next", "later"]);
+const ROADMAP_COLUMN_LABEL: Record<string, string> = { now: "Now", next: "Next", later: "Later" };
 
 const ALLOWED_STATUSES = ["open", "in_progress", "shipped", "parked"] as const;
 type InitiativeStatus = (typeof ALLOWED_STATUSES)[number];
@@ -189,6 +196,96 @@ export async function bulkSetInitiative(
   return { ok: true, affected: result.length };
 }
 
+// ─── Board: roadmap column placement + ordering ─────────────
+// The Initiatives board (Now/Next/Later + Unscheduled) is the primary view.
+// A drag persists the target column AND the new order for every card in that
+// column via a single reorder call. Followers of a public initiative are
+// notified when it lands in a new column.
+export async function reorderInitiatives(
+  column: string | null,
+  orderedIds: string[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!Array.isArray(orderedIds) || !orderedIds.every(i => typeof i === "string")) {
+    return { ok: false, error: "bad_input" };
+  }
+  if (column !== null && !ROADMAP_COLUMNS.has(column)) return { ok: false, error: "bad_column" };
+
+  const { workspace, user } = await getActiveSession();
+  if (!canManage(user.role)) return { ok: false, error: "forbidden" };
+  if (orderedIds.length === 0) return { ok: true };
+
+  // Prior state, to detect public items that change column (for notify).
+  const prev = await db
+    .select({ id: initiatives.id, name: initiatives.name, isPublic: initiatives.isPublic, roadmapColumn: initiatives.roadmapColumn })
+    .from(initiatives)
+    .where(and(eq(initiatives.workspaceId, workspace.id), inArray(initiatives.id, orderedIds)));
+  const prevById = new Map(prev.map(p => [p.id, p]));
+
+  for (let i = 0; i < orderedIds.length; i++) {
+    await db
+      .update(initiatives)
+      .set({ roadmapColumn: column, roadmapOrder: i, updatedAt: new Date() })
+      .where(and(eq(initiatives.workspaceId, workspace.id), eq(initiatives.id, orderedIds[i]!)));
+  }
+
+  revalidatePath("/initiatives");
+
+  if (column) {
+    const origin = originFromHeaders(headers());
+    for (const id of orderedIds) {
+      const p = prevById.get(id);
+      if (p && p.isPublic && p.roadmapColumn !== column) {
+        void notifyRoadmapFollowers(workspace, id, p.name, `moved to ${ROADMAP_COLUMN_LABEL[column]}`, origin);
+      }
+    }
+  }
+  return { ok: true };
+}
+
+export async function setInitiativePublic(
+  initiativeId: string,
+  isPublic: boolean,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (!canManage(user.role)) return { ok: false, error: "forbidden" };
+  const r = await db
+    .update(initiatives)
+    .set({ isPublic })
+    .where(and(eq(initiatives.workspaceId, workspace.id), eq(initiatives.id, initiativeId)))
+    .returning({ id: initiatives.id });
+  if (r.length === 0) return { ok: false, error: "not_found" };
+  revalidatePath("/initiatives");
+  return { ok: true };
+}
+
+// Candidate items for the "Add items" picker on an initiative page: items in
+// this workspace not yet attached to any initiative. Capped; the client filters
+// the returned set by title / short-id so typing doesn't round-trip per key.
+export async function listUnassignedItems(): Promise<
+  | { ok: true; items: Array<{ id: string; shortId: string; title: string; type: string; status: string; accountName: string }> }
+  | { ok: false; error: string }
+> {
+  const { workspace, user } = await getActiveSession();
+  if (!canManage(user.role)) return { ok: false, error: "forbidden" };
+
+  const rows = await db
+    .select({
+      id: items.id,
+      shortId: items.shortId,
+      title: items.title,
+      type: items.type,
+      status: items.status,
+      accountName: accounts.name,
+    })
+    .from(items)
+    .innerJoin(accounts, eq(accounts.id, items.accountId))
+    .where(and(eq(items.workspaceId, workspace.id), isNull(items.initiativeId)))
+    .orderBy(desc(items.updatedAt))
+    .limit(200);
+
+  return { ok: true, items: rows };
+}
+
 export async function setItemInitiative(
   itemShortId: string,
   initiativeId: string | null,
@@ -304,6 +401,10 @@ export async function clusterItems(itemIds: string[]): Promise<{ ok: true; sugge
   if (!canManage(user.role)) return { ok: false, error: "forbidden" };
   if (!clusterConfigured()) return { ok: false, error: "not_configured" };
 
+  // Plan-entitlement / cap gate. aiCap is 0 for plans without AI; per-item
+  // budget is enforced atomically inside the loop via consumeAi.
+  if (aiCap(workspace) <= 0) return { ok: false, error: "ai_cap_reached" };
+
   // Pull the candidates this workspace can be classified into. Parked
   // initiatives are excluded — clustering shouldn't suggest archived buckets.
   const initiativeRows = await db
@@ -330,7 +431,8 @@ export async function clusterItems(itemIds: string[]): Promise<{ ok: true; sugge
 
   let suggested = 0;
   let skipped = 0;
-  for (const it of eligible) {
+  for (let idx = 0; idx < eligible.length; idx++) {
+    const it = eligible[idx]!;
     // Skip if this item already has a pending suggestion — don't burn
     // tokens to overwrite an in-flight guess.
     const [existing] = await db
@@ -342,6 +444,10 @@ export async function clusterItems(itemIds: string[]): Promise<{ ok: true; sugge
       ))
       .limit(1);
     if (existing) { skipped++; continue; }
+
+    // Atomically consume one unit of monthly AI budget. Once exhausted, stop
+    // and count the remaining items as skipped.
+    if (!(await consumeAi(workspace)).ok) { skipped += eligible.length - idx; break; }
 
     const guess = await suggestInitiative(
       { title: it.title, body: it.body, type: it.type },

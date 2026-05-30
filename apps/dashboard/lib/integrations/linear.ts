@@ -1,6 +1,7 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { signState, verifyState } from "./state";
+import { IntegrationAuthError } from "./revoke";
 
 // Linear OAuth 2.0. API is GraphQL-only; the auth flow is conventional.
 // Docs: https://linear.app/developers/oauth-2-0-authentication
@@ -106,9 +107,16 @@ async function gql<T>(token: string, query: string, variables?: Record<string, u
     },
     body: JSON.stringify({ query, variables }),
   });
+  // A revoked/invalid OAuth token returns 401 (or an authentication GraphQL
+  // error). Signal it distinctly so callers can clear the install.
+  if (resp.status === 401) throw new IntegrationAuthError("linear", "401");
   const data = await resp.json();
   if (data.errors) {
-    throw new Error(`linear_gql_error: ${JSON.stringify(data.errors).slice(0, 300)}`);
+    const msg = JSON.stringify(data.errors).slice(0, 300);
+    if (/authentication|unauthenticated|unauthorized|invalid.*token/i.test(msg)) {
+      throw new IntegrationAuthError("linear", "gql_auth");
+    }
+    throw new Error(`linear_gql_error: ${msg}`);
   }
   return data.data as T;
 }

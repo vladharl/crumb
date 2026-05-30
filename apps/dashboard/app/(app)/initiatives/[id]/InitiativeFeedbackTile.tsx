@@ -3,7 +3,8 @@ import { Card, CardHead, StatusPill, TypeChip } from "@crumb/ui";
 import type { Status, TypeKind } from "@crumb/ui";
 import { db, accounts, accountUsers, items } from "@crumb/db";
 import { desc, eq } from "drizzle-orm";
-import { ageFrom } from "@/lib/server";
+import { ageFrom, getActiveSession } from "@/lib/server";
+import { AddItemsButton } from "./AddItemsButton";
 
 const GRID = "64px 86px 1fr 140px 110px 90px 56px";
 
@@ -27,17 +28,18 @@ async function loadFeedback(initiativeId: string) {
 }
 
 export async function InitiativeFeedbackTile({ id }: { id: string }) {
-  const feedback = await loadFeedback(id);
+  const [{ user }, feedback] = await Promise.all([getActiveSession(), loadFeedback(id)]);
   const total = feedback.length;
+  const canManage = user.role === "admin" || user.role === "pm";
 
   return (
     <Card style={{ padding: 0 }}>
-      <CardHead title={`Feedback · ${total}`} />
+      <CardHead title={`Feedback · ${total}`} after={canManage ? <AddItemsButton initiativeId={id} /> : null} />
       <div className="list">
         {feedback.length === 0 && (
           <div className="card-body">
             <p className="text-sm muted" style={{ margin: 0 }}>
-              No items grouped here yet. Set this initiative on items from the inbox or thread sidebar.
+              No items grouped here yet. Use <strong style={{ fontWeight: 600 }}>Add items</strong> above, or set this initiative from the inbox or a thread sidebar.
             </p>
           </div>
         )}

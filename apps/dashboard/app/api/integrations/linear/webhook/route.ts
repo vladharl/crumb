@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db, items } from "@crumb/db";
 import { verifyWebhook } from "@/lib/integrations/linear";
-import { callerIpFromRequest, checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -40,7 +41,7 @@ type LinearWebhookEvent = {
 };
 
 export async function POST(req: Request) {
-  const rl = checkRateLimit(`linear-webhook:${callerIpFromRequest(req)}`);
+  const rl = await checkRateLimitAsync(`linear-webhook:${callerIpFromRequest(req)}`);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
 
   // Stripe-style: read raw body for HMAC, then JSON-parse separately.
@@ -81,8 +82,7 @@ export async function POST(req: Request) {
         eq(items.externalTicketId, identifier),
       ));
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/linear] webhook DB update failed:", err);
+    log.error("linear webhook DB update failed", { scope: "crumb/linear", identifier, err });
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });
   }
 

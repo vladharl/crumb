@@ -11,7 +11,7 @@
   },
   "scripts": {
     "push": "drizzle-kit push",
-    "generate": "drizzle-kit generate",
+    "generate": "drizzle-kit generate && node scripts/fix-migration-when.mjs",
     "migrate": "tsx src/migrate.ts",
     "build:migrate": "esbuild src/migrate.runtime.js --bundle --platform=node --target=node20 --format=esm --packages=bundle --outfile=dist/migrate.mjs",
     "studio": "drizzle-kit studio",

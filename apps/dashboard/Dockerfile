@@ -19,12 +19,21 @@ RUN pnpm install --frozen-lockfile
 # ─── builder: widget bundle, Next standalone, bundled migrate runner ─
 FROM deps AS builder
 ENV NEXT_TELEMETRY_DISABLED=1
+# Build-time edition. `community` (default, self-host) strips the cloud-only
+# routes (scripts/apply-ee.mjs) and aliases the cloud SDKs to stubs, so the
+# Next standalone trace ships WITHOUT stripe / @anthropic-ai/sdk or the
+# Stripe-billing & session-replay routes. `cloud` keeps everything. A full
+# install above is fine: the standalone trace, not node_modules, decides what
+# the runner image ships, and keeping the SDK types here lets the build's
+# typecheck of ee/** succeed in both editions.
+ARG CRUMB_EDITION=community
+ENV CRUMB_EDITION=$CRUMB_EDITION
 COPY tsconfig.base.json ./
 COPY packages packages
 COPY apps apps
 RUN pnpm --filter @crumb/widget build \
  && pnpm --filter @crumb/db build:migrate \
- && pnpm --filter dashboard build
+ && if [ "$CRUMB_EDITION" = "cloud" ]; then pnpm --filter dashboard build:cloud; else pnpm --filter dashboard build:community; fi
 
 # ─── runner: minimal image, non-root, runs migrations then server ─
 FROM node:22-alpine AS runner

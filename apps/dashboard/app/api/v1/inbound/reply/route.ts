@@ -3,7 +3,9 @@ import { and, eq } from "drizzle-orm";
 import { db, items, accountUsers, replies, workspaces } from "@crumb/db";
 import { parseReplyAddress, verifyReplyToken } from "@/lib/reply-token";
 import { notifyVendorsOfCustomerReply, dashboardOriginFromHeaders } from "@/lib/customer-reply-notify";
-import { callerIpFromRequest, checkRateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
+import { LIMITS } from "@/lib/validation";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -81,7 +83,7 @@ export async function POST(req: Request) {
   // Mail providers retry on failures; a generous limit per source IP keeps
   // legitimate retries flowing while still blocking obvious abuse from
   // any one origin.
-  const rl = checkRateLimit(`inbound:${callerIpFromRequest(req)}`, { capacity: 120, refillPerSec: 2 });
+  const rl = await checkRateLimitAsync(`inbound:${callerIpFromRequest(req)}`, { capacity: 120, refillPerSec: 2 });
   if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
 
   if (!authorized(req)) {
@@ -103,8 +105,11 @@ export async function POST(req: Request) {
 
   const bodyRaw = payload.text?.trim();
   if (!bodyRaw) return NextResponse.json({ error: "empty_body" }, { status: 400 });
-  const body = stripQuotedTail(bodyRaw);
-  if (!body) return NextResponse.json({ error: "empty_after_quote_strip" }, { status: 400 });
+  const stripped = stripQuotedTail(bodyRaw);
+  if (!stripped) return NextResponse.json({ error: "empty_after_quote_strip" }, { status: 400 });
+  // Cap to the same length as widget replies. Truncate (not reject) — a 4xx
+  // would just make the mail provider retry the same oversized payload.
+  const body = stripped.length > LIMITS.reply ? stripped.slice(0, LIMITS.reply) : stripped;
 
   // Look up the item by shortId, joining its workspace for the signing secret.
   const [row] = await db
@@ -141,8 +146,7 @@ export async function POST(req: Request) {
 
   if (!author) {
     // Don't 5xx — provider would retry. Log + accept-but-drop semantics.
-    // eslint-disable-next-line no-console
-    console.warn(`[crumb/inbound] dropping reply from unknown sender ${senderEmail} for ${parsed.shortId}`);
+    log.warn("dropping inbound reply from unknown sender", { scope: "crumb/inbound", senderEmail, shortId: parsed.shortId });
     return NextResponse.json({ ok: true, accepted: false, reason: "unknown_sender" });
   }
 
@@ -164,8 +168,7 @@ export async function POST(req: Request) {
       dashboardOrigin: dashboardOriginFromHeaders(req),
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/inbound-reply] notify failed:", err);
+    log.error("inbound-reply notify failed", { scope: "crumb/inbound-reply", err });
   }
 
   return NextResponse.json({ ok: true, accepted: true, shortId: parsed.shortId });

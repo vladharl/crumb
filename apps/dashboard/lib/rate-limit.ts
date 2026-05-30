@@ -1,13 +1,20 @@
 import "server-only";
 
-// In-memory sliding-window-ish rate limiter, keyed on caller fingerprint
-// (e.g. IP + endpoint). Process-local — fine for single-VM self-host;
-// Cloud multi-instance gets swapped to a Redis-backed implementation in
-// a follow-up turn (same exported signature).
+// Token-bucket rate limiter, keyed on caller fingerprint (e.g. IP +
+// endpoint). Each key has a fixed capacity, refilled at a per-second rate.
 //
-// The algorithm is a token bucket: each key has a fixed capacity, refilled
-// at a per-second rate. Calls that find a non-empty bucket are allowed and
-// decrement the count; empty buckets respond with the time-until-next-token.
+// Two backends behind one async entry point (`checkRateLimitAsync`):
+//   • In-memory (default): process-local Map. Correct for single-VM
+//     self-host. Exposed synchronously as `checkRateLimit` (also the unit-
+//     tested surface and the fallback when Redis is down).
+//   • Redis (when CRUMB_REDIS_URL is set): an atomic Lua token bucket shared
+//     across instances — required for multi-instance Cloud, where each box
+//     keeping its own Map would multiply the effective limit by the box
+//     count. ioredis is an optional dependency, loaded only when configured.
+//
+// Fail-open: if Redis errors or is unreachable, we fall back to the in-memory
+// bucket rather than 500 the request — a limiter outage must not take down
+// the API. The local bucket still bounds a single instance in the meantime.
 
 type Bucket = { tokens: number; lastRefill: number };
 
@@ -46,6 +53,102 @@ export function checkRateLimit(
   const retryAfterSeconds = Math.max(1, Math.ceil((1 - refilled) / refill));
   // Keep lastRefill stable so the next call can still credit elapsed time.
   return { ok: false, retryAfterSeconds };
+}
+
+// ─── Redis backend (multi-instance Cloud) ───────────────────────────────
+
+// Atomic token bucket. Stores {tokens, ts} in a hash; computes refill from
+// elapsed time; decrements on allow. Mirrors the in-memory semantics. Returns
+// [allowed(0|1), remainingTokens, retryAfterSeconds]. The key self-expires
+// once it would fully refill, so idle keys don't accumulate.
+const BUCKET_LUA = `
+local capacity = tonumber(ARGV[1])
+local refill = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+local data = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(data[1])
+local ts = tonumber(data[2])
+if tokens == nil then tokens = capacity; ts = now end
+local elapsed = (now - ts) / 1000.0
+tokens = math.min(capacity, tokens + elapsed * refill)
+local allowed = 0
+local retry = 0
+if tokens >= 1 then
+  tokens = tokens - 1
+  allowed = 1
+else
+  retry = math.ceil((1 - tokens) / refill)
+end
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('EXPIRE', KEYS[1], math.ceil(capacity / refill) + 10)
+return {allowed, math.floor(tokens), retry}
+`;
+
+type RedisLike = {
+  eval: (script: string, numKeys: number, ...args: Array<string | number>) => Promise<unknown>;
+};
+
+let redisClient: Promise<RedisLike | null> | null | undefined;
+
+function getRedis(): Promise<RedisLike | null> | null {
+  if (redisClient !== undefined) return redisClient;
+  const url = process.env.CRUMB_REDIS_URL?.trim();
+  if (!url) { redisClient = null; return null; }
+  redisClient = (async () => {
+    try {
+      // String-typed specifier + webpackIgnore: ioredis is optional and only
+      // installed on Cloud, so neither tsc nor webpack resolves it here.
+      const specifier: string = "ioredis";
+      const mod = (await import(/* webpackIgnore: true */ specifier)) as { default: new (u: string, o?: unknown) => RedisLike };
+      const Redis = mod.default;
+      return new Redis(url, {
+        // A limiter must never hang a request waiting on Redis.
+        commandTimeout: 1000,
+        maxRetriesPerRequest: 1,
+        enableOfflineQueue: false,
+        lazyConnect: false,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(JSON.stringify({
+        time: new Date().toISOString(), level: "error", scope: "crumb/rate-limit",
+        msg: "CRUMB_REDIS_URL set but ioredis unavailable — falling back to in-memory limiter",
+        err: err instanceof Error ? err.message : String(err),
+      }));
+      return null;
+    }
+  })();
+  return redisClient;
+}
+
+// Test-only: reset the memoized client so env changes take effect.
+export function __resetRedisForTests(): void {
+  redisClient = undefined;
+}
+
+// Async entry point. Uses Redis when configured + reachable; otherwise the
+// in-memory bucket. This is what request handlers should call.
+export async function checkRateLimitAsync(
+  key: string,
+  opts: { capacity?: number; refillPerSec?: number } = {},
+): Promise<RateLimitResult> {
+  const redis = getRedis();
+  if (!redis) return checkRateLimit(key, opts);
+
+  const capacity = opts.capacity ?? DEFAULT_CAPACITY;
+  const refill = opts.refillPerSec ?? DEFAULT_REFILL_PER_SEC;
+  try {
+    const client = await redis;
+    if (!client) return checkRateLimit(key, opts);
+    const res = (await client.eval(BUCKET_LUA, 1, `rl:${key}`, capacity, refill, Date.now())) as [number, number, number];
+    const [allowed, remaining, retry] = res;
+    if (allowed === 1) return { ok: true, remaining };
+    return { ok: false, retryAfterSeconds: Math.max(1, retry) };
+  } catch {
+    // Redis blip — fall back to the local bucket so the request still gets
+    // a bounded, deterministic answer.
+    return checkRateLimit(key, opts);
+  }
 }
 
 // Best-effort caller fingerprint from headers a proxy is likely to set.

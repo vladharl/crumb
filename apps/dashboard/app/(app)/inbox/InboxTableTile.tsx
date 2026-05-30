@@ -1,5 +1,5 @@
 import {
-  db, items, accounts, accountUsers, workspaceUsers, replies as repliesTbl, initiatives, initiativeSuggestions,
+  db, items, accounts, accountUsers, workspaceUsers, initiatives, initiativeSuggestions,
 } from "@crumb/db";
 import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -9,9 +9,13 @@ import { hasFeature } from "@/lib/entitlements";
 import { InboxTable, type InboxRow, type Assignee, type InitiativeOption } from "./InboxTable";
 
 async function loadItems(workspaceId: string): Promise<InboxRow[]> {
+  // Fully-qualified raw refs, NOT ${items.id}/${repliesTbl.*}: inside a raw
+  // subquery template drizzle renders interpolated columns unqualified, so
+  // ${items.id} -> "id" resolves to replies.id (the inner table's own id)
+  // instead of the outer item — silently making every reply count 0.
   const replyCount = sql<number>`(
-    SELECT COUNT(*)::int FROM ${repliesTbl}
-    WHERE ${repliesTbl.itemId} = ${items.id} AND ${repliesTbl.internal} = false
+    SELECT COUNT(*)::int FROM replies
+    WHERE replies.item_id = items.id AND replies.internal = false
   )`.as("reply_count");
 
   // Suggested-initiative join: aliasing initiatives a second time so the
@@ -110,6 +114,9 @@ export async function InboxTableTile() {
     loadInitiativeOptions(workspace.id),
   ]);
   const canManageInitiatives = me.role === "admin" || me.role === "pm";
+  // Viewers are read-only — gates the bulk status/assign bar. (Same expr as
+  // canManageInitiatives today, but kept distinct for clarity of intent.)
+  const canWrite = me.role === "admin" || me.role === "pm";
   // AI clustering is gated on the workspace's plan entitlement (cloud-only
   // by construction) — controls whether the "Cluster selected" UI shows.
   const aiEntitled = hasFeature(workspace, "ai");
@@ -119,6 +126,7 @@ export async function InboxTableTile() {
       rows={rows}
       assignees={assignees}
       meId={me.id}
+      canWrite={canWrite}
       aiEntitled={aiEntitled}
       initiatives={initiativeOptions}
       canManageInitiatives={canManageInitiatives}

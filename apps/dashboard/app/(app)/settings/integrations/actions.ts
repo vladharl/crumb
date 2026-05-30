@@ -1,12 +1,12 @@
 "use server";
 
 import { eq } from "drizzle-orm";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db, workspaces, workspaceUsers } from "@crumb/db";
 import { getActiveSession } from "@/lib/server";
 import { integrationsAllowed } from "@/lib/entitlements";
+import { callbackUrlFromHeaders } from "@/lib/integrations/callback-url";
 import { buildAuthUrl as buildSlackAuthUrl, SLACK_REDIRECT_URL, slackConfigured } from "@/lib/slack/install";
 import {
   buildAuthUrl as buildLinearAuthUrl,
@@ -23,35 +23,26 @@ import {
   githubConfigured,
 } from "@/lib/integrations/github";
 
-// Resolves the redirect URL a provider will call back to. Honors an
-// explicit override env (useful when running behind a tunnel), otherwise
-// builds from x-forwarded-host so Cloud picks up the hosted dashboard
-// origin without per-deploy config.
-function resolveCallbackUrl(provider: "slack" | "linear" | "jira" | "github", override: string | null): string {
-  if (override) return override;
-  const h = headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  if (!host) throw new Error("cannot_resolve_host");
-  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  return `${proto}://${host}/api/integrations/${provider}/callback`;
+// The connect actions RETURN an error object for the gating cases (admin,
+// plan, creds) instead of throwing: a thrown Error's message is redacted to a
+// generic string in production, so the button couldn't tell the user *why* it
+// failed. On success they `redirect()` to the provider (which never returns).
+type StartResult = { ok: false; error: string };
+
+export async function startSlackInstall(): Promise<StartResult> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin") return { ok: false, error: "forbidden" };
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
+  if (!slackConfigured()) return { ok: false, error: "slack_not_configured" };
+  redirect(buildSlackAuthUrl(workspace.id, callbackUrlFromHeaders("slack", SLACK_REDIRECT_URL())));
 }
 
-export async function startSlackInstall(): Promise<never> {
+export async function startLinearInstall(): Promise<StartResult> {
   const { workspace, user } = await getActiveSession();
-  if (user.role !== "admin") throw new Error("forbidden");
-  if (!integrationsAllowed(workspace)) throw new Error("plan_required");
-  if (!slackConfigured()) throw new Error("slack_not_configured");
-  const redirectUrl = resolveCallbackUrl("slack", SLACK_REDIRECT_URL());
-  redirect(buildSlackAuthUrl(workspace.id, redirectUrl));
-}
-
-export async function startLinearInstall(): Promise<never> {
-  const { workspace, user } = await getActiveSession();
-  if (user.role !== "admin") throw new Error("forbidden");
-  if (!integrationsAllowed(workspace)) throw new Error("plan_required");
-  if (!linearConfigured()) throw new Error("linear_not_configured");
-  const redirectUrl = resolveCallbackUrl("linear", LINEAR_REDIRECT_URL());
-  redirect(buildLinearAuthUrl(workspace.id, redirectUrl));
+  if (user.role !== "admin") return { ok: false, error: "forbidden" };
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
+  if (!linearConfigured()) return { ok: false, error: "linear_not_configured" };
+  redirect(buildLinearAuthUrl(workspace.id, callbackUrlFromHeaders("linear", LINEAR_REDIRECT_URL())));
 }
 
 export async function disconnectLinear(): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -75,13 +66,12 @@ export async function disconnectLinear(): Promise<{ ok: true } | { ok: false; er
   return { ok: true };
 }
 
-export async function startJiraInstall(): Promise<never> {
+export async function startJiraInstall(): Promise<StartResult> {
   const { workspace, user } = await getActiveSession();
-  if (user.role !== "admin") throw new Error("forbidden");
-  if (!integrationsAllowed(workspace)) throw new Error("plan_required");
-  if (!jiraConfigured()) throw new Error("jira_not_configured");
-  const redirectUrl = resolveCallbackUrl("jira", JIRA_REDIRECT_URL());
-  redirect(buildJiraAuthUrl(workspace.id, redirectUrl));
+  if (user.role !== "admin") return { ok: false, error: "forbidden" };
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
+  if (!jiraConfigured()) return { ok: false, error: "jira_not_configured" };
+  redirect(buildJiraAuthUrl(workspace.id, callbackUrlFromHeaders("jira", JIRA_REDIRECT_URL())));
 }
 
 export async function disconnectJira(): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -105,11 +95,11 @@ export async function disconnectJira(): Promise<{ ok: true } | { ok: false; erro
   return { ok: true };
 }
 
-export async function startGithubInstall(): Promise<never> {
+export async function startGithubInstall(): Promise<StartResult> {
   const { workspace, user } = await getActiveSession();
-  if (user.role !== "admin") throw new Error("forbidden");
-  if (!integrationsAllowed(workspace)) throw new Error("plan_required");
-  if (!githubConfigured()) throw new Error("github_not_configured");
+  if (user.role !== "admin") return { ok: false, error: "forbidden" };
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
+  if (!githubConfigured()) return { ok: false, error: "github_not_configured" };
   // GitHub Apps use a slug-based install URL (no redirect_uri arg — the
   // app's setup URL on GitHub holds the callback config).
   redirect(buildGithubAuthUrl(workspace.id));

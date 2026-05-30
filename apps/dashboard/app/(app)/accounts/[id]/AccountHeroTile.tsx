@@ -3,13 +3,8 @@ import { notFound } from "next/navigation";
 import { Avatar, Card, PageHead, Pill } from "@crumb/ui";
 import { db, accounts, accountUsers, items } from "@crumb/db";
 import { and, eq, sql } from "drizzle-orm";
-import { getActiveWorkspace } from "@/lib/server";
-
-function arr(arrCents: number): string {
-  if (arrCents === 0) return "—";
-  if (arrCents >= 100_000_000) return `$${(arrCents / 100_000_000).toFixed(1)}M ARR`;
-  return `$${Math.round(arrCents / 100_000)}k ARR`;
-}
+import { getActiveSession } from "@/lib/server";
+import { AccountArrEdit } from "./AccountArrEdit";
 
 async function loadHero(workspaceId: string, accountId: string) {
   const [account] = await db
@@ -45,10 +40,11 @@ async function loadHero(workspaceId: string, accountId: string) {
 }
 
 export async function AccountHeroTile({ accountId }: { accountId: string }) {
-  const ws = await getActiveWorkspace();
+  const { workspace: ws, user } = await getActiveSession();
   const data = await loadHero(ws.id, accountId);
   if (!data) notFound();
   const { account, stats, requesterCount } = data;
+  const canEdit = user.role === "admin" || user.role === "pm";
   const sinceLabel = account.since
     ? new Date(account.since).toLocaleDateString("en-US", { month: "short", year: "2-digit" })
     : "—";
@@ -67,7 +63,7 @@ export async function AccountHeroTile({ accountId }: { accountId: string }) {
           <div className="col gap-2 grow" style={{ minWidth: 220 }}>
             <div className="row gap-3 center" style={{ flexWrap: "wrap" }}>
               <span className="serif" style={{ fontSize: 32, lineHeight: 1.1 }}>{account.name}</span>
-              <Pill solid>{arr(account.arrCents)}</Pill>
+              <AccountArrEdit accountId={account.id} arrCents={account.arrCents} canEdit={canEdit} />
               {account.since && <Pill>since {sinceLabel}</Pill>}
             </div>
             <div className="text-sm muted">

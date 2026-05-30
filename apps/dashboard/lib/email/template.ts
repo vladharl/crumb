@@ -107,7 +107,20 @@ export type ReplyNotificationVars = {
   statusLabel?: string;
   /** When set, the email shows a "View thread" button pointing at the host product. */
   threadUrl?: string | null;
+  /** One-click unsubscribe link (per-customer token). Adds a footer link. */
+  unsubscribeUrl?: string | null;
 };
+
+// Footer fragment: appends a one-click unsubscribe link to the standard
+// "you're getting this because…" line. Empty when no URL is provided.
+function unsubLinkHtml(url?: string | null): string {
+  return url
+    ? ` · <a href="${escapeHtml(url)}" style="color:#8A7C70;text-decoration:underline">Unsubscribe</a>`
+    : "";
+}
+function unsubLineText(url?: string | null): string {
+  return url ? `\n\nUnsubscribe: ${url}` : "";
+}
 
 function truncate(s: string, max = 600): string {
   if (s.length <= max) return s;
@@ -189,7 +202,7 @@ export function renderReplyNotificationHtml(v: ReplyNotificationVars): string {
 
           <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08);margin-top:32px">
             <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
-              You're getting this because you submitted feedback to ${ws} on Crumb. Follow the trail at <a href="https://usecrumb.xyz" style="color:#8A7C70">usecrumb.xyz</a>.
+              You're getting this because you submitted feedback to ${ws} on Crumb. Follow the trail at <a href="https://usecrumb.xyz" style="color:#8A7C70">usecrumb.xyz</a>.${unsubLinkHtml(v.unsubscribeUrl)}
             </p>
           </td></tr>
         </table>
@@ -215,6 +228,8 @@ export type StatusChangeVars = {
   reason?: string | null;
   /** When set, the email shows a "View thread" button pointing at the host product. */
   threadUrl?: string | null;
+  /** One-click unsubscribe link (per-customer token). Adds a footer link. */
+  unsubscribeUrl?: string | null;
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -308,7 +323,7 @@ export function renderStatusChangeHtml(v: StatusChangeVars): string {
 
           <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08);margin-top:32px">
             <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
-              You're getting this because you submitted feedback to ${ws} on Crumb. <a href="https://usecrumb.xyz" style="color:#8A7C70">usecrumb.xyz</a>
+              You're getting this because you submitted feedback to ${ws} on Crumb. <a href="https://usecrumb.xyz" style="color:#8A7C70">usecrumb.xyz</a>${unsubLinkHtml(v.unsubscribeUrl)}
             </p>
           </td></tr>
         </table>
@@ -329,7 +344,7 @@ ${v.vendorName} moved this${fromLabel ? ` from ${fromLabel}` : ""} to ${toLabel}
 
 ${toLabel} — ${blurb}${v.reason ? `\n\n${v.reason}` : ""}
 
-${v.threadUrl ? `View thread: ${v.threadUrl}` : `Open Crumb inside ${v.workspaceName} to read the full thread or reply.`}`;
+${v.threadUrl ? `View thread: ${v.threadUrl}` : `Open Crumb inside ${v.workspaceName} to read the full thread or reply.`}${unsubLineText(v.unsubscribeUrl)}`;
 }
 
 // (intentionally placed below renderReplyNotificationHtml; the text-mode
@@ -345,7 +360,72 @@ ${v.itemTitle}
 ${truncate(v.replyBody)}
 ---
 
-${v.threadUrl ? `View thread: ${v.threadUrl}` : `To reply, open Crumb inside ${v.workspaceName} where you submitted this.`}`;
+${v.threadUrl ? `View thread: ${v.threadUrl}` : `To reply, open Crumb inside ${v.workspaceName} where you submitted this.`}${unsubLineText(v.unsubscribeUrl)}`;
+}
+
+// ─── Mention notification (to a tagged teammate) ────────────
+// Fired when a teammate @-mentions you in an internal note. Vendor-internal,
+// points back at the dashboard thread.
+export type MentionVars = {
+  workspaceName: string;
+  byName: string;            // who mentioned you
+  itemShortId: string;
+  itemTitle: string;
+  noteBody: string;
+  dashboardThreadUrl?: string | null;
+};
+
+export function renderMentionHtml(v: MentionVars): string {
+  const ws = escapeHtml(v.workspaceName);
+  const by = escapeHtml(v.byName);
+  const shortId = escapeHtml(v.itemShortId);
+  const title = escapeHtml(v.itemTitle);
+  const body = paragraphsToHtml(truncate(v.noteBody));
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%">
+          <tr><td style="padding:0 8px 8px">
+            <div style="font-size:11px;color:#6B5C50;font-family:ui-monospace,JetBrains Mono,Menlo,monospace">${ws} · ${shortId}</div>
+            <h1 style="margin:6px 0 6px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${by} mentioned you</h1>
+            <p style="margin:0 0 16px;font-size:14px;color:#4A2E1F">in an internal note on <strong style="font-weight:500">${title}</strong>:</p>
+          </td></tr>
+          <tr><td style="padding:0 8px">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1C1815;border-radius:10px">
+              <tr><td style="padding:16px 18px;color:#FBF7F0">
+                ${body.replace(/color:#1C1815/g, "color:#FBF7F0")}
+              </td></tr>
+            </table>
+          </td></tr>
+          ${v.dashboardThreadUrl ? `
+          <tr><td style="padding:24px 8px 0">
+            <table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="border-radius:8px;background:#4A2E1F">
+              <a href="${escapeHtml(v.dashboardThreadUrl)}" style="display:inline-block;padding:9px 18px;font-size:13px;font-weight:500;color:#FBF7F0;text-decoration:none;border-radius:8px">Open thread →</a>
+            </td></tr></table>
+          </td></tr>` : ""}
+          <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08)">
+            <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">You're getting this because a teammate mentioned you on ${ws}. Manage notifications in Settings.</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export function renderMentionText(v: MentionVars): string {
+  return `${v.byName} mentioned you in an internal note on Crumb.
+
+${v.workspaceName} · ${v.itemShortId}
+${v.itemTitle}
+
+---
+${truncate(v.noteBody)}
+---
+
+${v.dashboardThreadUrl ? `Open thread: ${v.dashboardThreadUrl}` : `Open Crumb to read the note.`}`;
 }
 
 // ─── Customer-reply notification (to vendor) ─────────────────
@@ -448,4 +528,123 @@ ${truncate(v.replyBody)}
 ---
 
 ${v.dashboardThreadUrl ? `Open in Crumb: ${v.dashboardThreadUrl}` : `Open the thread in your Crumb dashboard to reply.`}`;
+}
+
+// ─── Dunning (payment failed) ───────────────────────────────
+// Sent to workspace admins when Stripe reports a failed invoice. The CTA
+// points at the in-app billing page (which links onward to the Stripe
+// portal). Plain, urgent, single action.
+
+export type DunningVars = {
+  workspaceName: string;
+  /** Dashboard billing URL, e.g. https://dash.example.com/settings/billing */
+  billingUrl?: string | null;
+};
+
+export function renderDunningHtml(v: DunningVars): string {
+  const ws = escapeHtml(v.workspaceName);
+  const url = v.billingUrl ? escapeHtml(v.billingUrl) : null;
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%">
+          <tr><td style="padding:0 8px 24px">
+            <div style="font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</div>
+            <div style="font-size:12px;color:#6B5C50">Billing · ${ws}</div>
+          </td></tr>
+          <tr><td style="padding:0 8px">
+            <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">Your payment didn't go through</h1>
+            <p style="margin:0 0 16px;font-size:14px;color:#4A2E1F">
+              We couldn't charge the card on file for <strong style="font-weight:500">${ws}</strong>. Paid features — AI clustering, integrations, and managed email — stay live during a short grace period. Update your payment method to avoid dropping to the free plan.
+            </p>
+            ${url ? `
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+              <tr><td style="border-radius:8px;background:#1C1815">
+                <a href="${url}" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:500;color:#FBF7F0;text-decoration:none;border-radius:8px">
+                  Update payment method
+                </a>
+              </td></tr>
+            </table>` : `
+            <p style="margin:0 0 24px;font-size:14px;color:#4A2E1F">Open your Crumb dashboard → Settings → Billing to update your card.</p>`}
+          </td></tr>
+          <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08)">
+            <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
+              You're receiving this as an admin of ${ws} on Crumb. <a href="https://usecrumb.xyz" style="color:#8A7C70">usecrumb.xyz</a>
+            </p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export function renderDunningText(v: DunningVars): string {
+  return `Your payment didn't go through
+
+We couldn't charge the card on file for ${v.workspaceName}. Paid features stay live during a short grace period — update your payment method to avoid dropping to the free plan.
+
+${v.billingUrl ? `Update payment method: ${v.billingUrl}` : "Open your Crumb dashboard → Settings → Billing to update your card."}`;
+}
+
+// ─── Roadmap update (to a customer following an initiative) ──
+// Fires when a vendor moves a public roadmap item the customer follows.
+
+export type RoadmapUpdateVars = {
+  workspaceName: string;
+  initiativeName: string;
+  change: string; // e.g. "moved to Now" / "shipped"
+  productUrl?: string | null;
+  unsubscribeUrl?: string | null;
+};
+
+export function renderRoadmapUpdateHtml(v: RoadmapUpdateVars): string {
+  const ws = escapeHtml(v.workspaceName);
+  const name = escapeHtml(v.initiativeName);
+  const change = escapeHtml(v.change);
+  const url = v.productUrl ? escapeHtml(v.productUrl) : null;
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%">
+          <tr><td style="padding:0 8px 24px">
+            <div style="font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</div>
+            <div style="font-size:12px;color:#6B5C50">Roadmap · ${ws}</div>
+          </td></tr>
+          <tr><td style="padding:0 8px">
+            <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">A roadmap item you follow was updated</h1>
+            <p style="margin:0 0 20px;font-size:14px;color:#4A2E1F">
+              <strong style="font-weight:600">${name}</strong> — ${change}.
+            </p>
+            ${url ? `
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+              <tr><td style="border-radius:8px;background:#1C1815">
+                <a href="${url}" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:500;color:#FBF7F0;text-decoration:none;border-radius:8px">View the roadmap</a>
+              </td></tr>
+            </table>` : ""}
+          </td></tr>
+          <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08)">
+            <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
+              You're getting this because you follow this item on ${ws}'s roadmap. Open the widget to unfollow.${unsubLinkHtml(v.unsubscribeUrl)}
+            </p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export function renderRoadmapUpdateText(v: RoadmapUpdateVars): string {
+  return `A roadmap item you follow was updated
+
+${v.initiativeName} — ${v.change}.
+
+${v.productUrl ? `View the roadmap: ${v.productUrl}` : "Open the widget in your product to see the roadmap."}
+
+You're getting this because you follow this item on ${v.workspaceName}'s roadmap.${unsubLineText(v.unsubscribeUrl)}`;
 }

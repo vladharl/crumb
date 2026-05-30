@@ -1,0 +1,120 @@
+# Deploying Crumb to a Hostinger VPS (with Cloudflare Tunnel)
+
+This runs the whole stack — dashboard + Postgres + a Cloudflare Tunnel — on one
+small VPS, served at your domain with **no open inbound ports**. Sized for a
+single client; a Hostinger **KVM 1** (1 vCPU / 4 GB / ~50 GB) is plenty.
+
+> Crumb is a Node.js server app (Postgres over TCP, SMTP, `node:crypto`). It must
+> run on a VPS/container host — **not** Hostinger shared/web hosting and **not**
+> Cloudflare Pages/Workers.
+
+Steps marked **(you)** need your browser/credentials and can't be automated.
+
+---
+
+## 1. Provision the VPS  **(you)**
+- Hostinger → **VPS** (KVM) → pick **Ubuntu 24.04** (or 22.04). KVM 1 is enough.
+- Note the server's IP and your SSH login.
+
+## 2. Install Docker  **(you, on the VPS)**
+SSH in, then (skip if you chose a Docker/Coolify template that already has it):
+```bash
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER && newgrp docker   # run docker without sudo
+docker version && docker compose version          # sanity check
+```
+
+## 3. Get the code
+```bash
+git clone <your-crumb-repo-url> crumb && cd crumb
+```
+*(Alternative, to skip building on the box: pull the prebuilt community image from
+GHCR — see "Build elsewhere" at the bottom.)*
+
+## 4. Configure environment
+```bash
+cp .env.example .env
+nano .env
+```
+Fill in at minimum:
+- `POSTGRES_PASSWORD` → a long random string (`openssl rand -hex 24`)
+- `CRUMB_APP_URL=https://crumb.localhostlabs.net`
+- `CRUMB_ENCRYPTION_KEY` → `openssl rand -hex 32` (encrypts integration tokens)
+- `CRUMB_INTERNAL_SWEEP_SECRET` → `openssl rand -hex 32`
+- `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` (and any other integrations you've registered)
+- `CLOUDFLARE_TUNNEL_TOKEN` → from step 5
+
+`.env` is gitignored — never commit it.
+
+## 5. Create the Cloudflare Tunnel  **(you, browser)**
+1. **Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create a tunnel** → type **Cloudflared** → name it `crumb` → **Save**.
+2. On the install screen, **copy the tunnel token** (the long string after `--token` in the shown command). Put it in `.env` as `CLOUDFLARE_TUNNEL_TOKEN=...`. *(You don't run their install command — our compose runs cloudflared with this token.)*
+3. Open the tunnel → **Public Hostname → Add a public hostname**:
+   - **Subdomain:** `crumb`  · **Domain:** `localhostlabs.net`
+   - **Service:** **HTTP** → `dashboard:3000`
+   - Save. Cloudflare creates the `crumb` DNS record for you automatically.
+
+## 6. Launch
+```bash
+docker compose --profile tunnel up -d --build
+```
+- `--build` compiles the community image (a few minutes on first run).
+- The `tunnel` profile starts cloudflared alongside dashboard + Postgres.
+- Migrations run automatically on dashboard startup.
+
+Check it's healthy:
+```bash
+docker compose ps                         # all "healthy"/"running"
+docker compose logs -f dashboard          # watch boot + migrations
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/health/ready
+```
+Then open **https://crumb.localhostlabs.net** in your browser.
+
+## 7. First login
+Auth is magic-link email. If you haven't configured email (`CRUMB_EMAIL_PROVIDER`
+unset), the link **prints to the logs** — grab it there:
+```bash
+docker compose logs dashboard | grep -i "magic\|login\|http"
+```
+For real email, set `CRUMB_EMAIL_PROVIDER=smtp` + `SMTP_*` (or Resend on cloud tier) and `docker compose up -d` again.
+
+## 8. Connect Slack (and others)
+In the app → **Settings → Integrations → Connect Slack**. Confirm the Slack app's
+redirect URL is exactly `https://crumb.localhostlabs.net/api/integrations/slack/callback`
+(it must match `CRUMB_APP_URL`). Repeat per provider you registered.
+
+---
+
+## Operations
+
+**Update to a new version:**
+```bash
+git pull && docker compose --profile tunnel up -d --build
+```
+
+**Maintenance cron** (orphan attachment/replay sweep) — add to the VPS crontab:
+```bash
+# daily at 03:00
+0 3 * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" http://127.0.0.1:3000/api/v1/internal/replay-sweep
+```
+
+**Backups** (Postgres): `docker compose exec postgres pg_dump -U crumb crumb | gzip > crumb-$(date +%F).sql.gz` (see README "Backups & restore").
+
+**Firewall:** with the tunnel, you can keep inbound 80/443 **closed** — cloudflared only needs outbound. Allow SSH only.
+
+**Build elsewhere (optional, for low-RAM boxes):** the repo's release workflow
+publishes the community image to GHCR. Instead of building on the VPS, set the
+dashboard service to `image: ghcr.io/<you>/crumb-dashboard:latest` (remove the
+`build:` block) and `docker compose --profile tunnel pull && up -d`.
+
+---
+
+## Quick reference
+| Thing | Value |
+|---|---|
+| Public URL | `https://crumb.localhostlabs.net` |
+| Tunnel service target | `http://dashboard:3000` |
+| Slack redirect URL | `https://crumb.localhostlabs.net/api/integrations/slack/callback` |
+| Start (with tunnel) | `docker compose --profile tunnel up -d --build` |
+| Logs | `docker compose logs -f dashboard` |
+| Health | `http://127.0.0.1:3000/api/health/ready` (on the box) |

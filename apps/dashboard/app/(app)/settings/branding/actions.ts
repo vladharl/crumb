@@ -9,11 +9,12 @@ type SaveInput = {
   name?: string;
   accent?: string;
   launcherBg?: string;
+  launcherGlass?: boolean;
   position?: string;
   productUrl?: string;
 };
 
-const VALID_POSITIONS = new Set(["corner", "top", "inline"]);
+const VALID_POSITIONS = new Set(["corner", "pill", "tab"]);
 
 export type SaveResult = { ok: true } | { ok: false; error: string };
 
@@ -23,7 +24,7 @@ export async function saveBranding(input: SaveInput): Promise<SaveResult> {
   const { workspace, user } = await requireSession();
   if (user.role !== "admin") return { ok: false, error: "Only admins can edit branding." };
 
-  const patch: Record<string, string | null> = {};
+  const patch: Record<string, string | boolean | null> = {};
 
   if (typeof input.name === "string") {
     const name = input.name.trim();
@@ -44,6 +45,10 @@ export async function saveBranding(input: SaveInput): Promise<SaveResult> {
   if (typeof input.position === "string") {
     if (!VALID_POSITIONS.has(input.position)) return { ok: false, error: "Pick a valid widget position." };
     patch.position = input.position;
+  }
+
+  if (typeof input.launcherGlass === "boolean") {
+    patch.launcherGlass = input.launcherGlass;
   }
 
   if (typeof input.productUrl === "string") {

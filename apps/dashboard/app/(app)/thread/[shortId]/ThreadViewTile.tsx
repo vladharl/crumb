@@ -212,6 +212,7 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
     assignee: head.assigneeInitials ? { initials: head.assigneeInitials, name: head.assigneeName ?? "" } : null,
     messages,
     events,
+    teammates: wsAuthor, // for @-mention autocomplete + highlight (internal notes)
     initiative: head.initiativeId
       ? { id: head.initiativeId, name: head.initiativeName ?? "", color: head.initiativeColor }
       : null,
@@ -242,5 +243,6 @@ export async function ThreadViewTile({ shortId }: { shortId: string }) {
   const canManageInitiatives = user.role === "admin" || user.role === "pm";
   const data = await loadThread(workspace, shortId, canManageInitiatives);
   if (!data) notFound();
-  return <ThreadView data={data} />;
+  const canWrite = user.role === "admin" || user.role === "pm";
+  return <ThreadView data={data} canWrite={canWrite} />;
 }

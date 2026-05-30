@@ -7,8 +7,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-crumb}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crumb}
       POSTGRES_DB: ${POSTGRES_DB:-crumb}
+    # Bind to localhost by default so Postgres is NEVER exposed on a VPS's
+    # public IP (the dashboard reaches it over the internal `postgres` network
+    # name regardless). Set POSTGRES_BIND=0.0.0.0 only if you knowingly need
+    # external DB access.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - crumb-pg-data:/var/lib/postgresql/data
     healthcheck:
@@ -21,6 +25,10 @@ services:
     build:
       context: .
       dockerfile: apps/dashboard/Dockerfile
+      args:
+        # Self-host ships the community edition (no Stripe billing, AI drafting,
+        # or session replay). Build the cloud edition with `CRUMB_EDITION=cloud`.
+        CRUMB_EDITION: ${CRUMB_EDITION:-community}
     image: crumb-dashboard:local
     container_name: crumb-dashboard
     restart: unless-stopped
@@ -31,8 +39,70 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-crumb}:${POSTGRES_PASSWORD:-crumb}@postgres:5432/${POSTGRES_DB:-crumb}
       CRUMB_WORKSPACE_SLUG: ${CRUMB_WORKSPACE_SLUG:-northbeam}
       NODE_ENV: production
+      # Runtime tier. Self-host keeps AI / billing / session-replay off;
+      # integrations still work via the BYO OAuth-app creds below. Only set
+      # "cloud" for the hosted product.
+      CRUMB_TIER: ${CRUMB_TIER:-self_host}
+      # Canonical public origin — used to build OAuth callback URLs. Must equal
+      # the hostname your Cloudflare Tunnel (or DNS) serves, e.g.
+      # https://crumb.localhostlabs.net
+      CRUMB_APP_URL: ${CRUMB_APP_URL:-}
+      # Encrypt integration tokens at rest (recommended). Generate with:
+      #   openssl rand -hex 32
+      CRUMB_ENCRYPTION_KEY: ${CRUMB_ENCRYPTION_KEY:-}
+      CRUMB_ENCRYPTION_KEY_ID: ${CRUMB_ENCRYPTION_KEY_ID:-1}
+      # Shared secret for the orphan-sweep cron endpoint (503s until set).
+      CRUMB_INTERNAL_SWEEP_SECRET: ${CRUMB_INTERNAL_SWEEP_SECRET:-}
+      # ── Integrations: bring your own OAuth-app creds (see DEPLOY.md) ──
+      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
+      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
+      LINEAR_CLIENT_ID: ${LINEAR_CLIENT_ID:-}
+      LINEAR_CLIENT_SECRET: ${LINEAR_CLIENT_SECRET:-}
+      LINEAR_WEBHOOK_SECRET: ${LINEAR_WEBHOOK_SECRET:-}
+      JIRA_CLIENT_ID: ${JIRA_CLIENT_ID:-}
+      JIRA_CLIENT_SECRET: ${JIRA_CLIENT_SECRET:-}
+      JIRA_WEBHOOK_SECRET: ${JIRA_WEBHOOK_SECRET:-}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      # ── Email (optional): an SMTP relay, or Resend (cloud tier) ──
+      CRUMB_EMAIL_PROVIDER: ${CRUMB_EMAIL_PROVIDER:-}
+      CRUMB_EMAIL_FROM: ${CRUMB_EMAIL_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+    # Bind to localhost by default. With the Cloudflare Tunnel below, cloudflared
+    # reaches the app over the internal `dashboard` network name, so no public
+    # port is needed. Set DASHBOARD_BIND=0.0.0.0 only if exposing directly.
     ports:
-      - "${DASHBOARD_PORT:-3000}:3000"
+      - "${DASHBOARD_BIND:-127.0.0.1}:${DASHBOARD_PORT:-3000}:3000"
+    # Node one-liner (no curl in the alpine runner image). Hits readiness so
+    # the container only reports healthy once it can reach Postgres.
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/api/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Optional Cloudflare Tunnel — serves the dashboard at your domain with NO
+  # open inbound ports and Cloudflare-managed TLS. Opt-in via the `tunnel`
+  # profile so it never runs unless you ask for it:
+  #   docker compose --profile tunnel up -d
+  # Setup (one-time, see DEPLOY.md): create a tunnel in the Cloudflare Zero
+  # Trust dashboard, add a public hostname (crumb.localhostlabs.net →
+  # http://dashboard:3000), and put the tunnel token in .env.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: crumb-cloudflared
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - dashboard
 
 volumes:
   crumb-pg-data:

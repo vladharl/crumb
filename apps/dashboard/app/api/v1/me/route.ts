@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { db, accounts, accountUsers, items } from "@crumb/db";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { db, accounts, accountUsers, items, initiatives } from "@crumb/db";
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { hasFeature } from "@/lib/entitlements";
+import { emailConfigured } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -70,7 +71,23 @@ export async function GET(req: Request) {
     memberCount = count ?? 0;
   }
 
+  // Does this workspace have a public roadmap? Drives the widget's Roadmap tab.
+  const [{ count: roadmapCount }] = await db
+    .select({ count: sql<number>`COUNT(*)::int` })
+    .from(initiatives)
+    .where(and(
+      eq(initiatives.workspaceId, workspace.id),
+      eq(initiatives.isPublic, true),
+      isNotNull(initiatives.roadmapColumn),
+    ));
+
+  // Customer notification settings are only meaningful when the deployment can
+  // actually send email — the widget hides the whole view when this is false.
+  const emailEnabled = emailConfigured();
+
   return cors(NextResponse.json({
+    has_roadmap: (roadmapCount ?? 0) > 0,
+    email_enabled: emailEnabled,
     user: {
       id: user.id,
       name: user.name,
@@ -78,11 +95,18 @@ export async function GET(req: Request) {
       initials: user.initials,
       role: user.role,
     },
+    notifications: {
+      replies: user.notifyReplies,
+      status: user.notifyStatus,
+      roadmap: user.notifyRoadmap,
+      unsubscribed_all: user.unsubscribedAll,
+    },
     workspace: {
       slug: workspace.slug,
       name: workspace.name,
       accent: workspace.accent,
       launcher_bg: workspace.launcherBg,
+      launcher_glass: workspace.launcherGlass ?? false,
       position: workspace.position,
       // Only advertise recording to the widget when the workspace both
       // toggled it on AND its plan entitles it — otherwise the recorder

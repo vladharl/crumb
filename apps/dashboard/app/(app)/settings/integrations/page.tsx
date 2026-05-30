@@ -1,6 +1,9 @@
+import { headers } from "next/headers";
 import { Card, CardHead, Pill } from "@crumb/ui";
 import { getActiveSession } from "@/lib/server";
 import { isCloud } from "@/lib/tier";
+import { SelfHostSetup } from "./SelfHostSetup";
+import { originFromHeaders } from "@/lib/origin";
 import { hasFeature, integrationsAllowed } from "@/lib/entitlements";
 import { slackConfigured } from "@/lib/slack/install";
 import { linearConfigured } from "@/lib/integrations/linear";
@@ -71,6 +74,8 @@ export default async function IntegrationsPage({
   const { workspace: ws, user } = await getActiveSession();
   const cloud = isCloud();
   const isAdmin = user.role === "admin";
+  // Origin for the self-host setup helper's callback/webhook URLs.
+  const origin = originFromHeaders(headers());
   // Per-workspace entitlements. Self-host: integrations stay creds-gated
   // (integrationsAllowed → true); AI/session-record off. Cloud: plan-gated.
   const integrationsEntitled = integrationsAllowed(ws);
@@ -151,9 +156,10 @@ export default async function IntegrationsPage({
                 <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
                   {cloud
                     ? "Linear isn't configured on this deployment yet."
-                    : <>Self-host needs a registered Linear OAuth app: set <span className="mono">LINEAR_CLIENT_ID</span> and <span className="mono">LINEAR_CLIENT_SECRET</span>, then restart. See the README.</>}
+                    : <>Self-host needs a registered Linear OAuth app: set <span className="mono">LINEAR_CLIENT_ID</span> and <span className="mono">LINEAR_CLIENT_SECRET</span>, then restart.</>}
                 </p>
               )}
+              {!linearCanInstall && !cloud && <SelfHostSetup provider="linear" origin={origin} />}
               <div className="row gap-2">
                 {isAdmin && linearCanInstall && integrationsEntitled
                   ? <ConnectLinearButton />
@@ -206,9 +212,10 @@ export default async function IntegrationsPage({
                 <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
                   {cloud
                     ? "Jira isn't configured on this deployment yet."
-                    : <>Self-host needs a registered Atlassian 3LO OAuth app: set <span className="mono">JIRA_CLIENT_ID</span> and <span className="mono">JIRA_CLIENT_SECRET</span>, then restart. See the README.</>}
+                    : <>Self-host needs a registered Atlassian 3LO OAuth app: set <span className="mono">JIRA_CLIENT_ID</span> and <span className="mono">JIRA_CLIENT_SECRET</span>, then restart.</>}
                 </p>
               )}
+              {!jiraCanInstall && !cloud && <SelfHostSetup provider="jira" origin={origin} />}
               <div className="row gap-2">
                 {isAdmin && jiraCanInstall && integrationsEntitled
                   ? <ConnectJiraButton />
@@ -261,9 +268,10 @@ export default async function IntegrationsPage({
                 <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
                   {cloud
                     ? "GitHub App isn't configured on this deployment yet."
-                    : <>Self-host needs a registered GitHub App: set <span className="mono">GITHUB_APP_ID</span>, <span className="mono">GITHUB_APP_PRIVATE_KEY</span>, and <span className="mono">GITHUB_APP_SLUG</span>, then restart. See the README.</>}
+                    : <>Self-host needs a registered GitHub App: set <span className="mono">GITHUB_APP_ID</span>, <span className="mono">GITHUB_APP_PRIVATE_KEY</span>, and <span className="mono">GITHUB_APP_SLUG</span>, then restart.</>}
                 </p>
               )}
+              {!githubCanInstall && !cloud && <SelfHostSetup provider="github" origin={origin} />}
               <div className="row gap-2">
                 {isAdmin && githubCanInstall && integrationsEntitled
                   ? <ConnectGithubButton />
@@ -313,9 +321,10 @@ export default async function IntegrationsPage({
                 <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
                   {cloud
                     ? "Slack isn't configured on this deployment yet."
-                    : <>Self-host needs a registered Slack app: set <span className="mono">SLACK_CLIENT_ID</span> and <span className="mono">SLACK_CLIENT_SECRET</span>, then restart. See the README.</>}
+                    : <>Self-host needs a registered Slack app: set <span className="mono">SLACK_CLIENT_ID</span> and <span className="mono">SLACK_CLIENT_SECRET</span>, then restart.</>}
                 </p>
               )}
+              {!slackCanInstall && !cloud && <SelfHostSetup provider="slack" origin={origin} />}
               <div className="row gap-2">
                 {isAdmin && slackCanInstall && integrationsEntitled
                   ? <ConnectSlackButton />

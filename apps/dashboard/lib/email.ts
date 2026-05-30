@@ -8,8 +8,12 @@ import {
   renderReplyNotificationHtml, renderReplyNotificationText,
   renderStatusChangeHtml, renderStatusChangeText,
   renderCustomerReplyNotificationHtml, renderCustomerReplyNotificationText,
+  renderMentionHtml, renderMentionText,
+  renderDunningHtml, renderDunningText,
+  renderRoadmapUpdateHtml, renderRoadmapUpdateText,
 } from "./email/template";
 import { isCloud } from "./tier";
+import { log } from "./log";
 
 let cached: { provider: EmailProvider; from: string } | null = null;
 
@@ -68,6 +72,13 @@ function selectProvider(): { provider: EmailProvider; from: string } {
 export function activeEmailProvider(): { name: string; from: string } {
   const { provider, from } = selectProvider();
   return { name: provider.name, from };
+}
+
+// True only when a real, deliverable provider is configured (resend/smtp) — not
+// the stdout fallback. Drives whether we expose customer notification settings:
+// a self-hoster who hasn't wired email shouldn't be offered prefs we can't honor.
+export function emailConfigured(): boolean {
+  return activeEmailProvider().name !== "stdout";
 }
 
 // Derive a noreply variant of the configured From — same domain, fixed local
@@ -132,7 +143,7 @@ export async function sendMagicLink(m: MagicLink): Promise<void> {
   });
 
   if (!result.ok) {
-    console.error(`[crumb/email] send failed via ${provider.name}: ${result.error}${result.detail ? ` · ${result.detail}` : ""}`);
+    log.error("magic-link send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
 }
 
@@ -147,6 +158,8 @@ export type ReplyNotification = {
   productUrl?: string | null;
   /** When set, used as Reply-To so the customer can reply via email. */
   inboundReplyAddress?: string | null;
+  /** One-click unsubscribe link (per-customer token). Omitted ⇒ no footer link. */
+  unsubscribeUrl?: string | null;
 };
 
 export async function sendReplyNotification(m: ReplyNotification): Promise<void> {
@@ -171,6 +184,7 @@ export async function sendReplyNotification(m: ReplyNotification): Promise<void>
       replyBody: m.replyBody,
       statusLabel: m.statusLabel,
       threadUrl,
+      unsubscribeUrl: m.unsubscribeUrl,
     }),
     text: renderReplyNotificationText({
       workspaceName: m.workspaceName,
@@ -180,13 +194,14 @@ export async function sendReplyNotification(m: ReplyNotification): Promise<void>
       replyBody: m.replyBody,
       statusLabel: m.statusLabel,
       threadUrl,
+      unsubscribeUrl: m.unsubscribeUrl,
     }),
     previewLine: `${m.vendorName} on ${m.itemShortId}`,
     link: threadUrl ?? undefined,
   });
 
   if (!result.ok) {
-    console.error(`[crumb/email] reply-notification send failed via ${provider.name}: ${result.error}${result.detail ? ` · ${result.detail}` : ""}`);
+    log.error("reply-notification send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
 }
 
@@ -201,6 +216,7 @@ export type StatusChangeNotification = {
   reason?: string | null;
   productUrl?: string | null;
   inboundReplyAddress?: string | null;
+  unsubscribeUrl?: string | null;
 };
 
 export async function sendStatusChangeNotification(m: StatusChangeNotification): Promise<void> {
@@ -222,7 +238,7 @@ export async function sendStatusChangeNotification(m: StatusChangeNotification):
   });
 
   if (!result.ok) {
-    console.error(`[crumb/email] status-change send failed via ${provider.name}: ${result.error}${result.detail ? ` · ${result.detail}` : ""}`);
+    log.error("status-change send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
 }
 
@@ -275,6 +291,85 @@ export async function sendCustomerReplyNotification(m: CustomerReplyNotification
   });
 
   if (!result.ok) {
-    console.error(`[crumb/email] customer-reply send failed via ${provider.name}: ${result.error}${result.detail ? ` · ${result.detail}` : ""}`);
+    log.error("customer-reply send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
+  }
+}
+
+// ─── Mention notification (to a tagged teammate) ─────────────
+export type MentionNotification = {
+  to: string;
+  workspaceName: string;
+  byName: string;
+  itemShortId: string;
+  itemTitle: string;
+  noteBody: string;
+  dashboardThreadUrl?: string | null;
+};
+
+export async function sendMentionNotification(m: MentionNotification): Promise<void> {
+  const { provider, from } = selectProvider();
+  const result = await provider.send({
+    to: m.to,
+    from, // vendor-facing — friendly From so it threads as conversation
+    subject: `${m.byName} mentioned you · ${m.itemShortId} ${m.itemTitle}`,
+    html: renderMentionHtml(m),
+    text: renderMentionText(m),
+    previewLine: `${m.byName} mentioned you on ${m.itemShortId}`,
+    link: m.dashboardThreadUrl ?? undefined,
+  });
+  if (!result.ok) {
+    log.error("mention send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
+  }
+}
+
+// ─── Dunning (payment failed) ────────────────────────────────
+// Fires from the Stripe webhook on invoice.payment_failed, once per admin.
+// noreply From — it's a transactional billing notice, not a conversation.
+
+export type DunningNotification = {
+  to: string;
+  workspaceName: string;
+  billingUrl?: string | null;
+};
+
+export async function sendDunningNotification(m: DunningNotification): Promise<void> {
+  const { provider, from } = selectProvider();
+  const result = await provider.send({
+    to: m.to,
+    from: noreplyFrom(from),
+    subject: `Payment failed · ${m.workspaceName}`,
+    html: renderDunningHtml({ workspaceName: m.workspaceName, billingUrl: m.billingUrl }),
+    text: renderDunningText({ workspaceName: m.workspaceName, billingUrl: m.billingUrl }),
+    previewLine: "Update your payment method to keep paid features",
+    link: m.billingUrl ?? undefined,
+  });
+  if (!result.ok) {
+    log.error("dunning send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
+  }
+}
+
+// ─── Roadmap update (to a following customer) ────────────────
+export type RoadmapUpdateNotification = {
+  to: string;
+  workspaceName: string;
+  initiativeName: string;
+  change: string;
+  productUrl?: string | null;
+  unsubscribeUrl?: string | null;
+};
+
+export async function sendRoadmapUpdateNotification(m: RoadmapUpdateNotification): Promise<void> {
+  const { provider, from } = selectProvider();
+  const result = await provider.send({
+    to: m.to,
+    from: noreplyFrom(from),
+    subject: `Roadmap update · ${m.initiativeName}`,
+    html: renderRoadmapUpdateHtml(m),
+    text: renderRoadmapUpdateText(m),
+    previewLine: m.change,
+    link: m.productUrl ?? undefined,
+  });
+  if (!result.ok) {
+    log.error("roadmap-update send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
 }

@@ -7,6 +7,9 @@ import {
   fetchDefaultTeam,
   LINEAR_REDIRECT_URL,
 } from "@/lib/integrations/linear";
+import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
+import { seal } from "@/lib/crypto-at-rest";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -21,14 +24,6 @@ function redirectBack(req: Request, slug: string): Response {
   url.pathname = "/settings/integrations";
   url.search = `?linear=${slug}`;
   return NextResponse.redirect(url);
-}
-
-function callbackUrl(req: Request): string {
-  const override = LINEAR_REDIRECT_URL();
-  if (override) return override;
-  const url = new URL(req.url);
-  url.search = "";
-  return url.toString();
 }
 
 export async function GET(req: Request) {
@@ -54,10 +49,9 @@ export async function GET(req: Request) {
 
   let token;
   try {
-    token = await exchangeCode(code, callbackUrl(req));
+    token = await exchangeCode(code, callbackUrlFromRequest("linear", LINEAR_REDIRECT_URL(), req));
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[crumb/linear] code exchange failed:", err);
+    log.error("linear code exchange failed", { scope: "crumb/linear", err });
     return redirectBack(req, "error_exchange_failed");
   }
 
@@ -67,14 +61,13 @@ export async function GET(req: Request) {
   try {
     team = await fetchDefaultTeam(token.access_token);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn("[crumb/linear] team discovery failed (non-fatal):", err);
+    log.warn("linear team discovery failed (non-fatal)", { scope: "crumb/linear", err });
   }
 
   await db
     .update(workspaces)
     .set({
-      linearAccessToken: token.access_token,
+      linearAccessToken: seal(token.access_token),
       linearTeamId:      team?.id   ?? null,
       linearTeamName:    team?.name ?? null,
       linearInstalledAt: new Date(),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition, useEffect } from "react";
+import { useMemo, useRef, useState, useTransition, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Avatar, Btn, Card, CardHead, Ic, PageHead, Pill, StatusDot, StatusPill } from "@crumb/ui";
@@ -15,6 +15,26 @@ function formatArr(cents: number): string {
   if (cents === 0) return "—";
   if (cents >= 100_000_000) return `$${(cents / 100_000_000).toFixed(1)}M ARR`;
   return `$${Math.round(cents / 100_000)}k ARR`;
+}
+
+const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Wraps `@Teammate Name` occurrences in a styled chip. Longest names first so
+// "@Lina Rivers" wins over "@Lina". Names not matching a teammate stay plain.
+function MentionText({ body, names }: { body: string; names: string[] }) {
+  if (names.length === 0 || !body.includes("@")) return <>{body}</>;
+  const sorted = [...names].sort((a, b) => b.length - a.length).map(reEscape).filter(Boolean);
+  if (sorted.length === 0) return <>{body}</>;
+  const re = new RegExp(`@(?:${sorted.join("|")})`, "gi");
+  const out: React.ReactNode[] = [];
+  let last = 0, key = 0, m: RegExpExecArray | null;
+  while ((m = re.exec(body))) {
+    if (m.index > last) out.push(body.slice(last, m.index));
+    out.push(<span key={key++} className="mention">{m[0]}</span>);
+    last = m.index + m[0].length;
+  }
+  if (last < body.length) out.push(body.slice(last));
+  return <>{out}</>;
 }
 
 const REASON_REQUIRED: Set<Status> = new Set(["declined", "deferred", "duplicate"]);
@@ -101,6 +121,7 @@ export type ThreadData = {
   assignee: { initials: string; name: string } | null;
   messages: ThreadMessage[];
   events: ThreadStatusEvent[];
+  teammates: { id: string; name: string; initials: string }[];
   initiative: ThreadInitiativeOption | null;
   initiativeOptions: ThreadInitiativeOption[];
   canManageInitiatives: boolean;
@@ -151,9 +172,10 @@ type TrailEntry =
   | { kind: "message"; at: string; msg: ThreadMessage }
   | { kind: "event";   at: string; event: ThreadStatusEvent };
 
-export function ThreadView({ data }: { data: ThreadData }) {
+export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boolean }) {
   const router = useRouter();
-  const { item, account, submitter, assignee, messages, events, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, replay } = data;
+  const { item, account, submitter, assignee, messages, events, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, replay } = data;
+  const teammateNames = useMemo(() => teammates.map(t => t.name), [teammates]);
 
   const customerMsgs = messages.filter(m => !m.internal);
   const internalMsgs = messages.filter(m => m.internal);
@@ -177,6 +199,67 @@ export function ThreadView({ data }: { data: ThreadData }) {
   const [pendingAttachments, setPendingAttachments] = useState<ThreadAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+
+  // ── @-mention autocomplete (internal notes only) ──
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const caretAfter = useRef<number | null>(null);
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const [mentionIdx, setMentionIdx] = useState(0);
+
+  const mentionMatches = useMemo(() => {
+    if (!mention) return [];
+    const q = mention.query.toLowerCase();
+    return teammates.filter(t => t.name.toLowerCase().startsWith(q)).slice(0, 6);
+  }, [mention, teammates]);
+
+  // Detect an in-progress "@query" at the caret: an @ at line/word start, where
+  // the text after it is a prefix of at least one teammate name.
+  function detectMention(value: string, caret: number) {
+    if (tab !== "internal") { setMention(null); return; }
+    const upto = value.slice(0, caret);
+    const at = upto.lastIndexOf("@");
+    if (at < 0) { setMention(null); return; }
+    if (at > 0 && !/\s/.test(value[at - 1]!)) { setMention(null); return; }
+    const query = upto.slice(at + 1);
+    if (query.includes("\n")) { setMention(null); return; }
+    const ql = query.toLowerCase();
+    const isPrefix = teammates.some(t => t.name.toLowerCase().startsWith(ql));
+    if (!isPrefix) { setMention(null); return; }
+    setMention({ start: at, query });
+    setMentionIdx(0);
+  }
+
+  function onDraftChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setDraft(e.target.value);
+    detectMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
+  }
+
+  function pickMention(t: { id: string; name: string }) {
+    if (!mention) return;
+    const caret = taRef.current?.selectionStart ?? draft.length;
+    const next = draft.slice(0, mention.start) + `@${t.name} ` + draft.slice(caret);
+    caretAfter.current = mention.start + t.name.length + 2; // after "@Name "
+    setDraft(next);
+    setMention(null);
+  }
+
+  function onComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (!mention || mentionMatches.length === 0) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx(i => (i + 1) % mentionMatches.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx(i => (i - 1 + mentionMatches.length) % mentionMatches.length); }
+    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(mentionMatches[Math.min(mentionIdx, mentionMatches.length - 1)]!); }
+    else if (e.key === "Escape") { e.preventDefault(); setMention(null); }
+  }
+
+  // Restore the caret after a programmatic mention insertion.
+  useEffect(() => {
+    if (caretAfter.current != null && taRef.current) {
+      const pos = caretAfter.current;
+      caretAfter.current = null;
+      taRef.current.focus();
+      taRef.current.setSelectionRange(pos, pos);
+    }
+  }, [draft]);
 
   async function pickAndUpload() {
     setUploadError(null);
@@ -296,7 +379,6 @@ export function ThreadView({ data }: { data: ThreadData }) {
                 <Btn icon={<Ic.link style={{ width: 12, height: 12 }} />}>{item.externalTicketId}</Btn>
               </a>
             )}
-            <Btn variant="ghost" iconOnly icon={<Ic.more style={{ width: 14, height: 14 }} />} />
           </>
         }
       />
@@ -406,7 +488,7 @@ export function ThreadView({ data }: { data: ThreadData }) {
                             padding: "10px 12px",
                           }}>
                             <p className="text-md" style={{ margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
-                              {m.body}
+                              <MentionText body={m.body} names={teammateNames} />
                             </p>
                           </div>
                         ) : (
@@ -435,6 +517,9 @@ export function ThreadView({ data }: { data: ThreadData }) {
               <Pill ring ringFill={tab !== "internal"}>
                 {tab === "internal" ? "Internal only" : `Replying to ${submitter.name} — ${account.name} can see this`}
               </Pill>
+              {!canWrite && tab !== "internal" && (
+                <span className="text-xs muted">Viewers can only post internal notes — switch to the Internal tab.</span>
+              )}
               {sentAt && (
                 <Pill solid>
                   <Ic.check style={{ width: 10, height: 10 }} />
@@ -442,14 +527,35 @@ export function ThreadView({ data }: { data: ThreadData }) {
                 </Pill>
               )}
             </div>
-            <textarea
-              className="input"
-              rows={3}
-              placeholder={tab === "internal" ? "Internal note (Acme can't see this)." : "Write a reply."}
-              value={draft}
-              onChange={e => setDraft(e.target.value)}
-              disabled={pending}
-            />
+            <div style={{ position: "relative" }}>
+              <textarea
+                ref={taRef}
+                className="input"
+                rows={3}
+                placeholder={tab === "internal" ? "Internal note — type @ to mention a teammate. (Acme can't see this.)" : "Write a reply."}
+                value={draft}
+                onChange={onDraftChange}
+                onKeyDown={onComposerKeyDown}
+                onBlur={() => setTimeout(() => setMention(null), 120)}
+                disabled={pending}
+              />
+              {mention && mentionMatches.length > 0 && (
+                <div className="mention-menu">
+                  {mentionMatches.map((t, i) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={`mention-opt${i === mentionIdx ? " active" : ""}`}
+                      onMouseDown={e => { e.preventDefault(); pickMention(t); }}
+                      onMouseEnter={() => setMentionIdx(i)}
+                    >
+                      <Avatar size="sm" kind="ink">{t.initials}</Avatar>
+                      <span className="truncate">{t.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             {pendingAttachments.length > 0 && (
               <div className="row gap-2" style={{ flexWrap: "wrap" }}>
                 {pendingAttachments.map(a => (
@@ -489,7 +595,7 @@ export function ThreadView({ data }: { data: ThreadData }) {
               {uploading && <span className="text-xs muted">Uploading…</span>}
               <div style={{ flex: 1 }} />
               <Btn sm onClick={() => { setDraft(""); setPendingAttachments([]); }} disabled={pending || (!draft && pendingAttachments.length === 0)}>Clear</Btn>
-              <Btn sm variant="primary" icon={<Ic.send style={{ width: 12, height: 12 }} />} onClick={onSend} disabled={pending || (!draft.trim() && pendingAttachments.length === 0)}>
+              <Btn sm variant="primary" icon={<Ic.send style={{ width: 12, height: 12 }} />} onClick={onSend} disabled={pending || (!draft.trim() && pendingAttachments.length === 0) || (!canWrite && tab !== "internal")}>
                 {pending ? "Sending…" : "Send"}
               </Btn>
             </div>
@@ -500,6 +606,7 @@ export function ThreadView({ data }: { data: ThreadData }) {
           <Card>
             <CardHead title="Status" />
             <div className="card-body col gap-1">
+              {!canWrite && <span className="text-xs muted" style={{ marginBottom: 4 }}>Viewers can't change status.</span>}
               {STATUS_ROWS.map(([l, s]) => {
                 const isCurrent = item.status === s;
                 const needsReason = REASON_REQUIRED.has(s);
@@ -512,7 +619,7 @@ export function ThreadView({ data }: { data: ThreadData }) {
                         if (needsReason) openReasonFor(s, l);
                         else onStatus(s);
                       }}
-                      disabled={pending || isCurrent}
+                      disabled={pending || isCurrent || !canWrite}
                       className="nav-item"
                       aria-selected={isCurrent}
                       style={{ justifyContent: "flex-start", gap: 12, width: "100%" }}

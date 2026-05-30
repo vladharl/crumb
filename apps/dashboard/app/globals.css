@@ -476,6 +476,26 @@ h1, h2, h3, h4 {
 .btn.ghost { border-color: transparent; padding: 8px 8px; color: var(--mute); }
 .btn.ghost:hover { background: var(--hover); color: var(--text); }
 
+.btn.danger { background: var(--err-text); color: var(--cream); border-color: var(--err-text); }
+.btn.danger:hover { background: var(--err-text); color: var(--cream); filter: brightness(1.12); }
+
+/* @-mention chip in rendered internal notes */
+.mention { color: var(--accent); font-weight: 500; background: rgba(226, 125, 58, 0.10); border-radius: 4px; padding: 0 3px; }
+
+/* @-mention autocomplete dropdown (thread composer) */
+.mention-menu {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 4px);
+  background: var(--paper, var(--surface)); border: 1px solid var(--line, var(--hair));
+  border-radius: var(--r-sm); box-shadow: var(--sh-soft); padding: 4px; z-index: 20;
+  max-height: 220px; overflow: auto;
+}
+.mention-opt {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: none; border: 0; cursor: pointer; padding: 6px 8px; border-radius: var(--r-sm);
+  font: inherit; color: var(--ink);
+}
+.mention-opt.active, .mention-opt:hover { background: var(--hover); }
+
 .btn.sm { padding: 5px 10px; font-size: var(--fs-xs); }
 .btn.lg { padding: 11px 20px; font-size: var(--fs-md); }
 .btn.icon-only { padding: 6px; width: 30px; height: 30px; justify-content: center; }
@@ -662,7 +682,7 @@ textarea.input { resize: vertical; min-height: 80px; }
   border-radius: var(--r-sm);
   overflow: hidden;
 }
-.seg button {
+.seg button, .seg a {
   appearance: none;
   background: transparent;
   border: 0;
@@ -674,10 +694,11 @@ textarea.input { resize: vertical; min-height: 80px; }
   cursor: pointer;
   border-right: var(--border);
   transition: color .15s ease, background .15s ease;
+  text-decoration: none;
 }
-.seg button:last-child { border-right: 0; }
-.seg button:hover { color: var(--text); }
-.seg button[aria-selected="true"] {
+.seg button:last-child, .seg a:last-child { border-right: 0; }
+.seg button:hover, .seg a:hover { color: var(--text); }
+.seg button[aria-selected="true"], .seg a[aria-selected="true"] {
   background: var(--text);
   color: var(--cream);
 }

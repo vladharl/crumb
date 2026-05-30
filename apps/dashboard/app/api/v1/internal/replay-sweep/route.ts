@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
-import { sweepOrphanSessions } from "@/lib/replay/sweep";
+import { sweepOrphanSessions, sweepAgedSessions } from "@/lib/replay/sweep";
+import { sweepOrphanAttachments } from "@/lib/attachments/sweep";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,8 +18,9 @@ function secretMatches(provided: string | null, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-// Operator-facing endpoint for pruning orphan replay sessions. Auth is a
-// shared secret (CRUMB_INTERNAL_SWEEP_SECRET in the env) — there's no
+// Operator-facing endpoint for pruning orphans: replay sessions that never
+// linked to an item AND attachments uploaded but never linked to a reply.
+// Auth is a shared secret (CRUMB_INTERNAL_SWEEP_SECRET in the env) — there's no
 // vendor-user context for a cron job, and tying this to a workspace
 // session would block the most common host (Vercel-cron / GitHub Actions).
 //
@@ -53,6 +55,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
+  // Run both sweeps. The replay fields stay at the top level for back-compat
+  // with any existing cron that reads them; attachment results nest under a
+  // new `attachments` key.
   const result = await sweepOrphanSessions(opts);
-  return NextResponse.json(result);
+  const retention = await sweepAgedSessions(opts);
+  const attachments = await sweepOrphanAttachments(opts);
+  return NextResponse.json({ ...result, retention, attachments });
 }

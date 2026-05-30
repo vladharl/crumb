@@ -3,27 +3,41 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Ic } from "@crumb/ui";
+import { useConfirm } from "@/components/confirm";
 import { startGithubInstall, disconnectGithub } from "./actions";
+import { isRedirectError, connectErrorMessage } from "./connect-shared";
 
 export function ConnectGithubButton({ disabled }: { disabled?: boolean }) {
   const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
   return (
-    <Btn
-      sm
-      variant="primary"
-      icon={<Ic.plug style={{ width: 12, height: 12 }} />}
-      disabled={disabled || pending}
-      onClick={() => startTransition(async () => {
-        try { await startGithubInstall(); } catch { /* redirect or config error */ }
-      })}
-    >
-      {pending ? "Opening GitHub…" : "Install GitHub App"}
-    </Btn>
+    <div className="col gap-1">
+      <Btn
+        sm
+        variant="primary"
+        icon={<Ic.plug style={{ width: 12, height: 12 }} />}
+        disabled={disabled || pending}
+        onClick={() => startTransition(async () => {
+          setError(null);
+          try {
+            const r = await startGithubInstall();
+            if (r) setError(connectErrorMessage(r.error));
+          } catch (e) {
+            if (isRedirectError(e)) throw e;
+            setError("Couldn't start the connection. Please try again.");
+          }
+        })}
+      >
+        {pending ? "Opening GitHub…" : "Install GitHub App"}
+      </Btn>
+      {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
+    </div>
   );
 }
 
 export function DisconnectGithubButton({ account }: { account: string | null }) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   return (
@@ -31,8 +45,13 @@ export function DisconnectGithubButton({ account }: { account: string | null }) 
       <Btn
         sm
         disabled={pending}
-        onClick={() => {
-          if (!confirm(`Disconnect ${account ?? "GitHub"}? Existing ticket links stay on items; status sync stops. (Also uninstall the app from GitHub if you want the App's permissions revoked.)`)) return;
+        onClick={async () => {
+          if (!(await confirm({
+            title: `Disconnect ${account ?? "GitHub"}?`,
+            body: "Existing ticket links stay on items; status sync stops. You can also uninstall the app from GitHub to revoke its permissions.",
+            confirmLabel: "Disconnect",
+            destructive: true,
+          }))) return;
           startTransition(async () => {
             setError(null);
             const r = await disconnectGithub();

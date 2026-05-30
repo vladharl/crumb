@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Card, PageHead, Pill } from "@crumb/ui";
 import { db, initiatives, items, workspaceUsers } from "@crumb/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
 import { InitiativeStatusPill } from "../InitiativeChip";
 import { EditPanel } from "./EditPanel";
@@ -18,6 +18,7 @@ async function loadHeader(workspaceId: string, id: string) {
       color: initiatives.color,
       createdAt: initiatives.createdAt,
       updatedAt: initiatives.updatedAt,
+      ownerWorkspaceUserId: initiatives.ownerWorkspaceUserId,
       ownerName: workspaceUsers.name,
       ownerInitials: workspaceUsers.initials,
     })
@@ -60,6 +61,15 @@ export async function InitiativeHeaderTile({ id }: { id: string }) {
   const canManage = user.role === "admin" || user.role === "pm";
   const { initiative, stats, total } = data;
 
+  // Teammates who can own this initiative — populates the owner picker.
+  const members = canManage
+    ? await db
+        .select({ id: workspaceUsers.id, name: workspaceUsers.name })
+        .from(workspaceUsers)
+        .where(eq(workspaceUsers.workspaceId, workspace.id))
+        .orderBy(asc(workspaceUsers.name))
+    : [];
+
   return (
     <>
       <PageHead
@@ -74,7 +84,9 @@ export async function InitiativeHeaderTile({ id }: { id: string }) {
               description: initiative.description,
               status: initiative.status,
               color: initiative.color,
+              ownerWorkspaceUserId: initiative.ownerWorkspaceUserId,
             }}
+            members={members}
             canManage={canManage}
           />
         }

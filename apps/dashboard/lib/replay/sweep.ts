@@ -1,7 +1,8 @@
 import "server-only";
 import { and, isNull, lt, eq, inArray } from "drizzle-orm";
-import { db, replaySessions, replayChunks } from "@crumb/db";
+import { db, replaySessions, replayChunks, workspaces } from "@crumb/db";
 import { deleteBytes } from "@/lib/storage";
+import { workspacePlan, type Plan } from "@/lib/entitlements";
 
 // Sweep orphan replay_sessions — rows with no `item_id` set, older than
 // the grace window. The widget links a token to an item only after the
@@ -90,4 +91,86 @@ export async function sweepOrphanSessions(opts: SweepOptions = {}): Promise<Swee
     releasedBytes,
     storageFailures,
   };
+}
+
+// ─── plan-aware retention ────────────────────────────────────
+// Prunes replay sessions (orphan OR linked) older than a per-plan retention
+// window. This is the cost-control counterpart to the orphan sweep above —
+// it bounds how long replay bytes live, not just whether they ever linked.
+//
+// OPT-IN by design: returns immediately unless a retention window is
+// configured, so existing deployments never silently delete linked replays.
+// Configure via env:
+//   CRUMB_REPLAY_RETENTION_DAYS            global default (all plans)
+//   CRUMB_REPLAY_RETENTION_DAYS_GROWTH     per-plan override (also _TEAM/_FREE)
+// Per-plan takes precedence over the global; 0/unset = keep forever.
+
+export type RetentionResult = {
+  workspacesScanned: number;
+  deletedSessions: number;
+  deletedChunks: number;
+  releasedBytes: number;
+  storageFailures: number;
+};
+
+function retentionDaysForPlan(plan: Plan): number {
+  const perPlan = parseInt(process.env[`CRUMB_REPLAY_RETENTION_DAYS_${plan.toUpperCase()}`] ?? "", 10);
+  if (Number.isFinite(perPlan) && perPlan > 0) return perPlan;
+  const global = parseInt(process.env.CRUMB_REPLAY_RETENTION_DAYS ?? "", 10);
+  return Number.isFinite(global) && global > 0 ? global : 0;
+}
+
+export async function sweepAgedSessions(opts: { limit?: number } = {}): Promise<RetentionResult> {
+  const limit = opts.limit ?? 500;
+  const empty: RetentionResult = { workspacesScanned: 0, deletedSessions: 0, deletedChunks: 0, releasedBytes: 0, storageFailures: 0 };
+
+  // Fast path: nothing configured → no-op, no DB work.
+  if (retentionDaysForPlan("free") === 0 && retentionDaysForPlan("team") === 0 && retentionDaysForPlan("growth") === 0) {
+    return empty;
+  }
+
+  // Distinct workspaces that actually have replay data, with plan fields.
+  const wss = await db
+    .selectDistinct({
+      id: workspaces.id,
+      planId: workspaces.planId,
+      subscriptionStatus: workspaces.subscriptionStatus,
+    })
+    .from(replaySessions)
+    .innerJoin(workspaces, eq(workspaces.id, replaySessions.workspaceId));
+
+  const result = { ...empty };
+  for (const ws of wss) {
+    const days = retentionDaysForPlan(workspacePlan(ws));
+    if (days <= 0) continue;
+    result.workspacesScanned++;
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const aged = await db
+      .select({ id: replaySessions.id })
+      .from(replaySessions)
+      .where(and(eq(replaySessions.workspaceId, ws.id), lt(replaySessions.startedAt, cutoff)))
+      .limit(limit);
+    if (aged.length === 0) continue;
+
+    const ids = aged.map(a => a.id);
+    const chunks = await db
+      .select({ storageKey: replayChunks.storageKey, sizeBytes: replayChunks.sizeBytes })
+      .from(replayChunks)
+      .where(inArray(replayChunks.sessionId, ids));
+    for (const c of chunks) {
+      try {
+        await deleteBytes(c.storageKey);
+        result.releasedBytes += c.sizeBytes;
+      } catch {
+        result.storageFailures++;
+      }
+    }
+    for (const id of ids) {
+      await db.delete(replaySessions).where(eq(replaySessions.id, id));
+    }
+    result.deletedSessions += ids.length;
+    result.deletedChunks += chunks.length;
+  }
+  return result;
 }
