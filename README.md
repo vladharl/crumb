@@ -6,6 +6,16 @@ Open-source B2B feedback platform. Customers drop feedback inside your product; 
 
 This repo is **early**. The frontend dashboard and the start of the API + data model are in; widget, auth, Slack, and the docker self-host story for the dashboard itself come next.
 
+## See it in action
+
+![Triage a feedback thread, scoped and tied to revenue](docs/assets/gifs/inbox-triage.gif)
+
+| Feedback ↔ revenue | Roadmap | Integrations |
+| --- | --- | --- |
+| ![Accounts with ARR](docs/assets/screenshots/account-revenue-1-list.png) | ![Now / Next / Later board](docs/assets/screenshots/initiatives-1-board.png) | ![Slack, Linear, Jira, GitHub](docs/assets/screenshots/integrations-1-page.png) |
+
+These are generated from the seeded app, so they stay in sync with the UI. Regenerate them (GIFs, screenshots, and a landing-page video) with `pnpm --filter @crumb/demos all` — see [demos/README.md](demos/README.md). _(Images appear once generated and committed.)_
+
 ## What's here
 
 ```
@@ -13,9 +23,10 @@ crumb/
 ├── apps/
 │   ├── dashboard/      # Next.js dashboard (vendor side) + public /api/v1
 │   └── widget/         # The customer-facing embed (vanilla TS → IIFE)
-└── packages/
-    ├── db/             # Drizzle schema + Postgres client + seed
-    └── ui/             # Shared design system (icons, atoms, status)
+├── packages/
+│   ├── db/             # Drizzle schema + Postgres client + seed
+│   └── ui/             # Shared design system (icons, atoms, status)
+└── demos/              # Playwright → Remotion demo pipeline (GIFs, PNGs, video)
 ```
 
 Future: magic-link auth, Slack integration, dashboard Dockerfile for self-host.
@@ -53,7 +64,7 @@ Crumb ships from one repo to two deployment shapes — a **community** build for
 | AI initiative clustering | — (Cloud-only) | Team plan |
 | Session Record (rrweb capture + in-thread replay) | — (Cloud-only) | Growth plan |
 
-Self-host is free and AGPL. The hosted tier at **[usecrumb.xyz](https://usecrumb.xyz)** runs the same source built as the `cloud` edition, plus the API keys we hold so you don't have to.
+Self-host is free and AGPL. The hosted tier at **[crumb.localhostlabs.net](https://crumb.localhostlabs.net)** runs the same source built as the `cloud` edition, plus the API keys we hold so you don't have to.
 
 **Build-time edition vs. runtime tier** — two distinct knobs:
 - **`CRUMB_EDITION`** (build-time, default `community`) decides *what compiles in*. The `community` build physically excludes the cloud-only code — the Stripe billing UI + webhook, the session-replay APIs, and the heavy `stripe` / `@anthropic-ai/sdk` SDKs — so the self-host image never ships them (those routes 404). The `cloud` build includes everything. Build with `pnpm --filter dashboard build:community` (default) or `build:cloud`.
@@ -70,7 +81,7 @@ To run as Cloud yourself (e.g. for the hosted deployment):
 ```bash
 CRUMB_TIER=cloud
 RESEND_API_KEY=re_xxxxxxxxxxxx
-CRUMB_EMAIL_FROM="Crumb <crumb@usecrumb.xyz>"
+CRUMB_EMAIL_FROM="Crumb <noreply@crumb.localhostlabs.net>"
 CRUMB_STORAGE_PROVIDER=postgres   # share attachment + replay bytes across instances via the DB
 STRIPE_SECRET_KEY=sk_live_xxx     # billing — plans drive feature entitlements
 STRIPE_PRICE_ID=price_xxx         # price lookup_key must be "team" / "growth"
@@ -131,7 +142,7 @@ STRIPE_SECRET_KEY=sk_live_…       # or sk_test_… in test mode
 STRIPE_PRICE_ID=price_…           # the price your Checkout sells
 STRIPE_WEBHOOK_SECRET=whsec_…     # from "Add endpoint" in the Stripe dashboard
 # Optional:
-STRIPE_PORTAL_RETURN_URL=https://dashboard.usecrumb.xyz/settings/billing
+STRIPE_PORTAL_RETURN_URL=https://dashboard.crumb.localhostlabs.net/settings/billing
 ```
 
 Then point a Stripe webhook endpoint at `/api/v1/stripe/webhook` and subscribe to:

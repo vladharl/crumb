@@ -91,7 +91,7 @@ export async function NotificationsSidebarTile() {
       <Card>
         <CardHead title="Digest preview · tomorrow 9am" />
         <div className="card-body col gap-3">
-          <div className="text-xs muted mono">from trail@usecrumb.xyz</div>
+          <div className="text-xs muted mono">from noreply@crumb.localhostlabs.net</div>
           <div className="display" style={{ fontSize: 22, lineHeight: 1.25 }}>{digestLine}</div>
           {lastDay.entries.length > 0 && (
             <div className="col gap-2 text-sm">

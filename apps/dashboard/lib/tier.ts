@@ -3,7 +3,7 @@ import "server-only";
 // Crumb ships from one repo to two deployment shapes:
 //   - "self_host" (default): the OSS path. AGPL-licensed, runs on the
 //     user's own infra. Free. No managed services bundled.
-//   - "cloud":              the hosted tier at usecrumb.xyz. Same code,
+//   - "cloud":              the hosted tier at crumb.localhostlabs.net. Same code,
 //     extra env (RESEND_API_KEY, Slack app credentials, etc.) and
 //     features unlocked via this gate.
 //

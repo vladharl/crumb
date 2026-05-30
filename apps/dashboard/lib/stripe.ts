@@ -17,7 +17,7 @@ export function stripeClient(): Stripe | null {
     // Pinning the API version protects against silent breaking changes.
     // Track Stripe-Node's pinned default; bump deliberately after testing.
     apiVersion: "2026-04-22.dahlia",
-    appInfo: { name: "Crumb", url: "https://usecrumb.xyz" },
+    appInfo: { name: "Crumb", url: "https://crumb.localhostlabs.net" },
   });
   return cached;
 }

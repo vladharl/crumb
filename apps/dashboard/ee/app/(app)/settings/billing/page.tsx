@@ -53,7 +53,7 @@ export default async function BillingPage() {
             You're <strong style={{ fontWeight: 500 }}>self-hosting Crumb</strong> — free under AGPL, with no per-seat fee and no usage limits.
           </p>
           <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-            The hosted tier at <a href="https://usecrumb.xyz" style={{ color: "var(--ink)" }}>usecrumb.xyz</a> adds managed email delivery, hosted inbound replies, AI clustering, and one-click Slack/Linear integrations. Same source code, same OSS license — you're paying for the ops layer.
+            The hosted tier at <a href="https://crumb.localhostlabs.net" style={{ color: "var(--ink)" }}>crumb.localhostlabs.net</a> adds managed email delivery, hosted inbound replies, AI clustering, and one-click Slack/Linear integrations. Same source code, same OSS license — you're paying for the ops layer.
           </p>
         </div>
       </Card>

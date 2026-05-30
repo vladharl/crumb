@@ -122,7 +122,7 @@ export default async function AuditPage() {
           ) : !cloud ? (
             <>
               <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-                Magic-link and notification emails are being printed to the dashboard's stdout. <strong style={{ fontWeight: 500 }}>Managed email delivery is a Crumb Cloud feature</strong> — sign up at <a href="https://usecrumb.xyz" style={{ color: "var(--ink)" }}>usecrumb.xyz</a> to get it without running a mail server yourself.
+                Magic-link and notification emails are being printed to the dashboard's stdout. <strong style={{ fontWeight: 500 }}>Managed email delivery is a Crumb Cloud feature</strong> — sign up at <a href="https://crumb.localhostlabs.net" style={{ color: "var(--ink)" }}>crumb.localhostlabs.net</a> to get it without running a mail server yourself.
               </p>
               <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
                 Or stay on self-host and read magic links from <span className="mono">docker compose logs dashboard</span>. A bring-your-own-SMTP option for self-hosters is on the roadmap.

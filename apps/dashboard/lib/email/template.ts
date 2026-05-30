@@ -202,7 +202,7 @@ export function renderReplyNotificationHtml(v: ReplyNotificationVars): string {
 
           <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08);margin-top:32px">
             <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
-              You're getting this because you submitted feedback to ${ws} on Crumb. Follow the trail at <a href="https://usecrumb.xyz" style="color:#8A7C70">usecrumb.xyz</a>.${unsubLinkHtml(v.unsubscribeUrl)}
+              You're getting this because you submitted feedback to ${ws} on Crumb. Follow the trail at <a href="https://crumb.localhostlabs.net" style="color:#8A7C70">crumb.localhostlabs.net</a>.${unsubLinkHtml(v.unsubscribeUrl)}
             </p>
           </td></tr>
         </table>
@@ -323,7 +323,7 @@ export function renderStatusChangeHtml(v: StatusChangeVars): string {
 
           <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08);margin-top:32px">
             <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
-              You're getting this because you submitted feedback to ${ws} on Crumb. <a href="https://usecrumb.xyz" style="color:#8A7C70">usecrumb.xyz</a>${unsubLinkHtml(v.unsubscribeUrl)}
+              You're getting this because you submitted feedback to ${ws} on Crumb. <a href="https://crumb.localhostlabs.net" style="color:#8A7C70">crumb.localhostlabs.net</a>${unsubLinkHtml(v.unsubscribeUrl)}
             </p>
           </td></tr>
         </table>
@@ -571,7 +571,7 @@ export function renderDunningHtml(v: DunningVars): string {
           </td></tr>
           <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08)">
             <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
-              You're receiving this as an admin of ${ws} on Crumb. <a href="https://usecrumb.xyz" style="color:#8A7C70">usecrumb.xyz</a>
+              You're receiving this as an admin of ${ws} on Crumb. <a href="https://crumb.localhostlabs.net" style="color:#8A7C70">crumb.localhostlabs.net</a>
             </p>
           </td></tr>
         </table>
