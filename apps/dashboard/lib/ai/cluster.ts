@@ -1,29 +1,13 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
 import { isCloud } from "@/lib/tier";
 import { log } from "@/lib/log";
-
-// Pinned model — Haiku is plenty for classification and ~10x cheaper than
-// Sonnet. Bump deliberately after testing.
-const MODEL = "claude-haiku-4-5-20251001";
-
-// Lazy client — never throw on import. Self-host stays clean; Cloud
-// without a key surfaces a "configure ANTHROPIC_API_KEY" warning in the UI.
-let cached: Anthropic | null | undefined;
-
-function clientOrNull(): Anthropic | null {
-  if (cached !== undefined) return cached;
-  const key = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!key) { cached = null; return null; }
-  cached = new Anthropic({ apiKey: key });
-  return cached;
-}
+import { aistackChat, aistackConfigured, AISTACK_MODEL } from "@/lib/ai/aistack";
 
 export function clusterConfigured(): boolean {
-  return isCloud() && clientOrNull() !== null;
+  return isCloud() && aistackConfigured();
 }
 
-export const CLUSTER_MODEL = MODEL;
+export const CLUSTER_MODEL = AISTACK_MODEL;
 
 type InitiativeBrief = {
   id: string;
@@ -52,8 +36,7 @@ export async function suggestInitiative(
   item: ItemBrief,
   initiatives: InitiativeBrief[],
 ): Promise<ClusterSuggestion | null> {
-  const client = clientOrNull();
-  if (!client) return null;
+  if (!aistackConfigured()) return null;
   if (initiatives.length === 0) return null;
 
   // Prompt: short, structured. We tell the model to either pick one or
@@ -84,22 +67,16 @@ Rules:
 - If nothing fits with confidence > 0.55, return null for initiative_id.
 - Reason must be ≤ 120 characters and reference the feedback's substance.`;
 
-  try {
-    const resp = await client.messages.create({
-      model: MODEL,
-      max_tokens: 200,
-      temperature: 0.1,
-      messages: [{ role: "user", content: prompt }],
-    });
-    const text = resp.content
-      .filter(b => b.type === "text")
-      .map(b => (b as { text: string }).text)
-      .join("")
-      .trim();
-    if (!text) return null;
+  // max_tokens 1024 (not the old 200): qwen is a reasoning model, so a tight
+  // budget can be spent thinking before the JSON answer is emitted.
+  const text = await aistackChat(prompt, { maxTokens: 1024, temperature: 0.1, scope: "crumb/ai" });
+  if (!text) return null;
 
-    // Some models still wrap JSON in code fences despite instructions; strip.
-    const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  try {
+    // Tolerate any preamble/reasoning leakage or code fences: grab the first
+    // {...} object, then strip stray fences.
+    const m = text.match(/\{[\s\S]*\}/);
+    const cleaned = (m ? m[0] : text).replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
     const parsed = JSON.parse(cleaned) as {
       initiative_id: string | null;
       confidence: number;
@@ -117,7 +94,7 @@ Rules:
       reason: (parsed.reason ?? "").slice(0, 240),
     };
   } catch (err) {
-    log.error("cluster call failed", { scope: "crumb/ai", err });
+    log.error("cluster parse failed", { scope: "crumb/ai", err });
     return null;
   }
 }

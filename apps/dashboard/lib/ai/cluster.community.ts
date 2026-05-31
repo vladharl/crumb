@@ -1,10 +1,10 @@
 import "server-only";
 
 // Community-edition stub for lib/ai/cluster.ts — aliased in when CRUMB_EDITION
-// != cloud so @anthropic-ai/sdk never enters the bundle. Mirrors the self-host
+// != cloud so the aistack client never enters the bundle. Mirrors the self-host
 // runtime (clusterConfigured() === false; suggestInitiative() === null).
 
-export const CLUSTER_MODEL = "claude-haiku-4-5-20251001";
+export const CLUSTER_MODEL = "qwen-35b-8bit";
 
 export type ClusterSuggestion = {
   initiativeId: string;

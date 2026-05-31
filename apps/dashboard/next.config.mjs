@@ -25,9 +25,9 @@ const nextConfig = {
   env: { NEXT_PUBLIC_CRUMB_EDITION: EDITION },
 
   // Community build: replace the cloud-only lib wrappers with SDK-free stubs so
-  // neither their heavy SDKs (stripe, @anthropic-ai/sdk) NOR the cloud logic
-  // itself (Stripe client config, Anthropic prompts) enter the bundle. The stubs
-  // mirror the disabled self-host runtime, so every caller compiles + behaves.
+  // neither the heavy Stripe SDK NOR the cloud logic itself (Stripe client
+  // config, AI prompts + the aistack client) enter the bundle. The stubs mirror
+  // the disabled self-host runtime, so every caller compiles + behaves.
   //
   // We use NormalModuleReplacementPlugin, not resolve.alias: Next resolves the
   // `@/*` tsconfig paths via its own JsConfigPathsPlugin, which beats a
@@ -50,14 +50,14 @@ const nextConfig = {
           resolve(__dirname, "lib/ai/ticket.community.ts"),
         ),
       );
-      // Belt-and-suspenders: make the heavy SDK packages resolve to an empty
+      // Belt-and-suspenders: make the heavy Stripe SDK resolve to an empty
       // module so any stray/direct import (e.g. the webhook route's
-      // `import type Stripe from "stripe"`) can never pull them into the
-      // community bundle. Cloud builds skip this and resolve them normally.
+      // `import type Stripe from "stripe"`) can never pull it into the
+      // community bundle. Cloud builds skip this and resolve it normally.
+      // (The AI path needs no alias — it's plain fetch, no SDK to exclude.)
       config.resolve.alias = {
         ...config.resolve.alias,
         stripe: false,
-        "@anthropic-ai/sdk": false,
       };
     }
     return config;

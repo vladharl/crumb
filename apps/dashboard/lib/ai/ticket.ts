@@ -1,25 +1,14 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
 import { isCloud } from "@/lib/tier";
 import { log } from "@/lib/log";
+import { aistackChat, aistackConfigured, AISTACK_MODEL } from "@/lib/ai/aistack";
 
 // AI ticket drafting. Same model + gating pattern as lib/ai/cluster.ts.
-const MODEL = "claude-haiku-4-5-20251001";
-
-let cached: Anthropic | null | undefined;
-function clientOrNull(): Anthropic | null {
-  if (cached !== undefined) return cached;
-  const key = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!key) { cached = null; return null; }
-  cached = new Anthropic({ apiKey: key });
-  return cached;
-}
-
 export function ticketSuggestionConfigured(): boolean {
-  return isCloud() && clientOrNull() !== null;
+  return isCloud() && aistackConfigured();
 }
 
-export const TICKET_MODEL = MODEL;
+export const TICKET_MODEL = AISTACK_MODEL;
 
 export type SuggestTicketInput = {
   provider: "linear" | "jira" | "github";
@@ -53,8 +42,7 @@ const TREE_MAX = 400;
 const RECENT_MAX = 10;
 
 export async function suggestTicket(input: SuggestTicketInput): Promise<SuggestTicketResult | null> {
-  const client = clientOrNull();
-  if (!client) return null;
+  if (!aistackConfigured()) return null;
 
   const itemBody = (input.item.body ?? "").slice(0, ITEM_BODY_MAX);
   const tickets = input.recentTickets.slice(0, RECENT_MAX);
@@ -97,21 +85,16 @@ Rules:
 - Reason ≤ 120 characters.
 - Confidence ≥ 0.6 means "I'm confident this matches the team's style"; below 0.6 means "best effort, vendor should review".`;
 
-  try {
-    const resp = await client.messages.create({
-      model: MODEL,
-      max_tokens: 800,
-      temperature: 0.4,
-      messages: [{ role: "user", content: prompt }],
-    });
-    const text = resp.content
-      .filter(b => b.type === "text")
-      .map(b => (b as { text: string }).text)
-      .join("")
-      .trim();
-    if (!text) return null;
+  // max_tokens 2048 (not the old 800): qwen is a reasoning model and ticket
+  // bodies run longer, so leave room for thinking + a multi-paragraph draft.
+  const text = await aistackChat(prompt, { maxTokens: 2048, temperature: 0.4, scope: "crumb/ai/ticket" });
+  if (!text) return null;
 
-    const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  try {
+    // Tolerate any preamble/reasoning leakage or code fences: grab the first
+    // {...} object, then strip stray fences.
+    const m = text.match(/\{[\s\S]*\}/);
+    const cleaned = (m ? m[0] : text).replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
     const parsed = JSON.parse(cleaned) as {
       title?: string;
       body?: string;
