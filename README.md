@@ -2,9 +2,18 @@
 
 > Follow the trail.
 
-Open-source B2B feedback platform that dramatically shortens the loop between your customers and your product team. Customers drop feedback inside your product; product and solutions teams triage it, reply, tie it to revenue, and ship, all in one continuous loop. Open source · cloud or self-hosted.
+**Crumb is the feedback loop for product teams.** Customers drop feedback without leaving your product. You triage it, tie it to the accounts and revenue behind it, ship, and tell them when it's done. One continuous loop, no spreadsheets and no screenshot-and-forget forms.
 
-This repo is **early**. The frontend dashboard and the start of the API + data model are in; widget, auth, Slack, and the docker self-host story for the dashboard itself come next.
+Built for product and solutions teams tired of watching feedback vanish into a black hole. Open source · cloud or self-hosted.
+
+## Why product teams use Crumb
+
+- **Capture in context, not in a form.** Customers send a bug, idea, or question from inside your app through an embedded widget, with their account and session already attached. No more "which workspace, which page, which build?"
+- **Prioritize by revenue, not by volume.** Every item is tied to an account and its ARR, so you see the dollars behind a request instead of a raw upvote count.
+- **Close the loop automatically.** Reply in-thread or move an item through your status flow, and the customer hears back, by email or in the widget. It's the step most feedback tools quietly skip.
+- **A roadmap customers can actually see.** Group feedback into initiatives, make them public, and let accounts follow Now / Next / Later and get notified when something they asked for ships.
+- **Ship to where engineering already lives.** Push an item to Linear, Jira, or GitHub as a ticket drafted by AI from the feedback plus your repo context, then sync status back.
+- **Let AI handle the triage grunt-work.** New feedback is auto-clustered into the right initiative, so your inbox starts organizing itself.
 
 ## See it in action
 
@@ -45,7 +54,7 @@ crumb/
 └── demos/              # Playwright → Remotion demo pipeline (GIFs, PNGs, video)
 ```
 
-Future: magic-link auth, Slack integration, dashboard Dockerfile for self-host.
+On the roadmap: two-way status sync with engineering trackers, multiple linked tickets per item, per-plan replay retention, and required signed-JWT widget identity.
 
 ## Run locally
 
@@ -298,7 +307,7 @@ To embed it in your own product:
         defer></script>
 ```
 
-(Auth is on the roadmap — the next version will require a signed JWT instead of trusting `data-*`.)
+(For trusted identity, pass a signed `data-user-jwt` instead of the plain `data-*` attributes; the API then trusts only the JWT's claims. Requiring the JWT by default is planned.)
 
 ### Public API
 
