@@ -16,7 +16,7 @@ jobs:
           version: 11.3.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: tsc --noEmit (dashboard + widget + db + ui)
@@ -41,7 +41,7 @@ jobs:
           version: 11.3.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: build community (strips ee/ overlay, stubs cloud SDKs)
@@ -80,7 +80,7 @@ jobs:
           version: 11.3.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: apply schema + seed

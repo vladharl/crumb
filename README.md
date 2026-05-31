@@ -58,7 +58,7 @@ On the roadmap: two-way status sync with engineering trackers, multiple linked t
 
 ## Run locally
 
-You need **Node 20+**, **pnpm 11+**, and **Docker** (for Postgres).
+You need **Node 22+**, **pnpm 11+**, and **Docker** (for Postgres).
 
 ```bash
 pnpm install
