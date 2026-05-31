@@ -143,7 +143,7 @@ function BrandingPreview({
           paddingBottom: 8, borderBottom: "var(--border)", marginBottom: 12,
         }}>
           <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--ink)", opacity: 0.55 }} />
-          <span className="text-2xs" style={{ color: "var(--mute)", letterSpacing: "0.05em" }}>northbeam.io / cohorts</span>
+          <span className="text-2xs" style={{ color: "var(--mute)", letterSpacing: "0.05em" }}>southbeam.io / cohorts</span>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>

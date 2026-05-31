@@ -9,8 +9,8 @@ import { resolve } from "node:path";
 //   1. Re-seed the docker Postgres to a known state. Without this, FB-N
 //      ids leak across runs and `nextItemSeq` collides with anything an
 //      earlier test created. The seed at `packages/db/src/seed.ts` is
-//      idempotent — it wipes then reinserts the Northbeam fixture.
-//   2. Create a session token for the seeded admin (`lina@northbeam.io`)
+//      idempotent — it wipes then reinserts the Southbeam fixture.
+//   2. Create a session token for the seeded admin (`lina@southbeam.io`)
 //      directly in the DB and persist it as a Playwright storageState.
 //      All tests then start signed-in via the `crumb_session` cookie,
 //      skipping the magic-link round-trip (login flow gets its own
@@ -35,8 +35,8 @@ export default async function globalSetup(): Promise<void> {
   exec("pnpm db:seed");
 
   // Look up the seeded admin's workspace + user id.
-  const wsId = psql("SELECT id FROM workspaces WHERE slug='northbeam' LIMIT 1");
-  const userId = psql("SELECT id FROM workspace_users WHERE email='lina@northbeam.io' AND workspace_id='" + wsId + "' LIMIT 1");
+  const wsId = psql("SELECT id FROM workspaces WHERE slug='southbeam' LIMIT 1");
+  const userId = psql("SELECT id FROM workspace_users WHERE email='lina@southbeam.io' AND workspace_id='" + wsId + "' LIMIT 1");
   if (!wsId || !userId) throw new Error("[e2e setup] seeded admin row not found");
 
   // Mint a 24h session token. The dashboard verifies sha256(cookieValue)

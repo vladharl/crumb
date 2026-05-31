@@ -13,7 +13,7 @@ test("widget submit creates a new item via /api/v1/items", async ({ page, reques
   const resp = await request.post("/api/v1/items", {
     headers: { "content-type": "application/json" },
     data: {
-      workspace_slug: "northbeam",
+      workspace_slug: "southbeam",
       account_user_email: `e2e+${Date.now()}@example.com`,
       account_user_name: "E2E Tester",
       account_name: "E2E Co",

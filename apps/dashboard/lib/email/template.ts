@@ -98,7 +98,7 @@ Didn't request this? You can safely ignore this email.`;
 // the widget in their product when they want to respond.
 
 export type ReplyNotificationVars = {
-  workspaceName: string;     // e.g. "Northbeam"
+  workspaceName: string;     // e.g. "Southbeam"
   vendorName: string;        // e.g. "Lina Rivers"
   itemShortId: string;       // e.g. "FB-247"
   itemTitle: string;

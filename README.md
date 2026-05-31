@@ -2,19 +2,35 @@
 
 > Follow the trail.
 
-Open-source B2B feedback platform. Customers drop feedback inside your product; you triage, reply, ship — all in one continuous loop. Self-host it, or use the paid hosted tier when it's ready.
+Open-source B2B feedback platform that dramatically shortens the loop between your customers and your product team. Customers drop feedback inside your product; product and solutions teams triage it, reply, tie it to revenue, and ship, all in one continuous loop. Open source · cloud or self-hosted.
 
 This repo is **early**. The frontend dashboard and the start of the API + data model are in; widget, auth, Slack, and the docker self-host story for the dashboard itself come next.
 
 ## See it in action
 
-![Triage a feedback thread, scoped and tied to revenue](docs/assets/gifs/inbox-triage.gif)
+Crumb shortens the feedback loop in three steps: from a customer's note to your roadmap to a shipped fix.
 
-| Feedback ↔ revenue | Roadmap | Integrations |
-| --- | --- | --- |
-| ![Accounts with ARR](docs/assets/screenshots/account-revenue-1-list.png) | ![Now / Next / Later board](docs/assets/screenshots/initiatives-1-board.png) | ![Slack, Linear, Jira, GitHub](docs/assets/screenshots/integrations-1-page.png) |
+### 1 · Your customer drops feedback in-product, and watches the roadmap
 
-These are generated from the seeded app, so they stay in sync with the UI. Regenerate them (GIFs, screenshots, and a landing-page video) with `pnpm --filter @crumb/demos all` — see [demos/README.md](demos/README.md). _(Images appear once generated and committed.)_
+A customer hits the embedded widget without leaving your app, shares an idea, and follows the public roadmap.
+
+![Customer submits feedback via the widget and sees the public roadmap](docs/assets/gifs/act1-customer.gif)
+
+### 2 · You reply and put it on the roadmap they can see
+
+The feedback lands in your inbox. You answer the customer, then flip the initiative public so every account can follow along.
+
+![Vendor replies in the thread and makes the initiative public on the roadmap](docs/assets/gifs/act2-vendor-loop.gif)
+
+### 3 · Prioritize by revenue, ship to engineering
+
+See the ARR behind each ask, then push it to Linear as a ticket drafted from the feedback and your GitHub repo context.
+
+![Vendor prioritizes by ARR and the feedback becomes a linked Linear ticket](docs/assets/gifs/act3-prioritize-ship.gif)
+
+> A polished 90-second cut of all three acts lives at `demos/out/landing.{mp4,webm}`.
+
+These are generated from the seeded app, so they stay in sync with the UI. Regenerate the GIFs, screenshots, and landing video with `pnpm --filter @crumb/demos all` (see [demos/README.md](demos/README.md)). _(Images appear once generated and committed.)_
 
 ## What's here
 
@@ -39,7 +55,7 @@ You need **Node 20+**, **pnpm 11+**, and **Docker** (for Postgres).
 pnpm install
 pnpm db:up         # boots Postgres 16 in docker on :5432
 pnpm db:push       # applies the schema
-pnpm db:seed       # populates one workspace (northbeam) with sample data
+pnpm db:seed       # populates one workspace (southbeam) with sample data
 pnpm widget:build  # builds the embed widget → apps/dashboard/public/widget.js
 cp apps/dashboard/.env.local.example apps/dashboard/.env.local
 pnpm dev           # → http://localhost:3000
@@ -47,7 +63,7 @@ pnpm dev           # → http://localhost:3000
 
 The dashboard requires login — there are two distinct first-run paths, pick one:
 - **Fresh / empty DB** (skip `pnpm db:seed`): open **http://localhost:3000**; with no users yet you're sent to `/onboard` to create the first workspace + admin.
-- **Seeded demo** (`pnpm db:seed`): log in at **http://localhost:3000/login** as a seeded admin (e.g. `lina@northbeam.io`) — the seed creates the `northbeam` workspace + sample data. Magic links go to whichever email provider is configured — by default that's stdout (read from the dev terminal or `docker compose logs dashboard`); set `CRUMB_EMAIL_PROVIDER=resend` for real delivery, see [Email delivery](#email-delivery). A 7-day session cookie is set; sign out clears it.
+- **Seeded demo** (`pnpm db:seed`): log in at **http://localhost:3000/login** as a seeded admin (e.g. `lina@southbeam.io`) — the seed creates the `southbeam` workspace + sample data. Magic links go to whichever email provider is configured — by default that's stdout (read from the dev terminal or `docker compose logs dashboard`); set `CRUMB_EMAIL_PROVIDER=resend` for real delivery, see [Email delivery](#email-delivery). A 7-day session cookie is set; sign out clears it.
 
 ### Self-host vs. Crumb Cloud
 
@@ -275,7 +291,7 @@ To embed it in your own product:
 
 ```html
 <script src="https://your-crumb-host/widget.js"
-        data-workspace="northbeam"
+        data-workspace="southbeam"
         data-user-email="user@theircompany.com"
         data-user-name="User Name"
         data-account-name="Their Company"
@@ -303,7 +319,7 @@ The embedded widget will POST to `/api/v1/items`. You can hit it manually right 
 curl -X POST http://localhost:3000/api/v1/items \
   -H "Content-Type: application/json" \
   -d '{
-    "workspace_slug": "northbeam",
+    "workspace_slug": "southbeam",
     "account_user_email": "you@yourco.com",
     "account_user_name": "You",
     "account_name": "Your Co",
@@ -348,7 +364,7 @@ Override anything via env or a `.env` file at the repo root:
 | `POSTGRES_DB`          | `crumb`        | Postgres database name                                      |
 | `POSTGRES_PORT`        | `5432`         | Host port for Postgres                                      |
 | `DASHBOARD_PORT`       | `3000`         | Host port for the dashboard                                 |
-| `CRUMB_WORKSPACE_SLUG` | `northbeam`    | Workspace the dashboard renders (until auth lands)          |
+| `CRUMB_WORKSPACE_SLUG` | `southbeam`    | Workspace the dashboard renders (until auth lands)          |
 | `CRUMB_SKIP_MIGRATIONS`| _(unset)_      | Set to `1` to skip the migrate step on container startup    |
 | `CRUMB_EDITION`        | `community`    | **Build arg** (not runtime): `community` self-host build or `cloud`. See [Self-host vs. Crumb Cloud](#self-host-vs-crumb-cloud) |
 

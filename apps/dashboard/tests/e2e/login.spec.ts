@@ -12,7 +12,7 @@ test("login form posts email + lands on the check-your-email page", async ({ pag
   await page.goto("/login");
   await expect(page.getByRole("heading", { name: /sign in|log in|welcome/i })).toBeVisible();
 
-  await page.getByLabel(/email/i).fill("lina@northbeam.io");
+  await page.getByLabel(/email/i).fill("lina@southbeam.io");
   await page.getByRole("button", { name: /send|magic link|continue|email me/i }).click();
 
   // Either redirects to /login/check or renders an inline confirmation.

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Northbeam · Mock host product (Crumb widget demo)</title>
+  <title>Southbeam · Mock host product (Crumb widget demo)</title>
   <style>
     :root {
       --ink: #16212E;
@@ -105,7 +105,7 @@
 <body>
   <div class="topbar">
     <div class="brand"></div>
-    <div class="name">Northbeam</div>
+    <div class="name">Southbeam</div>
     <nav>
       <a class="active">Cohorts</a>
       <a>Funnels</a>
@@ -152,14 +152,14 @@
   <!-- The Crumb embed. In real usage this points at your Crumb host.
        This demo reads identity from ?ws=, ?email=, ?name=, ?account= so
        you can point it at whichever workspace exists locally. Defaults
-       match the seed (`pnpm db:seed` creates 'northbeam' + Acme Co). -->
+       match the seed (`pnpm db:seed` creates 'southbeam' + Acme Co). -->
   <script>
     (function () {
       var q = new URLSearchParams(location.search);
       var s = document.createElement('script');
       s.src = '/widget.js';
       s.defer = true;
-      s.dataset.workspace   = q.get('ws')      || 'northbeam';
+      s.dataset.workspace   = q.get('ws')      || 'southbeam';
       s.dataset.userEmail   = q.get('email')   || 'maya@acme.co';
       s.dataset.userName    = q.get('name')    || 'Maya';
       s.dataset.accountName = q.get('account') || 'Acme Co';

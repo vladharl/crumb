@@ -10,10 +10,10 @@ function nowSec(): number {
 describe("lib/jwt", () => {
   it("signs + verifies a valid identity JWT round-trip", () => {
     const claims = {
-      iss: "northbeam",
-      sub: "lina@northbeam.io",
+      iss: "southbeam",
+      sub: "lina@southbeam.io",
       name: "Lina Hsu",
-      account_name: "Northbeam",
+      account_name: "Southbeam",
       exp: nowSec() + 3600,
       iat: nowSec(),
     };
@@ -21,17 +21,17 @@ describe("lib/jwt", () => {
     const r = verify(token, SECRET);
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.claims.iss).toBe("northbeam");
-      expect(r.claims.sub).toBe("lina@northbeam.io");
-      expect(r.claims.account_name).toBe("Northbeam");
+      expect(r.claims.iss).toBe("southbeam");
+      expect(r.claims.sub).toBe("lina@southbeam.io");
+      expect(r.claims.account_name).toBe("Southbeam");
     }
   });
 
   it("rejects a token whose signature was tampered with", () => {
     const token = sign({
-      iss: "northbeam",
-      sub: "lina@northbeam.io",
-      account_name: "Northbeam",
+      iss: "southbeam",
+      sub: "lina@southbeam.io",
+      account_name: "Southbeam",
       exp: nowSec() + 3600,
     }, SECRET);
     // Flip the first character of the signature segment. Tampering the
@@ -49,9 +49,9 @@ describe("lib/jwt", () => {
 
   it("rejects an expired token (past exp + skew)", () => {
     const token = sign({
-      iss: "northbeam",
-      sub: "lina@northbeam.io",
-      account_name: "Northbeam",
+      iss: "southbeam",
+      sub: "lina@southbeam.io",
+      account_name: "Southbeam",
       exp: nowSec() - 120, // 2 minutes ago — well past default 30s skew
     }, SECRET);
     const r = verify(token, SECRET);
@@ -61,9 +61,9 @@ describe("lib/jwt", () => {
 
   it("rejects a token signed with a different secret", () => {
     const token = sign({
-      iss: "northbeam",
-      sub: "lina@northbeam.io",
-      account_name: "Northbeam",
+      iss: "southbeam",
+      sub: "lina@southbeam.io",
+      account_name: "Southbeam",
       exp: nowSec() + 3600,
     }, SECRET);
     const r = verify(token, "other-secret");
@@ -79,9 +79,9 @@ describe("lib/jwt", () => {
 
   it("rejects a token issued in the future (beyond skew)", () => {
     const token = sign({
-      iss: "northbeam",
-      sub: "lina@northbeam.io",
-      account_name: "Northbeam",
+      iss: "southbeam",
+      sub: "lina@southbeam.io",
+      account_name: "Southbeam",
       iat: nowSec() + 600, // 10 min in the future
       exp: nowSec() + 4200,
     }, SECRET);
@@ -93,9 +93,9 @@ describe("lib/jwt", () => {
   it("rejects a token whose lifetime exceeds the max TTL", () => {
     const iat = nowSec();
     const token = sign({
-      iss: "northbeam",
-      sub: "lina@northbeam.io",
-      account_name: "Northbeam",
+      iss: "southbeam",
+      sub: "lina@southbeam.io",
+      account_name: "Southbeam",
       iat,
       exp: iat + 30 * 24 * 60 * 60, // 30 days — over the 7-day cap
     }, SECRET);
@@ -107,9 +107,9 @@ describe("lib/jwt", () => {
   it("accepts a normal short-lived token with iat", () => {
     const iat = nowSec();
     const token = sign({
-      iss: "northbeam",
-      sub: "lina@northbeam.io",
-      account_name: "Northbeam",
+      iss: "southbeam",
+      sub: "lina@southbeam.io",
+      account_name: "Southbeam",
       iat,
       exp: iat + 3600,
     }, SECRET);
@@ -118,9 +118,9 @@ describe("lib/jwt", () => {
 
   it("accepts a short-lived token with no iat", () => {
     const token = sign({
-      iss: "northbeam",
-      sub: "lina@northbeam.io",
-      account_name: "Northbeam",
+      iss: "southbeam",
+      sub: "lina@southbeam.io",
+      account_name: "Southbeam",
       exp: nowSec() + 3600, // 1h, within the cap → fine even without iat
     }, SECRET);
     expect(verify(token, SECRET).ok).toBe(true);
@@ -128,9 +128,9 @@ describe("lib/jwt", () => {
 
   it("rejects a far-future token even when iat is absent (no TTL bypass)", () => {
     const token = sign({
-      iss: "northbeam",
-      sub: "lina@northbeam.io",
-      account_name: "Northbeam",
+      iss: "southbeam",
+      sub: "lina@southbeam.io",
+      account_name: "Southbeam",
       exp: nowSec() + 365 * 24 * 60 * 60, // exp far out, no iat → bounded vs now
     }, SECRET);
     const r = verify(token, SECRET);

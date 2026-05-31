@@ -1,0 +1,4 @@
+# raw capture intermediates — final deliverables live in ../docs/assets (tracked)
+public/clips/
+out/
+node_modules/

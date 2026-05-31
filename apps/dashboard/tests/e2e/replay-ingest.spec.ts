@@ -20,7 +20,7 @@ test.describe("public ingest (unauthenticated)", () => {
     const res = await request.post(`/api/v1/replay-sessions/${token}/chunks`, {
       headers: { "content-type": "application/json" },
       data: {
-        workspace_slug: "northbeam",
+        workspace_slug: "southbeam",
         sequence: 0,
         started_at: new Date().toISOString(),
         ended_at: new Date().toISOString(),

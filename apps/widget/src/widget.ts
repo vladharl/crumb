@@ -1,7 +1,7 @@
 // Crumb embed widget — vanilla TS, shadow DOM, no framework.
 // Loaded via:
 //   <script src="https://your-crumb-host/widget.js"
-//           data-workspace="northbeam"
+//           data-workspace="southbeam"
 //           data-user-email="maya@acme.co"
 //           data-user-name="Maya"
 //           data-account-name="Acme Co"

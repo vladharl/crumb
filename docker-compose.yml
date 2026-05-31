@@ -37,7 +37,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-crumb}:${POSTGRES_PASSWORD:-crumb}@postgres:5432/${POSTGRES_DB:-crumb}
-      CRUMB_WORKSPACE_SLUG: ${CRUMB_WORKSPACE_SLUG:-northbeam}
+      CRUMB_WORKSPACE_SLUG: ${CRUMB_WORKSPACE_SLUG:-southbeam}
       NODE_ENV: production
       # Runtime tier. Self-host keeps AI / billing / session-replay off;
       # integrations still work via the BYO OAuth-app creds below. Only set

@@ -20,7 +20,7 @@ test("/roadmap redirects to the Initiatives board", async ({ page }) => {
 });
 
 test("public roadmap API returns the grouped shape", async ({ page }) => {
-  const res = await page.request.get("/api/v1/roadmap?workspace=northbeam&email=maya@acme.co");
+  const res = await page.request.get("/api/v1/roadmap?workspace=southbeam&email=maya@acme.co");
   expect(res.status()).toBe(200);
   const body = await res.json();
   expect(body.columns).toHaveProperty("now");
