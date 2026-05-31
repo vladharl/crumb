@@ -133,7 +133,7 @@ async function main() {
 
   const now = Date.now();
   let seq = 247; // align with the design fixtures starting at FB-247 going down
-  const insertedItems = [];
+  const insertedItems: (typeof items.$inferSelect)[] = [];
   for (const it of itemSeeds) {
     const submitter = pick(it.submitter, it.acct);
     if (!submitter) throw new Error(`Missing submitter ${it.submitter} in ${it.acct}`);
