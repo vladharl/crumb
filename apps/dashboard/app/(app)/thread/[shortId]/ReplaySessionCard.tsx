@@ -12,6 +12,16 @@ export type ReplayCardData = {
   userAgent: string | null;
   viewportW: number | null;
   viewportH: number | null;
+  screenW: number | null;
+  screenH: number | null;
+  deviceType: string | null;
+  browserName: string | null;
+  browserVersion: string | null;
+  osName: string | null;
+  osVersion: string | null;
+  callerIp: string | null;
+  geoCountry: string | null;
+  geoCity: string | null;
   eventCount: number;
   sizeBytes: number;
   durationMs: number;
@@ -56,6 +66,13 @@ export function ReplaySessionCard({ replay }: { replay: ReplayCardData }) {
     }
   } catch { /* leave as-is */ }
 
+  // Compact device + location line (e.g. "Chrome · macOS · US").
+  const deviceLine = [
+    replay.browserName,
+    replay.osName,
+    [replay.geoCity, replay.geoCountry].filter(Boolean).join(", ") || null,
+  ].filter(Boolean).join(" · ");
+
   return (
     <>
       <Card>
@@ -71,6 +88,11 @@ export function ReplaySessionCard({ replay }: { replay: ReplayCardData }) {
               on {displayUrl}
             </div>
           )}
+          {deviceLine && (
+            <div className="text-xs muted truncate" title={replay.userAgent ?? undefined}>
+              {deviceLine}
+            </div>
+          )}
           <Btn variant="primary" onClick={() => setOpen(true)} disabled={replay.chunks.length === 0}>
             <PlayGlyph />
             <span style={{ marginLeft: 6 }}>Watch replay</span>
@@ -84,6 +106,18 @@ export function ReplaySessionCard({ replay }: { replay: ReplayCardData }) {
           durationMs={replay.durationMs}
           viewportW={replay.viewportW}
           viewportH={replay.viewportH}
+          details={{
+            deviceType: replay.deviceType,
+            browserName: replay.browserName,
+            browserVersion: replay.browserVersion,
+            osName: replay.osName,
+            osVersion: replay.osVersion,
+            screenW: replay.screenW,
+            screenH: replay.screenH,
+            callerIp: replay.callerIp,
+            geoCountry: replay.geoCountry,
+            geoCity: replay.geoCity,
+          }}
           onClose={() => setOpen(false)}
         />
       )}

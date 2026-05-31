@@ -18,6 +18,11 @@ packages/db/dist
 apps/dashboard/app/api/v1/stripe/webhook/
 apps/dashboard/app/api/v1/replay-sessions/
 apps/dashboard/app/(app)/settings/billing/
+# Local file-storage backend (replay chunks, attachments) — the default
+# CRUMB_STORAGE_DIR when CRUMB_STORAGE_PROVIDER=local (dev / single-instance).
+apps/dashboard/.crumb-uploads/
+# Playwright MCP scratch (snapshots, console logs, screenshots).
+.playwright-mcp/
 .DS_Store
 .pnpm-store
 coverage

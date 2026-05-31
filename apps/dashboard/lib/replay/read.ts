@@ -14,6 +14,16 @@ export type ReplayManifest = {
   userAgent: string | null;
   viewportW: number | null;
   viewportH: number | null;
+  screenW: number | null;
+  screenH: number | null;
+  deviceType: string | null;
+  browserName: string | null;
+  browserVersion: string | null;
+  osName: string | null;
+  osVersion: string | null;
+  callerIp: string | null;
+  geoCountry: string | null;
+  geoCity: string | null;
   eventCount: number;
   sizeBytes: number;
   durationMs: number;
@@ -62,6 +72,16 @@ export async function getManifest(
     userAgent: session.userAgent,
     viewportW: session.viewportW,
     viewportH: session.viewportH,
+    screenW: session.screenW,
+    screenH: session.screenH,
+    deviceType: session.deviceType,
+    browserName: session.browserName,
+    browserVersion: session.browserVersion,
+    osName: session.osName,
+    osVersion: session.osVersion,
+    callerIp: session.callerIp,
+    geoCountry: session.geoCountry,
+    geoCity: session.geoCity,
     eventCount: session.eventCount,
     sizeBytes: session.sizeBytes,
     durationMs,

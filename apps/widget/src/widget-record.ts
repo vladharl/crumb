@@ -21,6 +21,11 @@ const MAX_DURATION_MS = 30 * 60 * 1000;  // 30 minutes
 const FLUSH_EVENT_THRESHOLD = 50;
 const FLUSH_MS = 5_000;
 
+// Network capture: cap per-body size + total count so the network stream can't
+// blow past the per-session byte/event caps on its own.
+const MAX_NET_BODY = 2048;
+const MAX_NET_EVENTS = 200;
+
 type State = {
   opts: StartOpts;
   stopRecorder: (() => void) | null;
@@ -33,6 +38,8 @@ type State = {
   flushTimer: ReturnType<typeof setTimeout> | null;
   bufferStartedAt: string | null;
   stopped: boolean;
+  netCount: number;
+  restoreNetwork: (() => void) | null;
 };
 
 let state: State | null = null;
@@ -90,6 +97,8 @@ async function flush(final = false): Promise<void> {
     user_agent: navigator.userAgent,
     viewport_w: window.innerWidth,
     viewport_h: window.innerHeight,
+    screen_w: screen.width,
+    screen_h: screen.height,
     events,
   });
 
@@ -152,6 +161,139 @@ function emit(e: eventWithTime) {
   }
 }
 
+// ─── network capture ─────────────────────────────────────
+// Patches fetch + XHR to record one rrweb custom event per request (method,
+// url, status, timing, and truncated+redacted req/resp bodies). Events ride
+// the same rrweb stream via addCustomEvent, so they chunk/store/align on the
+// timeline for free. The player extracts them by `data.tag === "network"`.
+
+type NetEvent = {
+  method: string;
+  url: string;
+  status: number;
+  durationMs: number;
+  reqBody?: string;
+  respBody?: string;
+  reqBytes?: number;
+  respBytes?: number;
+  error?: string;
+};
+
+function clip(s: string): string {
+  return s.length > MAX_NET_BODY ? s.slice(0, MAX_NET_BODY) + "…[truncated]" : s;
+}
+
+// Redact obvious secret-looking JSON fields. Bodies are the main exposure
+// (headers aren't captured); this catches the common credential shapes.
+function redact(s: string): string {
+  return s.replace(
+    /("(?:password|token|secret|authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|cookie)"\s*:\s*)"[^"]*"/gi,
+    '$1"[redacted]"',
+  );
+}
+
+function bodyToText(body: unknown): { text?: string; bytes?: number } {
+  if (body == null) return {};
+  if (typeof body === "string") return { text: clip(redact(body)), bytes: body.length };
+  if (body instanceof URLSearchParams) { const s = body.toString(); return { text: clip(redact(s)), bytes: s.length }; }
+  const name = (body as { constructor?: { name?: string } })?.constructor?.name;
+  return { text: `[${name ?? "binary"}]` };
+}
+
+function isTextContentType(ct: string): boolean {
+  return /json|text|xml|form-urlencoded|javascript/i.test(ct);
+}
+
+function recordNet(p: NetEvent): void {
+  if (!state || state.stopped) return;
+  if (state.netCount >= MAX_NET_EVENTS) return;
+  state.netCount += 1;
+  try { record.addCustomEvent("network", p); } catch { /* recorder gone */ }
+}
+
+type XhrMeta = { method: string; url: string; started: number; req: { text?: string; bytes?: number } };
+interface XhrWithMeta extends XMLHttpRequest { __crumbNet?: XhrMeta }
+
+function patchNetwork(apiBase: string): () => void {
+  const skip = (u: string): boolean => !u || u.startsWith(apiBase) || /^(data|blob):/i.test(u);
+
+  const origFetch = window.fetch;
+  window.fetch = function (this: unknown, ...args: Parameters<typeof fetch>): Promise<Response> {
+    const [input, init] = args;
+    let url = ""; let method = "GET";
+    try {
+      url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      // `||` (not `??`) so an empty/absent method falls through to GET.
+      method = (init?.method || (typeof input !== "string" && !(input instanceof URL) ? input.method : "") || "GET").toUpperCase();
+    } catch { /* leave defaults */ }
+    if (skip(url)) return origFetch.apply(this, args);
+    const started = Date.now();
+    const req = bodyToText(init?.body);
+    return origFetch.apply(this, args).then(
+      (res) => {
+        const durationMs = Date.now() - started;
+        // Read a clone in the background so we never delay the caller's response.
+        const ct = res.headers.get("content-type") ?? "";
+        if (isTextContentType(ct)) {
+          res.clone().text().then(
+            t => recordNet({ method, url, status: res.status, durationMs, reqBody: req.text, reqBytes: req.bytes, respBody: clip(redact(t)), respBytes: t.length }),
+            () => recordNet({ method, url, status: res.status, durationMs, reqBody: req.text, reqBytes: req.bytes }),
+          );
+        } else {
+          recordNet({ method, url, status: res.status, durationMs, reqBody: req.text, reqBytes: req.bytes });
+        }
+        return res;
+      },
+      (err: unknown) => {
+        recordNet({ method, url, status: 0, durationMs: Date.now() - started, reqBody: req.text, reqBytes: req.bytes, error: err instanceof Error ? err.message : String(err) });
+        throw err;
+      },
+    );
+  };
+
+  // Cast the assignments: XHR.open/send are overloaded, and a wrapper can't
+  // structurally satisfy both overloads — so we type the wrapper loosely and
+  // assert it back to the prototype's type.
+  const origOpen = XMLHttpRequest.prototype.open as (...a: unknown[]) => void;
+  const origSend = XMLHttpRequest.prototype.send as (...a: unknown[]) => void;
+  XMLHttpRequest.prototype.open = function (this: XhrWithMeta, ...args: unknown[]) {
+    const url = args[1];
+    this.__crumbNet = {
+      method: String(args[0] ?? "GET").toUpperCase(),
+      url: typeof url === "string" ? url : url instanceof URL ? url.href : String(url),
+      started: 0,
+      req: {},
+    };
+    return origOpen.apply(this, args);
+  } as typeof XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.send = function (this: XhrWithMeta, ...args: unknown[]) {
+    const body = args[0] as Document | XMLHttpRequestBodyInit | null | undefined;
+    const meta = this.__crumbNet;
+    if (meta && !skip(meta.url)) {
+      meta.started = Date.now();
+      meta.req = bodyToText(body);
+      this.addEventListener("loadend", () => {
+        let respBody: string | undefined; let respBytes: number | undefined;
+        try {
+          const ct = this.getResponseHeader("content-type") ?? "";
+          if ((this.responseType === "" || this.responseType === "text") && isTextContentType(ct)) {
+            const t = String(this.responseText ?? "");
+            respBody = clip(redact(t)); respBytes = t.length;
+          }
+        } catch { /* cross-origin response text may throw */ }
+        recordNet({ method: meta.method, url: meta.url, status: this.status, durationMs: Date.now() - meta.started, reqBody: meta.req.text, reqBytes: meta.req.bytes, respBody, respBytes });
+      });
+    }
+    return origSend.apply(this, args);
+  } as typeof XMLHttpRequest.prototype.send;
+
+  return () => {
+    window.fetch = origFetch;
+    XMLHttpRequest.prototype.open = origOpen as typeof XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.send = origSend as typeof XMLHttpRequest.prototype.send;
+  };
+}
+
 function start(opts: StartOpts) {
   if (state) return; // already started in this tab
   state = {
@@ -166,6 +308,8 @@ function start(opts: StartOpts) {
     flushTimer: null,
     bufferStartedAt: null,
     stopped: false,
+    netCount: 0,
+    restoreNetwork: null,
   };
 
   // rrweb config:
@@ -185,6 +329,9 @@ function start(opts: StartOpts) {
   });
   state.stopRecorder = stopRecorder ?? null;
 
+  // Capture network calls (excluding our own chunk POSTs to apiBase).
+  try { state.restoreNetwork = patchNetwork(opts.apiBase); } catch { state.restoreNetwork = null; }
+
   // Flush opportunities: tab hidden, page hide, before unload. `pagehide`
   // is the last reliable signal before navigation; we use sendBeacon there
   // because regular fetch may be canceled mid-flight on most browsers.
@@ -200,6 +347,8 @@ function stop() {
   clearFlushTimer();
   try { state.stopRecorder?.(); } catch { /* ignore */ }
   state.stopRecorder = null;
+  try { state.restoreNetwork?.(); } catch { /* ignore */ }
+  state.restoreNetwork = null;
 }
 
 function getSessionToken(): string | null {

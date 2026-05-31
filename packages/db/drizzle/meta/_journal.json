@@ -43,6 +43,13 @@
       "when": 1781000004000,
       "tag": "0005_mysterious_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781000005000,
+      "tag": "0006_bouncy_selene",
+      "breakpoints": true
     }
   ]
 }

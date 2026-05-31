@@ -24,8 +24,22 @@ type ChunkBody = {
   user_agent?: string;
   viewport_w?: number;
   viewport_h?: number;
+  screen_w?: number;
+  screen_h?: number;
   events?: unknown[];
 };
+
+// Geo from edge-proxy headers when present (Cloudflare / Vercel). Null when
+// there's no such proxy in front — e.g. a single self-host box. We never
+// trust geo from the request body.
+function geoFromHeaders(req: Request): { country: string | null; city: string | null } {
+  const h = req.headers;
+  const rawCountry = (h.get("cf-ipcountry") ?? h.get("x-vercel-ip-country") ?? "").trim().toUpperCase();
+  const country = rawCountry && rawCountry.length === 2 && rawCountry !== "XX" ? rawCountry : null;
+  let city = (h.get("x-vercel-ip-city") ?? h.get("cf-ipcity") ?? "").trim();
+  try { city = city ? decodeURIComponent(city) : ""; } catch { /* keep raw */ }
+  return { country, city: city || null };
+}
 
 // The URL slot is named [id] (not [token]) because Next requires a single
 // slug name per path depth: the sibling vendor-side reads under
@@ -73,6 +87,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const wsRl = await checkRateLimitAsync(`replay:ws:${payload.workspace_slug}`, { capacity: 600, refillPerSec: 20 });
   if (!wsRl.ok) return tooManyRequests(wsRl.retryAfterSeconds);
 
+  const callerIpRaw = callerIpFromRequest(req);
+  const geo = geoFromHeaders(req);
   const r = await recordChunk({
     sessionToken,
     workspaceSlug: payload.workspace_slug,
@@ -84,6 +100,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     userAgent: payload.user_agent ?? null,
     viewportW: payload.viewport_w ?? null,
     viewportH: payload.viewport_h ?? null,
+    screenW: payload.screen_w ?? null,
+    screenH: payload.screen_h ?? null,
+    callerIp: callerIpRaw && callerIpRaw !== "anon" ? callerIpRaw : null,
+    geoCountry: geo.country,
+    geoCity: geo.city,
   });
 
   if (!r.ok) return fail(r.status, r.error);

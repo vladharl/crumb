@@ -345,6 +345,22 @@ export const replaySessions = pgTable("replay_sessions", {
   userAgent: text("user_agent"),
   viewportW: integer("viewport_w"),
   viewportH: integer("viewport_h"),
+  // Physical screen size (vs. the layout viewport above) — helps tell a
+  // zoomed/small-window session from a genuinely small device.
+  screenW: integer("screen_w"),
+  screenH: integer("screen_h"),
+  // Session context, derived server-side on the first chunk. callerIp comes
+  // from the request (x-forwarded-for); geo is read from proxy headers when
+  // present (Cloudflare / Vercel) — null when none. device/browser/os are
+  // parsed from userAgent (lib/replay/ua.ts).
+  callerIp: text("caller_ip"),
+  geoCountry: varchar("geo_country", { length: 2 }),
+  geoCity: text("geo_city"),
+  deviceType: varchar("device_type", { length: 16 }),
+  browserName: varchar("browser_name", { length: 32 }),
+  browserVersion: varchar("browser_version", { length: 32 }),
+  osName: varchar("os_name", { length: 32 }),
+  osVersion: varchar("os_version", { length: 32 }),
   // Running totals — updated on each chunk insert. The server enforces
   // the caps against these.
   eventCount: integer("event_count").notNull().default(0),

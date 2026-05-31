@@ -4,6 +4,7 @@ import { db, replaySessions, replayChunks, workspaces } from "@crumb/db";
 import { newStorageKey, putBytes } from "@/lib/storage";
 import { hasFeature } from "@/lib/entitlements";
 import { checkReplayBytesCap, incrementUsage } from "@/lib/usage";
+import { parseUserAgent } from "@/lib/replay/ua";
 
 // Hard caps. Keep storage cost bounded; the recorder enforces matching
 // caps client-side so well-behaved widgets stop before the server has to
@@ -23,6 +24,12 @@ export type ChunkInput = {
   userAgent?: string | null;
   viewportW?: number | null;
   viewportH?: number | null;
+  screenW?: number | null;
+  screenH?: number | null;
+  // Derived server-side from the request (never trusted from the body).
+  callerIp?: string | null;
+  geoCountry?: string | null;
+  geoCity?: string | null;
 };
 
 export type ChunkResult =
@@ -78,6 +85,9 @@ export async function recordChunk(input: ChunkInput): Promise<ChunkResult> {
     .limit(1);
 
   if (!session) {
+    // Enrich once, on session creation: parse the UA into device/browser/os
+    // and stamp the request-derived IP + geo. Later chunks don't touch these.
+    const ua = parseUserAgent(input.userAgent);
     const [created] = await db.insert(replaySessions).values({
       workspaceId: ws.id,
       sessionToken: input.sessionToken,
@@ -86,6 +96,16 @@ export async function recordChunk(input: ChunkInput): Promise<ChunkResult> {
       userAgent: input.userAgent ?? null,
       viewportW: input.viewportW ?? null,
       viewportH: input.viewportH ?? null,
+      screenW: input.screenW ?? null,
+      screenH: input.screenH ?? null,
+      callerIp: input.callerIp ?? null,
+      geoCountry: input.geoCountry ?? null,
+      geoCity: input.geoCity ?? null,
+      deviceType: ua.deviceType,
+      browserName: ua.browserName,
+      browserVersion: ua.browserVersion,
+      osName: ua.osName,
+      osVersion: ua.osVersion,
     }).returning({
       id: replaySessions.id,
       startedAt: replaySessions.startedAt,

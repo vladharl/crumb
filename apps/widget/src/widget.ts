@@ -245,6 +245,21 @@ function getOrCreateSessionToken(): string {
   return token;
 }
 
+// Recording is consent-gated: we never record until the customer explicitly
+// opts in (a checkbox in the compose form). Consent is remembered per-tab so a
+// reload mid-session keeps recording without re-asking. Same sessionStorage
+// scope as the replay token above.
+const CONSENT_KEY = "crumb_replay_consent";
+function hasRecordConsent(): boolean {
+  try { return sessionStorage.getItem(CONSENT_KEY) === "1"; } catch { return false; }
+}
+function writeRecordConsent(on: boolean): void {
+  try {
+    if (on) sessionStorage.setItem(CONSENT_KEY, "1");
+    else sessionStorage.removeItem(CONSENT_KEY);
+  } catch { /* sessionStorage may be blocked; recording just won't persist */ }
+}
+
 let recorderInjected = false;
 function ensureRecorder(apiBase: string, workspaceSlug: string, sessionToken: string) {
   if (recorderInjected) return;
@@ -1070,6 +1085,15 @@ function init(config: Config) {
           <textarea class="field" data-act="body" placeholder="Anything else we should know?"></textarea>
         </div>
 
+        ${me?.workspace.session_record_enabled ? `
+        <label data-act="record-consent-row" style="display:flex;gap:8px;align-items:flex-start;margin-top:2px;cursor:pointer">
+          <input type="checkbox" data-act="record-consent" ${hasRecordConsent() ? "checked" : ""} style="margin-top:2px;flex:none" />
+          <span style="display:flex;flex-direction:column;gap:2px">
+            <span style="font-size:13px;font-weight:600">Record my session to help us reproduce this</span>
+            <span style="font-size:11px;opacity:.65;line-height:1.45">Captures your actions and network requests on this page so the team can debug. What you type is hidden. You can turn this off anytime.</span>
+          </span>
+        </label>` : ""}
+
         ${err ? `<div class="err">${escapeHtml(err)}</div>` : ""}
       </div>
       <div class="foot">
@@ -1286,6 +1310,15 @@ function init(config: Config) {
       submitState = { kind: "idle" };
       return;
     }
+    if (act === "record-consent") {
+      // Customer-triggered recording. Checking the box starts rrweb now (the
+      // session_token links to whatever they submit); unchecking stops it.
+      const on = (target as HTMLInputElement).checked;
+      writeRecordConsent(on);
+      if (on) ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken());
+      else { try { window.__crumbRecord__?.stop(); } catch { /* ignore */ } }
+      return;
+    }
     if (act === "submit" && view.kind === "compose") {
       submitNew(view);
       return;
@@ -1378,7 +1411,10 @@ function init(config: Config) {
         position: me.workspace.position,
         name: me.workspace.name,
       });
-      if (me.workspace.session_record_enabled) {
+      // Consent-gated: only (re)start recording if the customer already opted
+      // in earlier this tab. A fresh visitor records nothing until they tick
+      // the box in the compose form.
+      if (me.workspace.session_record_enabled && hasRecordConsent()) {
         ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken());
       }
     }
