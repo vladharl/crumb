@@ -152,7 +152,7 @@ export async function disconnectSlack(): Promise<{ ok: true } | { ok: false; err
     .where(eq(workspaceUsers.workspaceId, workspace.id));
 
   revalidatePath("/settings/integrations");
-  revalidatePath("/notifications");
+  revalidatePath("/settings/notifications");
   return { ok: true };
 }
 

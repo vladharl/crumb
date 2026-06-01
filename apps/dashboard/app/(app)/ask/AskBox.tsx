@@ -4,36 +4,31 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { Btn, Card, Ic, Pill } from "@crumb/ui";
 
-type Mode = "feedback" | "usage";
-
-const EXAMPLES: Record<Mode, string[]> = {
-  feedback: [
-    "What do enterprise accounts want before renewal?",
-    "Which bugs are blocking the most customers?",
-    "What integrations are people asking for?",
-  ],
-  usage: [
-    "How many enterprise accounts used export last week?",
-    "How many accounts were active in the last 30 days?",
-    "Is adoption of the new dashboard trending up?",
-  ],
-};
+// One mixed list — the server auto-routes feedback vs usage questions.
+const EXAMPLES: string[] = [
+  "What do enterprise accounts want before renewal?",
+  "Which bugs are blocking the most customers?",
+  "How many accounts were active in the last 30 days?",
+  "What integrations are people asking for?",
+  "Is adoption of the new dashboard trending up?",
+];
 
 function errText(code: string | undefined, status: number): string {
   switch (code) {
     case "ai_cap_reached": return "You've reached this month's AI limit.";
     case "no_data":        return "There's no feedback to search yet.";
     case "not_entitled":   return "AI features aren't enabled on this workspace.";
-    case "unclear":        return "Couldn't map that to a usage metric — try naming a tracked event, e.g. \"how many accounts used export last week?\"";
+    case "unclear":        return "Couldn't map that to a usage metric. Try naming a tracked event, e.g. \"how many accounts used export last week?\"";
     case "embed_failed":
-    case "answer_failed":  return "Couldn't generate an answer — try rephrasing.";
+    case "answer_failed":  return "Couldn't generate an answer. Try rephrasing.";
     default:               return status === 404 ? "Ask isn't available on this deployment." : "Something went wrong. Try again.";
   }
 }
 
 export function AskBox({ usageEnabled = false }: { usageEnabled?: boolean }) {
+  // usageEnabled retained for API compatibility; routing is now server-side.
+  void usageEnabled;
   const [q, setQ] = useState("");
-  const [mode, setMode] = useState<Mode>("feedback");
   const [pending, start] = useTransition();
   const [answer, setAnswer] = useState<string | null>(null);
   const [citations, setCitations] = useState<{ shortId: string; title: string }[]>([]);
@@ -53,7 +48,7 @@ export function AskBox({ usageEnabled = false }: { usageEnabled?: boolean }) {
         const res = await fetch("/api/v1/ask", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ question: trimmed, mode }),
+          body: JSON.stringify({ question: trimmed }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -72,25 +67,13 @@ export function AskBox({ usageEnabled = false }: { usageEnabled?: boolean }) {
     <div className="col gap-4">
       <Card>
         <div className="card-body col gap-3">
-          {usageEnabled && (
-            <div className="seg" style={{ alignSelf: "flex-start" }}>
-              {([
-                { k: "feedback", label: "Feedback" },
-                { k: "usage", label: "Usage" },
-              ] as const).map(({ k, label }) => (
-                <button key={k} aria-selected={mode === k} onClick={() => { setMode(k); setAnswer(null); setError(null); }}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
           <div className="row gap-2 center" style={{
             border: "var(--border)", borderRadius: "var(--r-sm)", padding: "8px 12px",
           }}>
             <Ic.sparkle style={{ width: 14, height: 14, color: "var(--accent-deep)", flexShrink: 0 }} />
             <input
               className="input"
-              placeholder={mode === "usage" ? "Ask about product usage…" : "Ask anything about your feedback…"}
+              placeholder="Ask anything about your feedback or usage…"
               value={q}
               onChange={e => setQ(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") ask(q); }}
@@ -102,7 +85,7 @@ export function AskBox({ usageEnabled = false }: { usageEnabled?: boolean }) {
             </Btn>
           </div>
           <div className="row gap-2" style={{ flexWrap: "wrap" }}>
-            {EXAMPLES[mode].map(ex => (
+            {EXAMPLES.map(ex => (
               <button
                 key={ex}
                 type="button"

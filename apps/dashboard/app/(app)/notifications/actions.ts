@@ -26,7 +26,8 @@ export async function markAllRead(): Promise<Result> {
     .update(workspaceUsers)
     .set({ notificationsLastReadAt: new Date() })
     .where(eq(workspaceUsers.id, user.id));
-  revalidatePath("/notifications");
+  // Feed now lives in the top-bar bell (client-refetched); prefs live in settings.
+  revalidatePath("/settings/notifications");
   return { ok: true };
 }
 
@@ -58,6 +59,6 @@ export async function savePreferences(input: PrefsInput): Promise<Result> {
       set,
     });
 
-  revalidatePath("/notifications");
+  revalidatePath("/settings/notifications");
   return { ok: true };
 }

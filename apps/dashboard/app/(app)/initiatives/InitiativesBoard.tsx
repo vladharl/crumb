@@ -106,7 +106,7 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
     <div className="col gap-3">
       {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
       {items.length === 0 && (
-        <Card><div className="card-body"><p className="text-sm muted" style={{ margin: 0 }}>No initiatives yet — create one above to start grouping feedback and shaping your roadmap.</p></div></Card>
+        <Card><div className="card-body"><p className="text-sm muted" style={{ margin: 0 }}>No initiatives yet. Create one above to start grouping feedback and shaping your roadmap.</p></div></Card>
       )}
       {canManage && items.length > 0 && (
         <span className="text-xs muted">Drag cards to schedule and reorder them. Toggle <strong style={{ fontWeight: 600 }}>Public</strong> to show an initiative on the customer roadmap.</span>

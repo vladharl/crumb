@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
-import { db, workspaces, workspaceUsers, items, itemEmbeddings, dedupeSuggestions, replies, statusEvents, initiatives, initiativeSuggestions, replaySessions } from "@crumb/db";
-import { and, desc, eq, ne, sql } from "drizzle-orm";
+import { db, workspaces, workspaceUsers, items, itemEmbeddings, dedupeSuggestions, replies, statusEvents, replaySessions } from "@crumb/db";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
-import { suggestInitiative, clusterConfigured, CLUSTER_MODEL } from "@/lib/ai/cluster";
+import { clusterConfigured } from "@/lib/ai/cluster";
+import { autoClusterItem } from "@/lib/ai/auto-cluster";
 import { suggestTriage, triageConfigured, TRIAGE_MODEL } from "@/lib/ai/triage";
 import { embedText, embeddingsConfigured, EMBEDDINGS_MODEL, EMBEDDINGS_DIM } from "@/lib/ai/embeddings";
 import { findDuplicateCandidates } from "@/lib/ai/dedup";
@@ -12,7 +13,6 @@ import { withAiBudget } from "@/lib/ai/run";
 import { notifyWorkspaceChannel } from "@/lib/notify/chat";
 import { hasFeature } from "@/lib/entitlements";
 import { createItemSchema, parseJsonBody } from "@/lib/validation";
-import { consumeAi } from "@/lib/usage";
 import { log } from "@/lib/log";
 import type { Workspace } from "@crumb/db";
 
@@ -174,7 +174,7 @@ export async function POST(req: Request) {
   // Gated on the deployment capability (cloud + key) AND this workspace's
   // plan entitlement.
   if (clusterConfigured() && hasFeature(ws, "ai")) {
-    void autoCluster(ws, created!.id, created!.title, created!.body, created!.type);
+    void autoClusterItem(ws, { itemId: created!.id, title: created!.title, body: created!.body, type: created!.type });
   }
 
   // Fire-and-forget AI auto-triage + embedding (feature 3/4). Same deal: the
@@ -202,47 +202,6 @@ export async function POST(req: Request) {
     status: created!.status,
     created_at: created!.createdAt,
   }, { status: 201 }));
-}
-
-async function autoCluster(
-  ws: Workspace,
-  itemId: string,
-  title: string,
-  body: string,
-  type: string,
-): Promise<void> {
-  try {
-    const candidates = await db
-      .select({ id: initiatives.id, name: initiatives.name, description: initiatives.description })
-      .from(initiatives)
-      .where(and(eq(initiatives.workspaceId, ws.id), ne(initiatives.status, "parked")));
-    if (candidates.length === 0) return;
-
-    // Monthly AI cost cap — atomically consume one unit; skip silently once
-    // the workspace is over budget (the item is already saved; clustering is
-    // best-effort).
-    const consumed = await consumeAi(ws);
-    if (!consumed.ok) {
-      log.warn("ai cap reached — skipping autoCluster", { scope: "crumb/ai", workspaceId: ws.id, cap: consumed.cap });
-      return;
-    }
-
-    const guess = await suggestInitiative(
-      { title, body, type },
-      candidates,
-    );
-    if (!guess) return;
-
-    await db.insert(initiativeSuggestions).values({
-      itemId,
-      initiativeId: guess.initiativeId,
-      confidence: guess.confidence,
-      reason: guess.reason,
-      model: CLUSTER_MODEL,
-    });
-  } catch (err) {
-    log.error("autoCluster failed", { scope: "crumb/ai", err });
-  }
 }
 
 // Triage (advisory ai_* columns) + embedding (item_embeddings, for dedup/

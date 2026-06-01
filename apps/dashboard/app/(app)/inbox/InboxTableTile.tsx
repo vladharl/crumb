@@ -1,5 +1,5 @@
 import {
-  db, items, accounts, accountUsers, workspaceUsers, initiatives, initiativeSuggestions,
+  db, items, accounts, accountUsers, workspaceUsers, initiatives, initiativeSuggestions, inboundCaptures,
 } from "@crumb/db";
 import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -7,6 +7,8 @@ import { getActiveSession } from "@/lib/server";
 import { clusterConfigured } from "@/lib/ai/cluster";
 import { hasFeature } from "@/lib/entitlements";
 import { InboxTable, type InboxRow, type Assignee, type InitiativeOption } from "./InboxTable";
+import { CaptureTriage } from "./CaptureTriage";
+import type { CaptureRow, AccountOption } from "../captures/CapturesList";
 
 async function loadItems(workspaceId: string): Promise<InboxRow[]> {
   // Fully-qualified raw refs, NOT ${items.id}/${repliesTbl.*}: inside a raw
@@ -128,6 +130,51 @@ async function loadInitiativeOptions(workspaceId: string): Promise<InitiativeOpt
     .orderBy(asc(initiatives.name));
 }
 
+// Pending captures (forwarded feedback awaiting account mapping) surfaced at the
+// top of the Inbox. Lifted from the retired Captures page's tile query.
+async function loadPendingCaptures(workspaceId: string): Promise<{ captures: CaptureRow[]; accountOptions: AccountOption[] }> {
+  const sug = alias(accounts, "sug_acct");
+  const rows = await db
+    .select({
+      id: inboundCaptures.id,
+      source: inboundCaptures.source,
+      fromEmail: inboundCaptures.fromEmail,
+      fromName: inboundCaptures.fromName,
+      subject: inboundCaptures.subject,
+      body: inboundCaptures.body,
+      suggestedAccountId: inboundCaptures.suggestedAccountId,
+      suggestedAccountName: inboundCaptures.suggestedAccountName,
+      suggestedConfidence: inboundCaptures.suggestedConfidence,
+      createdAt: inboundCaptures.createdAt,
+      sugName: sug.name,
+    })
+    .from(inboundCaptures)
+    .leftJoin(sug, eq(sug.id, inboundCaptures.suggestedAccountId))
+    .where(and(eq(inboundCaptures.workspaceId, workspaceId), eq(inboundCaptures.status, "pending")))
+    .orderBy(desc(inboundCaptures.createdAt));
+
+  const accountOptions: AccountOption[] = await db
+    .select({ id: accounts.id, name: accounts.name })
+    .from(accounts)
+    .where(eq(accounts.workspaceId, workspaceId))
+    .orderBy(asc(accounts.name));
+
+  const captures: CaptureRow[] = rows.map(r => ({
+    id: r.id,
+    source: r.source,
+    fromEmail: r.fromEmail,
+    fromName: r.fromName,
+    subject: r.subject,
+    body: r.body,
+    suggestedAccountId: r.suggestedAccountId,
+    suggestedAccountName: r.sugName ?? r.suggestedAccountName,
+    suggestedConfidence: r.suggestedConfidence,
+    createdAtIso: r.createdAt.toISOString(),
+  }));
+
+  return { captures, accountOptions };
+}
+
 async function loadAssignees(workspaceId: string): Promise<Assignee[]> {
   return db
     .select({ id: workspaceUsers.id, name: workspaceUsers.name, initials: workspaceUsers.initials })
@@ -138,10 +185,11 @@ async function loadAssignees(workspaceId: string): Promise<Assignee[]> {
 
 export async function InboxTableTile() {
   const { workspace, user: me } = await getActiveSession();
-  const [rows, assignees, initiativeOptions] = await Promise.all([
+  const [rows, assignees, initiativeOptions, captureData] = await Promise.all([
     loadItems(workspace.id),
     loadAssignees(workspace.id),
     loadInitiativeOptions(workspace.id),
+    loadPendingCaptures(workspace.id),
   ]);
   const canManageInitiatives = me.role === "admin" || me.role === "pm";
   // Viewers are read-only — gates the bulk status/assign bar. (Same expr as
@@ -152,15 +200,18 @@ export async function InboxTableTile() {
   const aiEntitled = hasFeature(workspace, "ai");
 
   return (
-    <InboxTable
-      rows={rows}
-      assignees={assignees}
-      meId={me.id}
-      canWrite={canWrite}
-      aiEntitled={aiEntitled}
-      initiatives={initiativeOptions}
-      canManageInitiatives={canManageInitiatives}
-      clusterEnabled={aiEntitled && clusterConfigured() && initiativeOptions.length > 0}
-    />
+    <>
+      <CaptureTriage captures={captureData.captures} accounts={captureData.accountOptions} canWrite={canWrite} />
+      <InboxTable
+        rows={rows}
+        assignees={assignees}
+        meId={me.id}
+        canWrite={canWrite}
+        aiEntitled={aiEntitled}
+        initiatives={initiativeOptions}
+        canManageInitiatives={canManageInitiatives}
+        clusterEnabled={aiEntitled && clusterConfigured() && initiativeOptions.length > 0}
+      />
+    </>
   );
 }

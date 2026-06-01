@@ -82,7 +82,7 @@ export function SelfHostSetup({ provider, origin }: { provider: Provider; origin
   return (
     <details style={{ borderTop: "var(--border)", paddingTop: 10 }}>
       <summary className="text-xs" style={{ cursor: "pointer", color: "var(--ink)" }}>
-        Self-host setup — create your {label} with these values
+        Self-host setup: create your {label} with these values
       </summary>
       <div className="col gap-2" style={{ marginTop: 10 }}>
         {rows.map(r => (

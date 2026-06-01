@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark, Ic } from "@crumb/ui";
 import { ConfirmProvider } from "@/components/confirm";
+import { TourProvider, TourLauncher, useTour } from "@/components/tour";
+import { CommandProvider, CommandButton, type CommandItem } from "@/components/CommandPalette";
+import { NotificationBell } from "@/components/NotificationBell";
 
 type NavLink = {
   id: string;
@@ -14,19 +17,17 @@ type NavLink = {
   match?: (path: string) => boolean;
 };
 
+// Primary destinations as top-bar tabs. Captures merged into Inbox; Notifications
+// moved to the bell — both removed here. Settings lives in the avatar menu.
 const PRIMARY: NavLink[] = [
-  { id: "inbox",    href: "/inbox",         label: "Inbox",         icon: Ic.inbox,
+  { id: "inbox",    href: "/inbox",          label: "Inbox",       icon: Ic.inbox,
     match: p => p === "/inbox" || p.startsWith("/thread") },
-  { id: "captures", href: "/captures",      label: "Captures",      icon: Ic.filter,
-    match: p => p.startsWith("/captures") },
-  { id: "accounts", href: "/accounts",      label: "Accounts",      icon: Ic.building,
+  { id: "accounts", href: "/accounts",       label: "Accounts",    icon: Ic.building,
     match: p => p.startsWith("/accounts") },
-  { id: "initiatives", href: "/initiatives", label: "Initiatives",   icon: Ic.road,
+  { id: "initiatives", href: "/initiatives", label: "Initiatives", icon: Ic.road,
     match: p => p.startsWith("/initiatives") },
-  { id: "insights", href: "/insights",     label: "Insights",      icon: Ic.chart,
+  { id: "insights", href: "/insights",       label: "Insights",    icon: Ic.chart,
     match: p => p === "/insights" },
-  { id: "notifs",   href: "/notifications", label: "Notifications", icon: Ic.bell,
-    match: p => p === "/notifications" },
 ];
 
 // AI-gated "Ask your feedback" (feature 5). Inserted after Insights when the
@@ -36,9 +37,16 @@ const ASK_LINK: NavLink = {
   match: p => p === "/ask",
 };
 
-const SECONDARY: NavLink[] = [
-  { id: "settings", href: "/settings", label: "Settings", icon: Ic.settings,
-    match: p => p.startsWith("/settings") },
+// Settings sub-pages surfaced in the ⌘K palette.
+const SETTINGS_ITEMS: CommandItem[] = [
+  { label: "Settings", href: "/settings", keywords: "workspace" },
+  { label: "Settings → Team & roles", href: "/settings/team", keywords: "members invite roles" },
+  { label: "Settings → Integrations", href: "/settings/integrations", keywords: "slack github jira linear salesforce hubspot" },
+  { label: "Settings → Notifications", href: "/settings/notifications", keywords: "preferences digest email slack" },
+  { label: "Settings → Webhooks", href: "/settings/webhooks", keywords: "api events" },
+  { label: "Settings → Account mapping", href: "/settings/account-mapping", keywords: "crm" },
+  { label: "Settings → Branding", href: "/settings/branding", keywords: "widget theme" },
+  { label: "Settings → Install", href: "/settings/install", keywords: "embed snippet" },
 ];
 
 export type ShellUser = {
@@ -48,56 +56,76 @@ export type ShellUser = {
   workspaceName: string;
 };
 
-export function AppShell({ user, aiEnabled = false, children }: { user: ShellUser; aiEnabled?: boolean; children: ReactNode }) {
+export function AppShell({ user, aiEnabled = false, tourDone = true, children }: { user: ShellUser; aiEnabled?: boolean; tourDone?: boolean; children: ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
+  // Close the mobile sheet when we grow back to desktop.
   useEffect(() => {
     const onResize = () => { if (window.innerWidth >= 768) setOpen(false); };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+  // Close it on navigation.
+  useEffect(() => { setOpen(false); }, [pathname]);
 
-  // Insert "Ask" right after Insights when AI is on.
-  const primaryNav = aiEnabled
-    ? PRIMARY.flatMap(n => (n.id === "insights" ? [n, ASK_LINK] : [n]))
-    : PRIMARY;
-
-  const all = [...primaryNav, ...SECONDARY];
-  const active = all.find(n => (n.match ?? (p => p === n.href))(pathname));
+  const tabs = aiEnabled ? [...PRIMARY, ASK_LINK] : PRIMARY;
+  const active = tabs.find(n => (n.match ?? (p => p === n.href))(pathname));
   const label = active?.label ?? "";
+
+  const paletteItems: CommandItem[] = [
+    ...tabs.map(n => ({ label: n.label, href: n.href })),
+    ...SETTINGS_ITEMS,
+  ];
 
   return (
     <ConfirmProvider>
+    <TourProvider autoStart={!tourDone}>
+    <CommandProvider items={paletteItems}>
     <div className="app">
-      <div className="nav-mobile-bar">
-        <button className="menu-btn" onClick={() => setOpen(true)} aria-label="Open menu">
-          <Ic.menu style={{ width: 14, height: 14 }} />
+      <header className="topbar">
+        <button className="topbar-burger" onClick={() => setOpen(o => !o)} aria-label="Menu">
+          <Ic.menu style={{ width: 16, height: 16 }} />
         </button>
-        <BrandMark width={20} height={20} />
-        <span className="brand">Crumb</span>
-        <span className="crumb">{label}</span>
-      </div>
-      <div className={`scrim ${open ? "show" : ""}`} onClick={() => setOpen(false)} />
 
-      <nav className={`nav ${open ? "open" : ""}`}>
-        <div className="nav-brand">
-          <div className="mark-row">
-            <BrandMark width={28} height={28} />
-            <span className="name">Crumb</span>
-          </div>
-          <span className="tag">{user.workspaceName} · follow the trail.</span>
+        <Link href="/inbox" className="topbar-brand">
+          <BrandMark width={24} height={24} />
+          <span className="topbar-name">Crumb</span>
+          <span className="topbar-ws">{user.workspaceName}</span>
+        </Link>
+
+        <nav className="topnav">
+          {tabs.map(n => (
+            <Link
+              key={n.id}
+              href={n.href}
+              data-tour={n.id}
+              className="topnav-item"
+              aria-selected={(n.match ?? (p => p === n.href))(pathname)}
+            >
+              {n.label}
+            </Link>
+          ))}
+        </nav>
+
+        <div className="topbar-right">
+          <CommandButton />
+          <NotificationBell />
+          <UserMenu user={user} />
         </div>
+      </header>
 
-        {primaryNav.map(n => {
+      {/* Mobile nav sheet */}
+      <div className={`scrim ${open ? "show" : ""}`} onClick={() => setOpen(false)} />
+      <nav className={`mobile-nav ${open ? "open" : ""}`} aria-label="Sections">
+        {tabs.map(n => {
           const Icon = n.icon;
-          const isActive = (n.match ?? (p => p === n.href))(pathname);
           return (
             <Link
               key={n.id}
               href={n.href}
               className="nav-item"
-              aria-selected={isActive}
+              aria-selected={(n.match ?? (p => p === n.href))(pathname)}
               onClick={() => setOpen(false)}
             >
               <Icon className="ic" />
@@ -105,39 +133,13 @@ export function AppShell({ user, aiEnabled = false, children }: { user: ShellUse
             </Link>
           );
         })}
-
-        <div style={{ flex: 1 }} />
-
-        <div className="nav-section" style={{ marginTop: 12 }}>Workspace</div>
-        {SECONDARY.map(n => {
-          const Icon = n.icon;
-          const isActive = (n.match ?? (p => p === n.href))(pathname);
-          return (
-            <Link
-              key={n.id}
-              href={n.href}
-              className="nav-item"
-              aria-selected={isActive}
-              onClick={() => setOpen(false)}
-            >
-              <Icon className="ic" />
-              <span>{n.label}</span>
-            </Link>
-          );
-        })}
-
-        <div className="nav-foot" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
-          <div className="row gap-2 center" style={{ minWidth: 0 }}>
-            <span className="avatar sm ink" style={{ flexShrink: 0 }}>{user.initials}</span>
-            <div className="col" style={{ minWidth: 0, flex: 1 }}>
-              <span className="text-sm fw-med truncate" style={{ display: "block" }}>{user.name}</span>
-              <span className="text-xs muted truncate" style={{ display: "block" }}>{user.email}</span>
-            </div>
-          </div>
-          <div className="row between" style={{ gap: 8 }}>
-            <span className="meta">MVP v0.1</span>
-            <a className="link-back" href="/logout">Sign out →</a>
-          </div>
+        <Link href="/settings" className="nav-item" aria-selected={pathname.startsWith("/settings")} onClick={() => setOpen(false)}>
+          <Ic.settings className="ic" />
+          <span>Settings</span>
+        </Link>
+        <div className="row between" style={{ padding: "8px 6px", marginTop: 8, borderTop: "var(--border)" }}>
+          <TourLauncher />
+          <a className="link-back" href="/logout">Sign out →</a>
         </div>
       </nav>
 
@@ -145,6 +147,55 @@ export function AppShell({ user, aiEnabled = false, children }: { user: ShellUse
         {children}
       </main>
     </div>
+    </CommandProvider>
+    </TourProvider>
     </ConfirmProvider>
+  );
+}
+
+// Avatar dropdown: identity + Getting started (relaunch tour) + Settings + Sign out.
+function UserMenu({ user }: { user: ShellUser }) {
+  const { start } = useTour();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  return (
+    <div className="usermenu" ref={ref}>
+      <button
+        type="button"
+        className="topbar-icon-btn"
+        data-tour="settings"
+        aria-label="Account menu"
+        aria-expanded={open}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span className="avatar sm ink">{user.initials}</span>
+      </button>
+      {open && (
+        <div className="usermenu-pop" role="menu">
+          <div className="usermenu-id">
+            <span className="text-sm fw-med truncate" style={{ display: "block" }}>{user.name}</span>
+            <span className="text-xs muted truncate" style={{ display: "block" }}>{user.email}</span>
+            <span className="text-xs muted truncate" style={{ display: "block", marginTop: 2 }}>{user.workspaceName}</span>
+          </div>
+          <button type="button" className="usermenu-item" role="menuitem" onClick={() => { setOpen(false); start(); }}>
+            Getting started
+          </button>
+          <Link href="/settings" className="usermenu-item" role="menuitem" onClick={() => setOpen(false)}>
+            Settings
+          </Link>
+          <a href="/logout" className="usermenu-item" role="menuitem">Sign out</a>
+        </div>
+      )}
+    </div>
   );
 }

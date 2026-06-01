@@ -47,7 +47,7 @@ export function SecretReveal({ isAdmin }: { isAdmin: boolean }) {
         <Btn sm onClick={onReveal} disabled={pending}>
           {pending ? "Loading…" : "Reveal signing secret"}
         </Btn>
-        <span className="text-xs muted">You'll only show this to your own server — never the browser.</span>
+        <span className="text-xs muted">You'll only show this to your own server, never the browser.</span>
         {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
       </div>
     );

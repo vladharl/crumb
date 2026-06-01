@@ -105,7 +105,7 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
             {stale && <Pill ring>syncing…</Pill>}
           </div>
           <span className="text-xs muted">
-            Engineering status syncs from {providerLabel} — not authoritative.
+            Engineering status syncs from {providerLabel}, not authoritative.
           </span>
           <div className="row gap-2">
             <Btn sm onClick={onUnlink} disabled={pending}>
@@ -148,7 +148,7 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
       <div className="card-body col gap-2">
         <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.55 }}>
           {createReady
-            ? `Push this item out as a ${providerLabel} ticket — engineering status will sync back.`
+            ? `Push this item out as a ${providerLabel} ticket. Engineering status will sync back.`
             : "Connect a provider in Settings to create a ticket from here."}
         </p>
         <div className="row gap-2">

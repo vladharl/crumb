@@ -132,7 +132,7 @@ export function AddItemsButton({ initiativeId }: { initiativeId: string }) {
               {loading ? (
                 <div className="card-body"><span className="text-sm muted">Loading items…</span></div>
               ) : filtered.length === 0 ? (
-                <div className="card-body"><span className="text-sm muted">{candidates.length === 0 ? "No unassigned feedback — every item is already grouped." : "No items match that filter."}</span></div>
+                <div className="card-body"><span className="text-sm muted">{candidates.length === 0 ? "No unassigned feedback. Every item is already grouped." : "No items match that filter."}</span></div>
               ) : filtered.map(c => {
                 const checked = selected.has(c.id);
                 return (

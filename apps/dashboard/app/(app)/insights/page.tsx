@@ -213,7 +213,7 @@ export default async function InsightsPage() {
         <CardHead title="Feedback over time" after={<Pill ring>12 weeks</Pill>} />
         <div className="card-body" style={{ padding: 18 }}>
           {total === 0
-            ? <p className="text-sm muted" style={{ margin: 0 }}>No feedback yet — the trend appears once items come in.</p>
+            ? <p className="text-sm muted" style={{ margin: 0 }}>No feedback yet. The trend appears once items come in.</p>
             : <TrendChart points={trend} />}
         </div>
       </Card>
@@ -244,7 +244,7 @@ export default async function InsightsPage() {
         <CardHead title="Status funnel" after={<Pill ring>{total} items</Pill>} />
         <div className="card-body col gap-3" style={{ padding: 18 }}>
           {total === 0 ? (
-            <p className="text-sm muted" style={{ margin: 0 }}>No feedback yet — once items come in, they'll break down by status here.</p>
+            <p className="text-sm muted" style={{ margin: 0 }}>No feedback yet. Once items come in, they'll break down by status here.</p>
           ) : (
             STATUS_ORDER.filter(s => (statusCounts.get(s) ?? 0) > 0).map(s => {
               const n = statusCounts.get(s) ?? 0;

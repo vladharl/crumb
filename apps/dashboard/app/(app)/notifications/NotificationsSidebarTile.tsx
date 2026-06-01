@@ -81,7 +81,7 @@ export async function NotificationsSidebarTile() {
   ]);
 
   const digestLine = lastDay.entries.length === 0
-    ? "Today's trail: nothing new — quiet day."
+    ? "Today's trail: nothing new. Quiet day."
     : `Today's trail: ${lastDay.entries.length} ${lastDay.entries.length === 1 ? "event" : "events"} across ${lastDay.accountsTouched} ${lastDay.accountsTouched === 1 ? "account" : "accounts"}.`;
 
   return (

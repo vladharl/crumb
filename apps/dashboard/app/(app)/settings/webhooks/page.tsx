@@ -29,7 +29,7 @@ export default async function WebhooksPage() {
         <CardHead title="Outbound webhooks" after={<Pill ring>{rows.length} endpoint{rows.length === 1 ? "" : "s"}</Pill>} />
         <div className="card-body col gap-4">
           <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-            Get a signed POST to your own services whenever an item's status changes — drive your own automations (notify a channel, update a dashboard, kick off a deploy). Each endpoint signs payloads with its own secret.
+            Get a signed POST to your own services whenever an item's status changes. Drive your own automations (notify a channel, update a dashboard, kick off a deploy). Each endpoint signs payloads with its own secret.
           </p>
           <WebhooksPanel initial={initial} isAdmin={user.role === "admin"} />
         </div>
@@ -39,7 +39,7 @@ export default async function WebhooksPage() {
         <CardHead title="Payload & verification" />
         <div className="card-body col gap-3">
           <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-            We POST JSON with an <span className="mono">X-Crumb-Signature: sha256=&lt;hex&gt;</span> header — an HMAC-SHA256 of the raw body keyed by the endpoint secret. Recompute it and compare (constant-time) to verify the request came from Crumb.
+            We POST JSON with an <span className="mono">X-Crumb-Signature: sha256=&lt;hex&gt;</span> header, an HMAC-SHA256 of the raw body keyed by the endpoint secret. Recompute it and compare (constant-time) to verify the request came from Crumb.
           </p>
           <div className="code">
 {`POST /your/endpoint

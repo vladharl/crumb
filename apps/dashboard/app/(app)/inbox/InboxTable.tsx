@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Avatar, Btn, Card, Ic, Pill, StatusPill, TypeChip } from "@crumb/ui";
+import { Avatar, Btn, Card, Dropdown, Ic, Pill, StatusPill, TypeChip } from "@crumb/ui";
 import type { Status, TypeKind } from "@crumb/ui";
 import { bulkAssign, bulkUpdateStatus, acceptTriageAssignee, dismissTriage } from "./actions";
 import { bulkSetInitiative, clusterItems, acceptSuggestion, dismissSuggestion } from "../initiatives/actions";
@@ -258,19 +258,18 @@ export function InboxTable({
             <button aria-selected={tab === "mine"} onClick={() => setTab("mine")}>Mine · {mineCount}</button>
           </div>
           {initiatives.length > 0 && (
-            <select
-              className="input text-sm"
+            <Dropdown
+              ariaLabel="Filter by initiative"
               value={initiativeFilter}
-              onChange={e => setInitiativeFilter(e.target.value)}
-              aria-label="Filter by initiative"
-              style={{ padding: "6px 10px", height: 32, minWidth: 180 }}
-            >
-              <option value={INITIATIVE_ANY}>Initiative · all</option>
-              <option value={INITIATIVE_NONE}>No initiative</option>
-              {initiatives.map(i => (
-                <option key={i.id} value={i.id}>{i.name}</option>
-              ))}
-            </select>
+              onChange={setInitiativeFilter}
+              searchable={initiatives.length > 8}
+              buttonStyle={{ minWidth: 180 }}
+              options={[
+                { value: INITIATIVE_ANY, label: "Initiative · all" },
+                { value: INITIATIVE_NONE, label: "No initiative" },
+                ...initiatives.map(i => ({ value: i.id, label: i.name })),
+              ]}
+            />
           )}
           {mergedTotal > 0 && (
             <label className="row gap-2 center text-sm muted" style={{ flex: "0 0 auto", cursor: "pointer" }} title="Show duplicates that were merged into another item">
@@ -292,53 +291,50 @@ export function InboxTable({
           {canWrite ? (<>
           <label className="row gap-2 center text-sm" style={{ flex: "0 0 auto" }}>
             <span className="muted">Status</span>
-            <select
-              className="input"
+            <Dropdown
+              size="sm"
+              ariaLabel="Set status"
+              placeholder="Set status…"
+              value={null}
               disabled={pending}
-              defaultValue=""
-              onChange={e => { applyStatus(e.target.value); e.currentTarget.value = ""; }}
-              style={{ padding: "4px 8px", height: 30 }}
-            >
-              <option value="" disabled>Set status…</option>
-              {STATUS_OPTIONS.map(s => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
+              onChange={applyStatus}
+              options={STATUS_OPTIONS.map(s => ({ value: s.value, label: s.label }))}
+            />
           </label>
 
           <label className="row gap-2 center text-sm" style={{ flex: "0 0 auto" }}>
             <span className="muted">Assign</span>
-            <select
-              className="input"
+            <Dropdown
+              size="sm"
+              ariaLabel="Assign to"
+              placeholder="Assign to…"
+              value={null}
               disabled={pending}
-              defaultValue=""
-              onChange={e => { applyAssign(e.target.value); e.currentTarget.value = ""; }}
-              style={{ padding: "4px 8px", height: 30 }}
-            >
-              <option value="" disabled>Assign to…</option>
-              <option value="__unassign">— Unassign —</option>
-              {assignees.map(a => (
-                <option key={a.id} value={a.id}>{a.name} ({a.initials})</option>
-              ))}
-            </select>
+              searchable={assignees.length > 8}
+              onChange={applyAssign}
+              options={[
+                { value: "__unassign", label: "Unassign" },
+                ...assignees.map(a => ({ value: a.id, label: `${a.name} (${a.initials})` })),
+              ]}
+            />
           </label>
 
           {canManageInitiatives && (
             <label className="row gap-2 center text-sm" style={{ flex: "0 0 auto" }}>
               <span className="muted">Initiative</span>
-              <select
-                className="input"
+              <Dropdown
+                size="sm"
+                ariaLabel="Set initiative"
+                placeholder="Set initiative…"
+                value={null}
                 disabled={pending}
-                defaultValue=""
-                onChange={e => { applyInitiative(e.target.value); e.currentTarget.value = ""; }}
-                style={{ padding: "4px 8px", height: 30 }}
-              >
-                <option value="" disabled>Set initiative…</option>
-                <option value="__clear">— No initiative —</option>
-                {initiatives.map(i => (
-                  <option key={i.id} value={i.id}>{i.name}</option>
-                ))}
-              </select>
+                searchable={initiatives.length > 8}
+                onChange={applyInitiative}
+                options={[
+                  { value: "__clear", label: "No initiative" },
+                  ...initiatives.map(i => ({ value: i.id, label: i.name })),
+                ]}
+              />
             </label>
           )}
           </>) : (
@@ -378,7 +374,7 @@ export function InboxTable({
             <div className="card-body" role="row">
               <p className="text-sm muted" role="cell" style={{ margin: 0 }}>
                 {rows.length === 0
-                  ? "No feedback yet — share your widget snippet with customers to see things flow in here."
+                  ? "No feedback yet. Share your widget snippet with customers to see things flow in here."
                   : "Nothing matches that filter."}
               </p>
             </div>

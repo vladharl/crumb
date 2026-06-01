@@ -20,7 +20,7 @@ export async function composeOnBehalf(input: {
   body?: string;
 }): Promise<ComposeResult> {
   const { workspace } = await getActiveSession();
-  const r = await composeItem({ workspaceId: workspace.id, ...input });
+  const r = await composeItem({ workspaceId: workspace.id, workspace, ...input });
   if (!r.ok) return { ok: false, error: r.error };
   revalidatePath("/inbox");
   return { ok: true, shortId: r.shortId };

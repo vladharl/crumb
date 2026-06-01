@@ -1,0 +1,1 @@
+ALTER TABLE "workspace_users" ADD COLUMN "guide_completed_at" timestamp with time zone;

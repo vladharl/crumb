@@ -2,7 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Btn, Ic } from "@crumb/ui";
+import { Btn, Dropdown, Ic } from "@crumb/ui";
 import { createAccount, renameAccount, deleteAccount, reassignUser, importAccountsCsv } from "./actions";
 
 export type UserView = { id: string; email: string; name: string };
@@ -77,7 +77,7 @@ export function AccountMappingPanel({ initial, isManager }: { initial: AccountVi
       {notice && <span className="text-xs muted">{notice}</span>}
 
       {initial.length === 0 ? (
-        <p className="text-sm muted" style={{ margin: 0 }}>No accounts yet — add one above, import a CSV, or let them arrive via the widget.</p>
+        <p className="text-sm muted" style={{ margin: 0 }}>No accounts yet. Add one above, import a CSV, or let them arrive via the widget.</p>
       ) : (
         <div className="col gap-2">
           {initial.map(acc => (
@@ -130,16 +130,16 @@ export function AccountMappingPanel({ initial, isManager }: { initial: AccountVi
                     <div key={u.id} className="row between center" style={{ gap: 12, flexWrap: "wrap" }}>
                       <span className="text-sm">{u.name} <span className="muted">· {u.email}</span></span>
                       {isManager && initial.length > 1 && (
-                        <select
-                          defaultValue=""
-                          onChange={e => { const to = e.target.value; if (to) run(() => reassignUser(u.id, to)); }}
+                        <Dropdown
+                          size="sm"
+                          ariaLabel={`Move ${u.email} to another account`}
+                          placeholder="Move to…"
+                          value={null}
                           disabled={pending}
-                          style={{ ...inputStyle, padding: "4px 8px", fontSize: 12 }}
-                          aria-label={`Move ${u.email} to another account`}
-                        >
-                          <option value="" disabled>Move to…</option>
-                          {initial.filter(a => a.id !== acc.id).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                        </select>
+                          searchable={initial.length > 8}
+                          onChange={to => { if (to) run(() => reassignUser(u.id, to)); }}
+                          options={initial.filter(a => a.id !== acc.id).map(a => ({ value: a.id, label: a.name }))}
+                        />
                       )}
                     </div>
                   ))}

@@ -90,7 +90,7 @@ export function NewInitiativeForm({ disabled }: { disabled?: boolean }) {
           id="ini-desc"
           value={description}
           onChange={e => setDescription(e.target.value)}
-          placeholder="What this initiative covers — visible to the team only."
+          placeholder="What this initiative covers. Visible to the team only."
           rows={3}
           style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
         />

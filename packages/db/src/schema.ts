@@ -163,6 +163,10 @@ export const workspaceUsers = pgTable("workspace_users", {
   // Watermark used to compute the unread count on /notifications. NULL ⇒
   // never marked read, treat as epoch (everything is unread).
   notificationsLastReadAt: timestamp("notifications_last_read_at", { withTimezone: true }),
+  // Watermark for the first-sign-in getting-started tour. NULL ⇒ the user has
+  // never finished/skipped the walkthrough, so it auto-opens on next sign-in.
+  // Stamped when they complete or dismiss it (and on manual relaunch).
+  guideCompletedAt: timestamp("guide_completed_at", { withTimezone: true }),
   // Slack user_id resolved by email lookup against the workspace's Slack
   // install. Cached so we don't hit users.lookupByEmail on every send.
   // Failed lookups stamp slack_lookup_failed_at so we don't retry constantly.

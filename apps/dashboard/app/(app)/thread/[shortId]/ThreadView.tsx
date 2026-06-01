@@ -41,9 +41,9 @@ function MentionText({ body, names }: { body: string; names: string[] }) {
 
 const REASON_REQUIRED: Set<Status> = new Set(["declined", "deferred", "duplicate"]);
 const REASON_PLACEHOLDER: Record<string, string> = {
-  declined:  "e.g. We're not building this in v2 — the maintenance cost is too high for the use case.",
+  declined:  "e.g. We're not building this in v2. The maintenance cost is too high for the use case.",
   deferred:  "e.g. Revisiting in Q3 once the new export pipeline ships.",
-  duplicate: "e.g. Tracked under FB-242 — replies there will reach you.",
+  duplicate: "e.g. Tracked under FB-242. Replies there will reach you.",
 };
 
 function humanBytes(b: number): string {
@@ -354,7 +354,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
       const res = await draftReplyAction(item.shortId);
       setDrafting(false);
       if (res.ok) setDraft(res.draft);
-      else setDraftError(res.error === "ai_cap_reached" ? "Monthly AI limit reached." : "Couldn't draft a reply — try again.");
+      else setDraftError(res.error === "ai_cap_reached" ? "Monthly AI limit reached." : "Couldn't draft a reply. Try again.");
     });
   };
 
@@ -572,10 +572,10 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
           <div className="card-foot col gap-3" style={{ alignItems: "stretch" }}>
             <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
               <Pill ring ringFill={tab !== "internal"}>
-                {tab === "internal" ? "Internal only" : `Replying to ${submitter.name} — ${account.name} can see this`}
+                {tab === "internal" ? "Internal only" : `Replying to ${submitter.name}. ${account.name} can see this`}
               </Pill>
               {!canWrite && tab !== "internal" && (
-                <span className="text-xs muted">Viewers can only post internal notes — switch to the Internal tab.</span>
+                <span className="text-xs muted">Viewers can only post internal notes. Switch to the Internal tab.</span>
               )}
               {sentAt && (
                 <Pill solid>
@@ -589,7 +589,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                 ref={taRef}
                 className="input"
                 rows={3}
-                placeholder={tab === "internal" ? "Internal note — type @ to mention a teammate. (Acme can't see this.)" : "Write a reply."}
+                placeholder={tab === "internal" ? "Internal note. Type @ to mention a teammate. (Acme can't see this.)" : "Write a reply."}
                 value={draft}
                 onChange={onDraftChange}
                 onKeyDown={onComposerKeyDown}

@@ -34,12 +34,12 @@ function formatArr(cents: number): string {
 
 function mergeErrorText(e: string): string {
   switch (e) {
-    case "source_has_duplicates": return "That item already has duplicates merged into it — unmerge those first.";
+    case "source_has_duplicates": return "That item already has duplicates merged into it. Unmerge those first.";
     case "target_is_duplicate":   return "Can't merge into an item that's already a duplicate.";
     case "same_item":             return "Can't merge an item into itself.";
     case "forbidden":             return "You don't have permission to merge.";
     case "not_found":             return "That item no longer exists.";
-    default:                      return "Something went wrong — try again.";
+    default:                      return "Something went wrong. Try again.";
   }
 }
 
@@ -97,7 +97,7 @@ export function MergePanel({
           <p className="text-sm muted" style={{ margin: 0 }}>
             Merged into{" "}
             <Link href={`/thread/${merge.mergedInto.shortId}`} className="mono">{merge.mergedInto.shortId}</Link>
-            {" — "}{merge.mergedInto.title}
+            {": "}{merge.mergedInto.title}
           </p>
           {canManage && (
             <Btn sm onClick={doUnmerge} disabled={pending}>{pending ? "Unmerging…" : "Unmerge"}</Btn>

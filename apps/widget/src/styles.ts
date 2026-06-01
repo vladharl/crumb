@@ -1,32 +1,29 @@
 // Inline CSS injected into the widget's shadow root. Keeps Crumb's look
 // without leaking onto the host page (and without being affected by it).
 //
-// Design: a clean, neutral surface with ember as the single accent. The
-// panel chrome is intentionally palette-neutral (near-white + near-black +
-// grays); only the launcher keeps the workspace's chosen brand color (set
-// per-instance from /me via --crumb-launcher-bg / --crumb-accent). Tokens are
-// defined on :host so the whole widget is tunable from one place.
-//
-// NOTE: this palette intentionally diverges from the dashboard's warm
-// globals.css — the widget was modernized to a neutral look first; the
-// dashboard can follow later.
+// Design: Crumb's warm palette (cream + toasted brown, ember as the single
+// accent), matching the dashboard's globals.css. Only the launcher keeps the
+// workspace's chosen brand color (set per-instance from /me via
+// --crumb-launcher-bg / --crumb-accent). Tokens are defined on :host so the
+// whole widget is tunable from one place.
 //
 // On shadows: the widget renders on arbitrary host pages, so it needs real
 // elevation to read as a separate surface. The values below are the minimum
-// lift that survives across light/dark/busy backgrounds — soften only after
-// testing /widget-demo.html against a real host product.
+// lift that survives across light/dark/busy backgrounds (warm-brown tinted to
+// match the dashboard); soften only after testing /widget-demo.html against a
+// real host product.
 export const css = `
 :host {
   all: initial;
 
-  /* ── neutral palette ── */
-  --c-bg: #FFFFFF;
-  --c-surface-2: #F5F6F8;
-  --c-ink: #15171B;
-  --c-ink-2: #51555E;
-  --c-ink-3: #8A8F98;
-  --c-line: rgba(20, 22, 27, 0.08);
-  --c-line-2: rgba(20, 22, 27, 0.14);
+  /* ── warm palette (matches dashboard globals.css) ── */
+  --c-bg: #FBF7F0;
+  --c-surface-2: #F4EEE2;
+  --c-ink: #4A2E1F;
+  --c-ink-2: #6A4528;
+  --c-ink-3: #8A8278;
+  --c-line: rgba(74, 46, 31, 0.10);
+  --c-line-2: rgba(74, 46, 31, 0.16);
 
   /* ── single accent (ember) ── */
   --c-accent: #E27D3A;
@@ -34,9 +31,9 @@ export const css = `
   --c-accent-soft: rgba(226, 125, 58, 0.10);
 
   /* ── radii / motion ── */
-  --r-sm: 10px;
-  --r-md: 12px;
-  --r-lg: 18px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 14px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 
   /* per-instance brand color for the launcher (set by JS from /me); the
@@ -70,8 +67,8 @@ export const css = `
   display: grid;
   place-items: center;
   box-shadow:
-    0 1px 2px rgba(16, 18, 23, 0.12),
-    0 6px 18px rgba(16, 18, 23, 0.16),
+    0 1px 2px rgba(74, 46, 31, 0.12),
+    0 6px 18px rgba(74, 46, 31, 0.16),
     inset 0 1px 0 rgba(255, 255, 255, 0.12);
   transition: transform 220ms cubic-bezier(0.34, 1.4, 0.5, 1), box-shadow 200ms var(--ease), background 240ms var(--ease);
   z-index: 2147483646;
@@ -125,8 +122,8 @@ export const css = `
 .launcher:hover {
   transform: translateY(-2px) scale(1.04);
   box-shadow:
-    0 2px 4px rgba(16, 18, 23, 0.14),
-    0 12px 28px rgba(16, 18, 23, 0.20),
+    0 2px 4px rgba(74, 46, 31, 0.14),
+    0 12px 28px rgba(74, 46, 31, 0.20),
     inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 .launcher:active { transform: translateY(0) scale(0.97); }
@@ -143,8 +140,8 @@ export const css = `
   -webkit-backdrop-filter: blur(18px) saturate(1.5);
   border: 1px solid rgba(255, 255, 255, 0.22);
   box-shadow:
-    0 1px 2px rgba(16, 18, 23, 0.10),
-    0 8px 24px rgba(16, 18, 23, 0.14),
+    0 1px 2px rgba(74, 46, 31, 0.10),
+    0 8px 24px rgba(74, 46, 31, 0.14),
     inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
@@ -256,9 +253,9 @@ export const css = `
   border: 1px solid var(--c-line);
   border-radius: var(--r-lg);
   box-shadow:
-    0 1px 2px rgba(16, 18, 23, 0.04),
-    0 4px 12px rgba(16, 18, 23, 0.06),
-    0 16px 40px rgba(16, 18, 23, 0.14);
+    0 1px 2px rgba(74, 46, 31, 0.04),
+    0 4px 12px rgba(74, 46, 31, 0.06),
+    0 16px 40px rgba(74, 46, 31, 0.14);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -281,7 +278,7 @@ export const css = `
 .scrim {
   position: fixed;
   inset: 0;
-  background: rgba(16, 18, 23, 0.40);
+  background: rgba(74, 46, 31, 0.40);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   opacity: 0;
@@ -452,7 +449,7 @@ button.primary {
   display: inline-flex; align-items: center; gap: 6px;
   transition: transform 120ms var(--ease), opacity 120ms var(--ease), box-shadow 120ms var(--ease);
 }
-button.primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(16, 18, 23, 0.16); }
+button.primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(74, 46, 31, 0.16); }
 button.primary:active { transform: translateY(0); }
 button.primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
 button.primary svg { width: 13px; height: 13px; }

@@ -14,6 +14,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         workspaceName: workspace.name,
       }}
       aiEnabled={hasFeature(workspace, "ai")}
+      tourDone={user.guideCompletedAt != null}
     >
       {children}
     </AppShell>

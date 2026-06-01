@@ -2,7 +2,7 @@
 
 import { useId, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Btn, Card, Ic, Pill } from "@crumb/ui";
+import { Btn, Card, Dropdown, Ic, Pill } from "@crumb/ui";
 import { createItemFromCapture, dismissCapture } from "./actions";
 
 export type AccountOption = { id: string; name: string };
@@ -120,9 +120,13 @@ function CaptureCard({ capture, accounts, canWrite }: { capture: CaptureRow; acc
               </label>
               <label className="col gap-1" style={{ flex: "0 0 120px" }}>
                 <span className="eyebrow">Type</span>
-                <select className="input" value={type} onChange={(e) => setType(e.target.value)} disabled={pending}>
-                  {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
+                <Dropdown
+                  ariaLabel="Type"
+                  value={type}
+                  onChange={setType}
+                  disabled={pending}
+                  options={TYPES.map((t) => ({ value: t.value, label: t.label }))}
+                />
               </label>
             </div>
             <label className="col gap-1">

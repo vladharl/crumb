@@ -1,7 +1,11 @@
 import "server-only";
 import { and, eq, sql } from "drizzle-orm";
 import { db, workspaces, accounts, accountUsers, items, replies, statusEvents } from "@crumb/db";
+import type { Workspace } from "@crumb/db";
 import { notifyWorkspaceChannel } from "@/lib/notify/chat";
+import { clusterConfigured } from "@/lib/ai/cluster";
+import { autoClusterItem } from "@/lib/ai/auto-cluster";
+import { hasFeature } from "@/lib/entitlements";
 
 // Session-free core of "create an item on behalf of a customer" — upsert the
 // account + submitter, bump the per-workspace short-id sequence, insert the
@@ -26,6 +30,10 @@ export async function composeItem(input: {
   type: string;
   title: string;
   body?: string;
+  // When provided (dashboard paths have the full Workspace), the new item gets
+  // an AI initiative suggestion like widget submissions do. Omitted on the
+  // session-free Slack path, which simply skips clustering.
+  workspace?: Pick<Workspace, "id" | "planId" | "subscriptionStatus">;
 }): Promise<ComposeItemResult> {
   const accountName = input.accountName.trim();
   const submitterEmail = input.submitterEmail.trim().toLowerCase();
@@ -94,7 +102,7 @@ export async function composeItem(input: {
     await db.insert(replies).values({ itemId: created!.id, accountUserId: submitter.id, body, internal: false });
   }
 
-  // Vendor Teams firehose — new submission (covers compose, Slack, capture-accept).
+  // Vendor Teams firehose: new submission (covers compose, Slack, capture-accept).
   void notifyWorkspaceChannel(input.workspaceId, {
     kind: "new_submission",
     shortId,
@@ -104,6 +112,12 @@ export async function composeItem(input: {
     submitterName,
     url: null,
   });
+
+  // Fire-and-forget AI clustering, matching the widget path. Only when the
+  // caller passed the workspace (dashboard sessions); no-ops on self-host.
+  if (input.workspace && clusterConfigured() && hasFeature(input.workspace, "ai")) {
+    void autoClusterItem(input.workspace, { itemId: created!.id, title, body, type: input.type });
+  }
 
   return { ok: true, shortId, itemId: created!.id, accountId: account.id, accountName };
 }

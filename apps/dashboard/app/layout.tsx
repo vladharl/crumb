@@ -18,7 +18,7 @@ const jbMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Crumb — Follow the trail",
+  title: "Crumb · Follow the trail",
   description: "Open-source B2B feedback platform. Embed, triage, ship, notify.",
 };
 

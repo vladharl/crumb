@@ -3,12 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db, initiatives, workspaces, items, accounts, workspaceUsers, initiativeSuggestions } from "@crumb/db";
+import type { Workspace } from "@crumb/db";
 import { headers } from "next/headers";
 import { getActiveSession } from "@/lib/server";
 import { originFromHeaders } from "@/lib/origin";
 import { suggestInitiative, clusterConfigured, CLUSTER_MODEL } from "@/lib/ai/cluster";
+import { autoClusterItem } from "@/lib/ai/auto-cluster";
 import { aiCap, consumeAi } from "@/lib/usage";
 import { notifyRoadmapFollowers } from "@/lib/roadmap-notify";
+import { log } from "@/lib/log";
 
 const ROADMAP_COLUMNS = new Set(["now", "next", "later"]);
 const ROADMAP_COLUMN_LABEL: Record<string, string> = { now: "Now", next: "Next", later: "Later" };
@@ -87,7 +90,31 @@ export async function createInitiative(input: {
 
   revalidatePath("/initiatives");
   revalidatePath("/inbox");
+
+  // Fire-and-forget: back-fill suggestions for existing unassigned feedback now
+  // that there's a new bucket it might belong to. Best-effort, budget-bounded.
+  void reclusterUnassigned(workspace);
+
   return { ok: true, id: created.id, shortId: created.shortId };
+}
+
+// Re-run AI clustering over the workspace's currently unassigned items (no
+// initiative, no pending suggestion). Bounded to one batch; the per-item budget
+// + dup guard inside autoClusterItem keep cost in check. Never throws.
+async function reclusterUnassigned(ws: Pick<Workspace, "id" | "planId" | "subscriptionStatus">): Promise<void> {
+  try {
+    if (!clusterConfigured() || aiCap(ws) <= 0) return;
+    const rows = await db
+      .select({ id: items.id, title: items.title, body: items.body, type: items.type })
+      .from(items)
+      .where(and(eq(items.workspaceId, ws.id), isNull(items.initiativeId), isNull(items.mergedIntoId)))
+      .limit(CLUSTER_BATCH_MAX);
+    for (const it of rows) {
+      await autoClusterItem(ws, { itemId: it.id, title: it.title, body: it.body, type: it.type });
+    }
+  } catch (err) {
+    log.error("reclusterUnassigned failed", { scope: "crumb/ai", err });
+  }
 }
 
 export async function updateInitiative(

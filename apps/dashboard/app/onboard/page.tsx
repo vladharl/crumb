@@ -34,7 +34,7 @@ export default async function OnboardPage() {
           <hr className="divider" />
 
           <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.55 }}>
-            No workspaces exist yet on this Crumb instance. The first person here becomes the admin — you. Add teammates after.
+            No workspaces exist yet on this Crumb instance. The first person here becomes the admin (you). Add teammates after.
           </p>
 
           <OnboardForm />

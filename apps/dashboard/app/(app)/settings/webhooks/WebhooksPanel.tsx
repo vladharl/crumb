@@ -55,7 +55,7 @@ export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; i
     <div className="col gap-4">
       {createdSecret && (
         <div className="col gap-2" style={{ background: "var(--bone-2)", border: "var(--border)", borderRadius: "var(--r-sm)", padding: "12px 14px" }}>
-          <span className="text-sm fw-med">Endpoint added — save this signing secret now</span>
+          <span className="text-sm fw-med">Endpoint added. Save this signing secret now</span>
           <span className="text-xs muted">It's used to verify the <span className="mono">X-Crumb-Signature</span> header. You can re-reveal it later, but store it on your receiver now.</span>
           <div className="mono text-xs" style={{ wordBreak: "break-all", background: "var(--surface)", border: "var(--border)", borderRadius: "var(--r-sm)", padding: "8px 10px" }}>{createdSecret.secret}</div>
           <div><Btn sm onClick={() => setCreatedSecret(null)}>Done</Btn></div>

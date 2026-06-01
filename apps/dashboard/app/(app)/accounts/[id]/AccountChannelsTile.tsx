@@ -4,6 +4,10 @@ import { db, accounts } from "@crumb/db";
 import { getActiveSession } from "@/lib/server";
 import { AccountChannelsForm } from "./AccountChannelsForm";
 
+// DORMANT: intentionally not rendered (removed from accounts/[id]/page.tsx).
+// Kept on disk with its action + send path until there's a customer self-serve
+// surface to configure these webhooks. See the plan / commit that hid it.
+//
 // "Customer notifications" card — the customer account's own Slack/Teams channel
 // webhooks. We never echo the sealed secret; only whether it's configured.
 export async function AccountChannelsTile({ accountId }: { accountId: string }) {

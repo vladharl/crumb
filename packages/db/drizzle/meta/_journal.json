@@ -85,6 +85,13 @@
       "when": 1781000010000,
       "tag": "0011_sloppy_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1781000011000,
+      "tag": "0012_boring_shocker",
+      "breakpoints": true
     }
   ]
 }

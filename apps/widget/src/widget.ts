@@ -192,7 +192,7 @@ function readConfig(): Config | null {
   }
   if (missing.length) {
     console.warn(
-      `[crumb] widget did not mount — missing required attribute${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}. ` +
+      `[crumb] widget did not mount: missing required attribute${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}. ` +
       `See your Crumb dashboard's Settings → Install for the full embed snippet.`,
     );
     return null;
@@ -912,10 +912,10 @@ function init(config: Config) {
       } catch { ok = false; lastErr = "network"; }
     }
     channelMsg = ok
-      ? "Saved — notifications will post to your channel."
+      ? "Saved. Notifications will post to your channel."
       : lastErr === "invalid_url" ? "That isn't a valid https webhook URL."
       : lastErr === "forbidden" ? "Only account admins can set this."
-      : "Couldn't save — try again.";
+      : "Couldn't save. Try again.";
     render();
   }
 
@@ -1156,7 +1156,7 @@ function init(config: Config) {
         <div class="empty">
           <span class="icon">${ICONS.chat}</span>
           <h2>Got something to share?</h2>
-          <p>Drop us a crumb — bug, idea, question. We read every one.</p>
+          <p>Drop us a crumb: bug, idea, question. We read every one.</p>
           <button class="primary" data-act="new" style="margin-top:8px">
             ${ICONS.plus}<span>Share feedback</span>
           </button>
@@ -1241,7 +1241,7 @@ function init(config: Config) {
             <span class="admin-card-title">Notify a channel</span>
             <span class="admin-card-sub">Slack / Teams</span>
           </div>
-          <p class="set-sub" style="margin:0 2px 8px">Get replies, status changes, and roadmap updates in your own Slack or Teams channel — paste a channel incoming-webhook URL.</p>
+          <p class="set-sub" style="margin:0 2px 8px">Get replies, status changes, and roadmap updates in your own Slack or Teams channel. Paste a channel incoming-webhook URL.</p>
           ${channelMsg ? `<div class="set-sub" style="margin:0 2px 8px">${escapeHtml(channelMsg)}</div>` : ""}
           <input class="field" data-act="slack-webhook" placeholder="Slack webhook (https://hooks.slack.com/…)" style="margin-bottom:8px" />
           <input class="field" data-act="teams-webhook" placeholder="Teams webhook (https://…webhook.office.com/…)" style="margin-bottom:8px" />
@@ -1291,7 +1291,7 @@ function init(config: Config) {
           <div class="empty">
             <span class="icon">${ICONS.idea}</span>
             <h2>Nothing here yet</h2>
-            <p>This team hasn't shared a public roadmap yet — check back soon.</p>
+            <p>This team hasn't shared a public roadmap yet. Check back soon.</p>
           </div>`;
       } else {
         bodyHtml += `<div class="rm-board">` + cols.map(([key, label]) => {
@@ -1324,7 +1324,7 @@ function init(config: Config) {
     panel.innerHTML = `
       ${header("Share feedback", undefined, true)}
       <div class="body">
-        <p class="lede">Bug, idea, question — we read every one.</p>
+        <p class="lede">Bug, idea, question. We read every one.</p>
 
         <div>
           <span class="field-label">Type</span>
@@ -1339,7 +1339,7 @@ function init(config: Config) {
 
         <div>
           <span class="field-label">Title</span>
-          <input class="field" data-act="title" placeholder="One line — what's the gist?" />
+          <input class="field" data-act="title" placeholder="One line: what's the gist?" />
         </div>
 
         <div>
@@ -1485,7 +1485,7 @@ function init(config: Config) {
         <div class="empty">
           <span class="icon">${ICONS.check}</span>
           <h2>Crumb received.</h2>
-          <p>We’ll be in touch — usually a reply within a day.</p>
+          <p>We’ll be in touch, usually a reply within a day.</p>
           <span class="short-id">${escapeHtml(v.shortId)}</span>
         </div>
       </div>

@@ -9,6 +9,8 @@ build
 .env.*.local
 apps/dashboard/public/widget.js
 apps/dashboard/public/widget.js.map
+apps/dashboard/public/widget-record.js
+apps/dashboard/public/widget-record.js.map
 packages/db/dist
 
 # Cloud-only ("ee") route overlay. Canonical source lives in
@@ -17,6 +19,7 @@ packages/db/dist
 # (the community build ships without them, so they 404 on self-host).
 apps/dashboard/app/api/v1/stripe/webhook/
 apps/dashboard/app/api/v1/replay-sessions/
+apps/dashboard/app/api/v1/ask/
 apps/dashboard/app/(app)/settings/billing/
 # Local file-storage backend (replay chunks, attachments) — the default
 # CRUMB_STORAGE_DIR when CRUMB_STORAGE_PROVIDER=local (dev / single-instance).

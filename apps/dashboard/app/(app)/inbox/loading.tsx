@@ -7,7 +7,7 @@ export default function Loading() {
       <PageHead
         crumb="Daily"
         title="Inbox"
-        lede="Everything customers have sent — newest first."
+        lede="Everything customers have sent, newest first."
         actions={<SkeletonPill width={92} />}
       />
       <InboxTableSkeleton />

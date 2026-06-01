@@ -119,6 +119,16 @@ const nextConfig = {
     ];
     return [{ source: "/:path*", headers: securityHeaders }];
   },
+
+  // Retired routes folded into other surfaces:
+  //   /notifications → bell popover (feed) + Settings → Notifications (prefs)
+  //   /captures      → merged into the Inbox (triage rows)
+  async redirects() {
+    return [
+      { source: "/notifications", destination: "/inbox", permanent: false },
+      { source: "/captures", destination: "/inbox", permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;

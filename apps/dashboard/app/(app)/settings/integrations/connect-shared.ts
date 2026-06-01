@@ -8,7 +8,7 @@
 
 const ERROR_COPY: Record<string, string> = {
   forbidden: "Only workspace admins can connect integrations.",
-  plan_required: "Connecting integrations needs the Team plan — upgrade from Settings → Billing.",
+  plan_required: "Connecting integrations needs the Team plan. Upgrade from Settings → Billing.",
   cannot_resolve_host: "Couldn't resolve the callback URL. Set CRUMB_APP_URL to this dashboard's origin.",
   slack_not_configured: "Slack isn't configured on this deployment yet.",
   linear_not_configured: "Linear isn't configured on this deployment yet.",

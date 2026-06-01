@@ -7,7 +7,7 @@ export default function Loading() {
       <PageHead
         crumb="Initiatives"
         title="Initiatives"
-        lede="Group inbound feedback into themed buckets — User Management, Reporting, Mobile, anything that helps you triage at a glance."
+        lede="Group inbound feedback into themed buckets: User Management, Reporting, Mobile, anything that helps you triage at a glance."
         actions={<SkeletonPill width={110} />}
       />
       <InitiativesTableSkeleton />

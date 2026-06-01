@@ -37,6 +37,7 @@ export async function createItemFromCapture(input: {
 
   const r = await composeItem({
     workspaceId: workspace.id,
+    workspace,
     accountName: input.accountName,
     submitterEmail: input.submitterEmail,
     submitterName: input.submitterName,
@@ -65,6 +66,6 @@ export async function dismissCapture(captureId: string): Promise<CaptureActionRe
     .set({ status: "dismissed", decidedAt: new Date(), decidedByWorkspaceUserId: user.id })
     .where(and(eq(inboundCaptures.workspaceId, workspace.id), eq(inboundCaptures.id, captureId)));
 
-  revalidatePath("/captures");
+  revalidatePath("/inbox");
   return { ok: true };
 }

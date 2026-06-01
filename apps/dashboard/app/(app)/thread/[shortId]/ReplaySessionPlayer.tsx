@@ -370,7 +370,7 @@ export function ReplaySessionPlayer({ replayId, chunks, durationMs, viewportW, v
                 {durationMs > 0 && idleRanges.map((rg, i) => (
                   <div
                     key={i}
-                    title="Inactive — auto-skipped"
+                    title="Inactive, auto-skipped"
                     style={{
                       position: "absolute", top: 0, height: 3, borderRadius: 2,
                       left: `${(rg.start / durationMs) * 100}%`,

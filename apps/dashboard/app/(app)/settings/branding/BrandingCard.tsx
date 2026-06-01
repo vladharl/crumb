@@ -217,8 +217,8 @@ function BrandingPreview({
           backdrop-filter: blur(14px) saturate(0.95);
           border: 1px solid rgba(255, 255, 255, 0.10);
           box-shadow:
-            0 1px 2px rgba(16, 18, 23, 0.12),
-            0 6px 18px rgba(16, 18, 23, 0.16),
+            0 1px 2px rgba(74, 46, 31, 0.12),
+            0 6px 18px rgba(74, 46, 31, 0.16),
             inset 0 1px 0 rgba(255, 255, 255, 0.12);
         }
         .preview-launcher::before {
@@ -322,7 +322,7 @@ export function BrandingCard({
     const ratio = contrastRatio(accent, launcherBg);
     if (ratio < 3.0) {
       setContrastWarning(
-        `Heads-up: your dot and launcher colors have a contrast ratio of ${ratio.toFixed(2)} — the dots may be hard to see. The preview on the right shows the live result.`,
+        `Heads-up: your dot and launcher colors have a contrast ratio of ${ratio.toFixed(2)}. The dots may be hard to see. The preview on the right shows the live result.`,
       );
     }
     startTransition(async () => {
@@ -387,7 +387,7 @@ export function BrandingCard({
 
           <Field
             label="Launcher visibility"
-            help="Hide crumb's own bubble if you already run another chat widget — open the panel from your existing widget or button via window.crumb.open(). See Install for the snippet."
+            help="Hide crumb's own bubble if you already run another chat widget. Open the panel from your existing widget or button via window.crumb.open(). See Install for the snippet."
           >
             <div className="seg" style={{ width: "100%" }}>
               {([
@@ -429,7 +429,7 @@ export function BrandingCard({
 
           <Field
             label="Product URL"
-            help="Where the widget is embedded — used to build clickable links in customer notification emails. Leave blank to send link-less emails."
+            help="Where the widget is embedded. Used to build clickable links in customer notification emails. Leave blank to send link-less emails."
           >
             <input
               className="input"

@@ -61,7 +61,7 @@ const GITHUB_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
 };
 
 const CRM_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
-  connected:             { kind: "ok",  text: "CRM connected. Accounts and ARR are syncing — see them on the Accounts page. Manually-set ARR is preserved." },
+  connected:             { kind: "ok",  text: "CRM connected. Accounts and ARR are syncing, visible on the Accounts page. Manually-set ARR is preserved." },
   error_missing_params:  { kind: "err", text: "The CRM didn't include a valid response. Please try again." },
   error_bad_state:       { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
   error_workspace_gone:  { kind: "err", text: "Workspace not found while finishing the install." },
@@ -186,7 +186,7 @@ export default async function IntegrationsPage({
                 )}.
               </p>
               <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-                Crumb status stays canonical. Engineering status from Linear writes to a separate field on the item — displayed in the thread sidebar, never authoritative.
+                Crumb status stays canonical. Engineering status from Linear writes to a separate field on the item, displayed in the thread sidebar, never authoritative.
               </p>
               {isAdmin
                 ? <DisconnectLinearButton teamName={ws.linearTeamName} />
@@ -242,7 +242,7 @@ export default async function IntegrationsPage({
                 )}.
               </p>
               <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-                Crumb status stays canonical. Engineering status from Jira writes to a separate field on the item — displayed in the thread sidebar, never authoritative.
+                Crumb status stays canonical. Engineering status from Jira writes to a separate field on the item, displayed in the thread sidebar, never authoritative.
               </p>
               {isAdmin
                 ? <DisconnectJiraButton siteUrl={ws.jiraSiteUrl} />
@@ -298,7 +298,7 @@ export default async function IntegrationsPage({
                 )}.
               </p>
               <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-                When AI drafting is enabled (Cloud + ANTHROPIC_API_KEY), README + repo structure also feed Linear/Jira drafts — not just GitHub.
+                When AI drafting is enabled (Cloud + ANTHROPIC_API_KEY), README + repo structure also feed Linear/Jira drafts, not just GitHub.
               </p>
               {isAdmin
                 ? <DisconnectGithubButton account={ws.githubAppInstallAccount} />
@@ -461,7 +461,7 @@ export default async function IntegrationsPage({
                 )}.
               </p>
               <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-                Members who pick <em>Slack</em> as their delivery channel on <a href="/notifications" style={{ color: "var(--ink)" }}>their preferences</a> get DMs instead of email for customer replies. We look each member up by email the first time we DM them; failures fall back to email.
+                Members who pick <em>Slack</em> as their delivery channel on <a href="/settings/notifications" style={{ color: "var(--ink)" }}>their preferences</a> get DMs instead of email for customer replies. We look each member up by email the first time we DM them; failures fall back to email.
               </p>
               {isAdmin
                 ? <DisconnectSlackButton teamName={ws.slackTeamName} />
@@ -498,7 +498,7 @@ export default async function IntegrationsPage({
         />
         <div className="card-body col gap-3">
           <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-            Post new submissions, customer replies, and status changes to a Teams channel. In Teams, add a <strong style={{ fontWeight: 500 }}>Workflows</strong> → "When a Teams webhook request is received" flow and paste its URL here — no app install required.
+            Post new submissions, customer replies, and status changes to a Teams channel. In Teams, add a <strong style={{ fontWeight: 500 }}>Workflows</strong> → "When a Teams webhook request is received" flow and paste its URL here. No app install required.
           </p>
           {teamsConnected ? (
             <>
@@ -529,7 +529,7 @@ export default async function IntegrationsPage({
         />
         <div className="card-body col gap-3">
           <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-            When a customer submits feedback, attach a video-like replay of their session so you can see what they were doing — no more guessing what "the page broke" means. All inputs are masked by default; password and email fields are never recorded. Sessions cap at 10 MB / 5,000 events / 30 minutes.
+            When a customer submits feedback, attach a video-like replay of their session so you can see what they were doing, no more guessing what "the page broke" means. All inputs are masked by default; password and email fields are never recorded. Sessions cap at 10 MB / 5,000 events / 30 minutes.
           </p>
           {sessionRecordEntitled ? (
             <div className="row gap-3 center">
@@ -537,7 +537,7 @@ export default async function IntegrationsPage({
               <span className="text-sm">
                 {ws.sessionRecordEnabled
                   ? "Capturing new sessions across your installed widget."
-                  : "Off — widget skips loading the recorder bundle."}
+                  : "Off. Widget skips loading the recorder bundle."}
               </span>
             </div>
           ) : cloud ? (

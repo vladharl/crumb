@@ -11,7 +11,7 @@ function errText(e: string): string {
     case "teams_invalid_url": return "That isn't a valid https webhook URL (or the host isn't allowed).";
     case "forbidden":         return "Only workspace admins can change this.";
     case "not_connected":     return "Connect a webhook first.";
-    default:                  return "Something went wrong — try again.";
+    default:                  return "Something went wrong. Try again.";
   }
 }
 

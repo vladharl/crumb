@@ -114,7 +114,7 @@ export default async function QbrPage() {
         <section style={{ marginBottom: 28 }}>
           <h2 style={{ fontSize: 18, margin: "0 0 8px" }}>Accounts at risk</h2>
           <div style={{ fontSize: 12, color: "#8a8077", marginBottom: 8 }}>
-            Trending negative on sentiment or with open severe issues — {arr(atRiskArrCents(signals))} ARR.
+            Trending negative on sentiment or with open severe issues. {arr(atRiskArrCents(signals))} ARR.
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Account</th><th style={th}>ARR</th><th style={th}>Sentiment</th><th style={th}>Trend</th><th style={th}>Open</th></tr></thead>

@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Btn, Field, Ic, Pill } from "@crumb/ui";
+import { Btn, Dropdown, Field, Ic, Pill } from "@crumb/ui";
 import { changeRole, inviteTeammate, removeMember, resendInvite } from "./actions";
 
 type Result =
@@ -43,7 +43,7 @@ export function InvitePanel({ canInvite }: { canInvite: boolean }) {
           <div className="col gap-1">
             <span className="serif text-md">Invite link for {result.email}</span>
             <span className="text-xs muted">
-              Share this with them directly — they'll be signed in on click. The link expires in 7 days.
+              Share this with them directly. They'll be signed in on click. The link expires in 7 days.
             </span>
           </div>
           <div className="row gap-2 center" style={{
@@ -124,12 +124,12 @@ export function RoleSelect({ id, role, isMe }: { id: string; role: string; isMe:
 
   return (
     <div className="col gap-1" style={{ minWidth: 0 }}>
-      <select
-        className="input"
+      <Dropdown
+        size="sm"
+        ariaLabel="Change role"
         value={value}
         disabled={pending}
-        onChange={(e) => {
-          const next = e.target.value;
+        onChange={(next) => {
           const prev = value;
           setValue(next);
           setError(null);
@@ -143,12 +143,12 @@ export function RoleSelect({ id, role, isMe }: { id: string; role: string; isMe:
             }
           });
         }}
-        style={{ height: 26, padding: "0 6px", fontSize: 12 }}
-      >
-        <option value="admin">Admin</option>
-        <option value="pm">PM</option>
-        <option value="viewer">Viewer</option>
-      </select>
+        options={[
+          { value: "admin", label: "Admin" },
+          { value: "pm", label: "PM" },
+          { value: "viewer", label: "Viewer" },
+        ]}
+      />
       {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
     </div>
   );

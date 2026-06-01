@@ -101,7 +101,7 @@ export function SyncCrmButton({ provider }: { provider: CrmProvider }) {
             setMsg(`Synced ${r.upserted} ${r.upserted === 1 ? "account" : "accounts"}.`);
             router.refresh();
           } else {
-            setError(r.error === "fetch_failed" ? "Couldn't reach the CRM — check the connection." : r.error);
+            setError(r.error === "fetch_failed" ? "Couldn't reach the CRM. Check the connection." : r.error);
           }
         })}
       >

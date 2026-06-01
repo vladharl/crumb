@@ -53,7 +53,7 @@ export default async function SettingsTeamPage() {
         </div>
         {team.length === 0 && (
           <div className="card-body">
-            <p className="text-sm muted" style={{ margin: 0 }}>No team members yet — invite your first PM.</p>
+            <p className="text-sm muted" style={{ margin: 0 }}>No team members yet. Invite your first PM.</p>
           </div>
         )}
         {team.map(m => {

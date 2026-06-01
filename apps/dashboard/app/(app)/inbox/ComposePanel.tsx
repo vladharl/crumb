@@ -123,7 +123,7 @@ export function ComposePanel({ knownAccounts }: { knownAccounts: string[] }) {
         <Field label="Title">
           <input
             className="input"
-            placeholder="One line — what's the gist?"
+            placeholder="One line: what's the gist?"
             value={title}
             onChange={e => setTitle(e.target.value)}
             disabled={pending}

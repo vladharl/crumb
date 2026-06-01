@@ -12,7 +12,7 @@ export default function InboxPage() {
       <PageHead
         crumb="Daily"
         title="Inbox"
-        lede="Everything customers have sent — newest first."
+        lede="Everything customers have sent, newest first."
         actions={
           <Suspense fallback={<SkeletonPill width={92} />}>
             <ComposeActionsTile />

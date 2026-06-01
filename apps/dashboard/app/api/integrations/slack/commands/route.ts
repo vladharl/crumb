@@ -44,7 +44,7 @@ export async function POST(req: Request) {
   const r = await openView(open(ws.slackBotToken), triggerId, buildCaptureModal(accountRows));
   if (!r.ok) {
     log.error("slack views.open failed", { scope: "crumb/slack", error: r.error });
-    return NextResponse.json({ response_type: "ephemeral", text: "Couldn't open the form — try again." });
+    return NextResponse.json({ response_type: "ephemeral", text: "Couldn't open the form. Try again." });
   }
   return new NextResponse("", { status: 200 });
 }

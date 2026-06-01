@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Btn, Ic } from "@crumb/ui";
+import { Btn, Dropdown, Ic } from "@crumb/ui";
 import { createExternalTicket, listProviderTargets, suggestExternalTicket } from "./actions";
 
 export type ExternalTicketModalProps = {
@@ -192,15 +192,15 @@ export function ExternalTicketModal({
             ) : targetsError ? (
               <span className="text-sm" style={{ color: "var(--err-text)" }}>{targetsError}</span>
             ) : (
-              <select
-                id="ext-target"
+              <Dropdown
+                ariaLabel={provider === "linear" ? "Team" : provider === "jira" ? "Project" : "Repository"}
                 value={target}
-                onChange={e => setTarget(e.target.value)}
+                onChange={setTarget}
                 disabled={pending}
-                style={inputStyle}
-              >
-                {targets.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-              </select>
+                searchable={targets.length > 8}
+                buttonStyle={{ width: "100%" }}
+                options={targets.map(t => ({ value: t.id, label: t.label }))}
+              />
             )}
           </div>
 

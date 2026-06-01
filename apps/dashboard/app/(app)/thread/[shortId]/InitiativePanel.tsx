@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Btn, Card, CardHead, Ic } from "@crumb/ui";
+import { Btn, Card, CardHead, Dropdown, Ic } from "@crumb/ui";
 import { setItemInitiative, createInitiative } from "../../initiatives/actions";
 import { InitiativeChip } from "../../initiatives/InitiativeChip";
 
@@ -114,25 +114,24 @@ export function InitiativePanel({
 
         {editing && !creating && (
           <div className="col gap-2">
-            <select
-              className="input"
-              defaultValue={current?.id ?? ""}
+            <Dropdown
+              ariaLabel="Pick an initiative"
+              placeholder="Pick an initiative…"
+              value={current?.id ?? null}
               disabled={pending}
-              onChange={e => {
-                const v = e.target.value;
+              searchable={options.length > 8}
+              onChange={v => {
                 if (v === "__none") pick(null);
                 else if (v === "__create") setCreating(true);
                 else pick(v);
               }}
-              style={{ padding: "6px 10px", height: 32 }}
-            >
-              <option value="" disabled>Pick an initiative…</option>
-              <option value="__none">— No initiative —</option>
-              {options.map(o => (
-                <option key={o.id} value={o.id}>{o.name}</option>
-              ))}
-              <option value="__create">+ Create new…</option>
-            </select>
+              buttonStyle={{ minWidth: 200 }}
+              options={[
+                { value: "__none", label: "— No initiative —" },
+                ...options.map(o => ({ value: o.id, label: o.name })),
+                { value: "__create", label: "+ Create new…" },
+              ]}
+            />
             <div className="row gap-2">
               <Btn sm onClick={() => setEditing(false)} disabled={pending}>Cancel</Btn>
             </div>

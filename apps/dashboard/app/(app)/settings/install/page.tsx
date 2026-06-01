@@ -28,7 +28,7 @@ export default async function InstallPage() {
           </div>
 
           <div className="code">
-{`// Node example — sign per request, cache for ~50 min
+{`// Node example: sign per request, cache for ~50 min
 import { createHmac } from "node:crypto";
 
 function b64u(buf) {
@@ -108,7 +108,7 @@ function signCrumbIdentity(user) {
           </div>
 
           <p className="text-sm muted" style={{ margin: 0, maxWidth: "62ch", lineHeight: 1.55 }}>
-            Then trigger crumb from anywhere — the public <span className="mono">window.crumb</span> API is safe to call before the script finishes loading (calls queue and replay on mount):
+            Then trigger crumb from anywhere. The public <span className="mono">window.crumb</span> API is safe to call before the script finishes loading (calls queue and replay on mount):
           </p>
 
           <div className="code">

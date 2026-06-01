@@ -22,7 +22,7 @@ export function LoginForm() {
           </p>
         </div>
         <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55 }}>
-          Self-host with no email provider configured yet? The magic link is printed to the dashboard's stdout — <span className="mono">docker compose logs dashboard</span>.
+          Self-host with no email provider configured yet? The magic link is printed to the dashboard's stdout: <span className="mono">docker compose logs dashboard</span>.
         </p>
         <Btn variant="ghost" sm onClick={() => setState({ kind: "idle" })} style={{ alignSelf: "flex-start", paddingLeft: 0 }}>
           ← Use a different email
