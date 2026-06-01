@@ -13,12 +13,15 @@ import { workspacePlan, type Plan } from "./entitlements";
 // "free" and the metered features never run there, so the cap checks are
 // reached only when the feature is already entitled.
 
-export type UsageMetric = "ai" | "replay_bytes";
+export type UsageMetric = "ai" | "replay_bytes" | "usage_events";
 
 // Per-plan monthly caps. 0 = the feature isn't on this plan (so a cap check
 // fails closed). Tune as pricing evolves; env overrides below.
 const AI_CAP_BY_PLAN: Record<Plan, number> = { free: 0, team: 2_000, growth: 10_000 };
 const REPLAY_MB_CAP_BY_PLAN: Record<Plan, number> = { free: 0, team: 0, growth: 5_120 }; // 5 GB
+// Usage-event ingestion is the highest-volume metric. Generous monthly caps;
+// self-host doesn't meter (see checkUsageEventsCap).
+const USAGE_EVENTS_CAP_BY_PLAN: Record<Plan, number> = { free: 0, team: 500_000, growth: 2_000_000 };
 
 function envInt(name: string): number | null {
   const v = parseInt(process.env[name] ?? "", 10);
@@ -110,4 +113,26 @@ export async function checkReplayBytesCap(
   const cap = replayBytesCap(ws);
   const used = await getUsage(ws.id, "replay_bytes");
   return { allowed: used + addBytes <= cap, used, cap };
+}
+
+// Monthly usage-event cap for a workspace. Env CRUMB_USAGE_EVENTS_MONTHLY_CAP
+// overrides the per-plan default.
+export function usageEventsCap(ws: Pick<Workspace, "planId" | "subscriptionStatus">): number {
+  const base = USAGE_EVENTS_CAP_BY_PLAN[workspacePlan(ws)];
+  if (base === 0) return 0;
+  return envInt("CRUMB_USAGE_EVENTS_MONTHLY_CAP") ?? base;
+}
+
+// "Is there budget for `addCount` more usage events this month?" Self-host
+// (isUnmetered) never meters — ingestion is a capability there, not a paid
+// metered feature — so it always has budget.
+export async function checkUsageEventsCap(
+  ws: Pick<Workspace, "id" | "planId" | "subscriptionStatus">,
+  addCount: number,
+  isUnmetered = false,
+): Promise<CapCheck> {
+  if (isUnmetered) return { allowed: true, used: 0, cap: Infinity };
+  const cap = usageEventsCap(ws);
+  const used = await getUsage(ws.id, "usage_events");
+  return { allowed: used + addCount <= cap, used, cap };
 }

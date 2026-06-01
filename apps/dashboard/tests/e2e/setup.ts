@@ -30,6 +30,12 @@ function psql(sql: string): string {
 }
 
 export default async function globalSetup(): Promise<void> {
+  // Bring the schema to head first — the migrations carry `CREATE EXTENSION
+  // vector` + the new tables, so a fresh (or behind) DB is migrated before the
+  // seed runs. Idempotent via the drizzle journal.
+  console.log("[e2e setup] applying migrations…");
+  exec("pnpm db:migrate");
+
   // Re-seed. The seed script wipes then re-inserts; idempotent.
   console.log("[e2e setup] reseeding DB…");
   exec("pnpm db:seed");

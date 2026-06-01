@@ -22,6 +22,15 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
   // primary join (current assignment) and the secondary join (AI guess)
   // don't collide.
   const sugInit = alias(initiatives, "sug_init");
+  // Suggested-assignee join (AI triage): a second alias of workspace_users so
+  // it doesn't collide with the current-assignee join above.
+  const aiAsg = alias(workspaceUsers, "ai_asg");
+  // Count of duplicates folded into this item (feature 4). Fully-qualified raw
+  // refs for the same reason as reply_count above.
+  const mergedCount = sql<number>`(
+    SELECT COUNT(*)::int FROM items dups
+    WHERE dups.merged_into_id = items.id
+  )`.as("merged_count");
 
   const rows = await db
     .select({
@@ -45,6 +54,16 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
       suggestionReason: initiativeSuggestions.reason,
       suggestionInitiativeName: sugInit.name,
       suggestionInitiativeColor: sugInit.color,
+      // AI triage (feature 3)
+      aiSeverity: items.aiSeverity,
+      aiSentiment: items.aiSentiment,
+      aiTriageReason: items.aiTriageReason,
+      aiSuggestedAssigneeId: items.aiSuggestedAssigneeId,
+      aiSuggestedAssigneeInitials: aiAsg.initials,
+      aiSuggestedAssigneeName: aiAsg.name,
+      // Merge (feature 4)
+      mergedIntoId: items.mergedIntoId,
+      mergedCount,
     })
     .from(items)
     .innerJoin(accounts, eq(accounts.id, items.accountId))
@@ -56,6 +75,7 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
       eq(initiativeSuggestions.status, "pending"),
     ))
     .leftJoin(sugInit, eq(sugInit.id, initiativeSuggestions.initiativeId))
+    .leftJoin(aiAsg, eq(aiAsg.id, items.aiSuggestedAssigneeId))
     .where(eq(items.workspaceId, workspaceId))
     .orderBy(desc(items.createdAt));
 
@@ -82,6 +102,16 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
       confidence: r.suggestionConfidence ?? 0,
       reason: r.suggestionReason,
     } : null,
+    aiSeverity: r.aiSeverity,
+    aiSentiment: r.aiSentiment,
+    aiTriageReason: r.aiTriageReason,
+    aiSuggestedAssignee: r.aiSuggestedAssigneeId && r.aiSuggestedAssigneeInitials ? {
+      id: r.aiSuggestedAssigneeId,
+      initials: r.aiSuggestedAssigneeInitials,
+      name: r.aiSuggestedAssigneeName ?? "",
+    } : null,
+    mergedIntoId: r.mergedIntoId,
+    mergedCount: r.mergedCount,
   }));
 }
 

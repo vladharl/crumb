@@ -1,11 +1,39 @@
 import { notFound } from "next/navigation";
-import { db, items, accounts, accountUsers, workspaceUsers, replies, statusEvents, attachments, initiatives, initiativeSuggestions } from "@crumb/db";
-import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
+import { db, items, accounts, accountUsers, workspaceUsers, replies, statusEvents, attachments, initiatives, initiativeSuggestions, dedupeSuggestions, replaySummaries } from "@crumb/db";
+import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { getActiveSession } from "@/lib/server";
 import { ticketSuggestionConfigured } from "@/lib/ai/ticket";
+import { embeddingsConfigured } from "@/lib/ai/embeddings";
+import { replyConfigured } from "@/lib/ai/reply";
+import { replaySummaryConfigured } from "@/lib/ai/replay-summary";
 import { getReplayForItem } from "@/lib/replay/read";
-import { hasFeature } from "@/lib/entitlements";
+import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
+import { eventsBefore } from "@/lib/usage/signals";
 import { ThreadView, type ThreadData } from "./ThreadView";
+
+// Combined ARR + follower count over a merge group {canonical} ∪ {its
+// duplicates}. Summed over DISTINCT accounts so two duplicates from the same
+// account don't double-count ARR. Computed at read time so it stays correct as
+// ARR changes (feature 4).
+async function loadMergeGroup(itemId: string): Promise<{ combinedArrCents: number; followerCount: number }> {
+  const arrRows = (await db.execute(sql`
+    SELECT COALESCE(SUM(a.arr_cents), 0)::bigint AS arr
+    FROM (
+      SELECT DISTINCT i.account_id FROM items i
+      WHERE i.id = ${itemId} OR i.merged_into_id = ${itemId}
+    ) g
+    JOIN accounts a ON a.id = g.account_id
+  `)) as unknown as Array<{ arr: string | number }>;
+  const followerRows = (await db.execute(sql`
+    SELECT COUNT(DISTINCT i.submitter_id)::int AS followers FROM items i
+    WHERE i.id = ${itemId} OR i.merged_into_id = ${itemId}
+  `)) as unknown as Array<{ followers: string | number }>;
+  return {
+    combinedArrCents: Number(arrRows[0]?.arr ?? 0),
+    followerCount: Number(followerRows[0]?.followers ?? 0),
+  };
+}
 
 type WorkspaceForThread = {
   id: string;
@@ -45,6 +73,10 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       initiativeId: items.initiativeId,
       initiativeName: initiatives.name,
       initiativeColor: initiatives.color,
+      mergedIntoId: items.mergedIntoId,
+      detectedLang: items.detectedLang,
+      titleTranslated: items.titleTranslated,
+      bodyTranslated: items.bodyTranslated,
     })
     .from(items)
     .innerJoin(accounts, eq(accounts.id, items.accountId))
@@ -55,6 +87,33 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
     .limit(1);
 
   if (!head) return null;
+
+  // ── merge group (feature 4) ──
+  const sugItem = alias(items, "dup_candidate");
+  const mergedIntoItem = alias(items, "merged_into");
+  const [mergedIntoRow] = head.mergedIntoId
+    ? await db
+        .select({ shortId: mergedIntoItem.shortId, title: mergedIntoItem.title })
+        .from(mergedIntoItem)
+        .where(eq(mergedIntoItem.id, head.mergedIntoId))
+        .limit(1)
+    : [];
+  const [{ count: mergedCount } = { count: 0 }] = await db
+    .select({ count: sql<number>`COUNT(*)::int` })
+    .from(items)
+    .where(eq(items.mergedIntoId, head.id));
+  const { combinedArrCents, followerCount } = await loadMergeGroup(head.id);
+  const [dupSuggestion] = await db
+    .select({
+      candidateShortId: sugItem.shortId,
+      candidateTitle: sugItem.title,
+      similarity: dedupeSuggestions.similarity,
+    })
+    .from(dedupeSuggestions)
+    .innerJoin(sugItem, eq(sugItem.id, dedupeSuggestions.candidateItemId))
+    .where(and(eq(dedupeSuggestions.itemId, head.id), eq(dedupeSuggestions.status, "pending")))
+    .orderBy(desc(dedupeSuggestions.createdAt))
+    .limit(1);
 
   const wsAuthor = await db
     .select({ id: workspaceUsers.id, name: workspaceUsers.name, initials: workspaceUsers.initials })
@@ -170,6 +229,15 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
   // disappears if there's nothing recorded for this item — including the
   // common case where session record is disabled for the workspace.
   const replayManifest = await getReplayForItem(head.shortId, workspaceId);
+  let replaySummaryRow: { summary: string; highlights: string[] | null } | null = null;
+  if (replayManifest) {
+    const [s] = await db
+      .select({ summary: replaySummaries.summary, highlights: replaySummaries.highlights })
+      .from(replaySummaries)
+      .where(eq(replaySummaries.sessionId, replayManifest.id))
+      .limit(1);
+    replaySummaryRow = s ?? null;
+  }
   const replay = replayManifest
     ? {
         id: replayManifest.id,
@@ -193,8 +261,24 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
         sizeBytes: replayManifest.sizeBytes,
         durationMs: replayManifest.durationMs,
         chunks: replayManifest.chunks,
+        summary: replaySummaryRow?.summary ?? null,
+        highlights: replaySummaryRow?.highlights ?? null,
+        aiSummaryAvailable: replaySummaryConfigured() && hasFeature(workspace, "ai"),
       }
     : null;
+
+  // Usage breadcrumb: the submitter's tracked events leading up to submission.
+  // Gated like the other usage surfaces; returns null (card hidden) when off
+  // or empty. Best-effort — a failure must not block the thread from loading.
+  let usageBreadcrumb: Array<{ name: string; at: string; pageUrl: string | null }> | null = null;
+  if (usageAnalyticsAllowed(workspace)) {
+    try {
+      const evs = await eventsBefore({ accountUserId: head.submitterId, before: head.createdAt, limit: 12 });
+      usageBreadcrumb = evs.length ? evs.map((e) => ({ name: e.name, at: e.ts.toISOString(), pageUrl: e.pageUrl })) : null;
+    } catch {
+      usageBreadcrumb = null;
+    }
+  }
 
   return {
     item: {
@@ -209,6 +293,9 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       externalStatus:    head.externalStatus,
       externalSyncedAt:  head.externalSyncedAt ? head.externalSyncedAt.toISOString() : null,
       createdAt: head.createdAt.toISOString(),
+      detectedLang: head.detectedLang,
+      titleTranslated: head.titleTranslated,
+      bodyTranslated: head.bodyTranslated,
     },
     account: {
       id: head.accountId,
@@ -244,7 +331,24 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       githubInstalledAt: workspace.githubInstalledAt ? workspace.githubInstalledAt.toISOString() : null,
     },
     aiTicketAvailable: ticketSuggestionConfigured() && hasFeature(workspace, "ai"),
+    aiReplyAvailable: replyConfigured() && hasFeature(workspace, "ai"),
     replay,
+    usageBreadcrumb,
+    merge: {
+      mergedInto: head.mergedIntoId && mergedIntoRow ? { shortId: mergedIntoRow.shortId, title: mergedIntoRow.title } : null,
+      mergedCount,
+      combinedArrCents,
+      followerCount,
+      pendingSuggestion: dupSuggestion
+        ? {
+            candidateShortId: dupSuggestion.candidateShortId,
+            candidateTitle: dupSuggestion.candidateTitle,
+            similarity: dupSuggestion.similarity,
+          }
+        : null,
+      // "Find similar" is only meaningful where embeddings exist (Cloud + AI).
+      dedupAvailable: embeddingsConfigured() && hasFeature(workspace, "ai"),
+    },
   };
 }
 

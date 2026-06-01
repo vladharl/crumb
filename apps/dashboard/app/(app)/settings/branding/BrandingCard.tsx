@@ -6,6 +6,7 @@ import { Btn, Card, CardHead, Field, Pill, Switch } from "@crumb/ui";
 import { saveBranding } from "./actions";
 
 type Pos = "corner" | "pill" | "tab";
+type Visibility = "auto" | "always" | "hidden";
 
 function readableOn(hex: string): string {
   const c = hex.replace("#", "");
@@ -274,6 +275,9 @@ export function BrandingCard({
   initialLauncherBg,
   initialPosition,
   initialGlass,
+  initialVisibility,
+  initialOffsetX,
+  initialOffsetY,
   initialProductUrl,
 }: {
   initialName: string;
@@ -281,6 +285,9 @@ export function BrandingCard({
   initialLauncherBg: string;
   initialPosition: Pos;
   initialGlass: boolean;
+  initialVisibility: Visibility;
+  initialOffsetX: number;
+  initialOffsetY: number;
   initialProductUrl: string | null;
 }) {
   const [name, setName] = useState(initialName);
@@ -288,6 +295,9 @@ export function BrandingCard({
   const [launcherBg, setLauncherBg] = useState(initialLauncherBg);
   const [pos, setPos] = useState<Pos>(initialPosition);
   const [glass, setGlass] = useState(initialGlass);
+  const [visibility, setVisibility] = useState<Visibility>(initialVisibility);
+  const [offsetX, setOffsetX] = useState(initialOffsetX);
+  const [offsetY, setOffsetY] = useState(initialOffsetY);
   const [productUrl, setProductUrl] = useState(initialProductUrl ?? "");
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -316,7 +326,11 @@ export function BrandingCard({
       );
     }
     startTransition(async () => {
-      const res = await saveBranding({ name, accent, launcherBg, launcherGlass: glass, position: pos, productUrl });
+      const res = await saveBranding({
+        name, accent, launcherBg, launcherGlass: glass, position: pos,
+        launcherVisibility: visibility, launcherOffsetX: offsetX, launcherOffsetY: offsetY,
+        productUrl,
+      });
       if (res.ok) setSavedAt(Date.now());
       else setError(res.error);
     });
@@ -372,6 +386,48 @@ export function BrandingCard({
           </Field>
 
           <Field
+            label="Launcher visibility"
+            help="Hide crumb's own bubble if you already run another chat widget — open the panel from your existing widget or button via window.crumb.open(). See Install for the snippet."
+          >
+            <div className="seg" style={{ width: "100%" }}>
+              {([
+                { k: "auto", label: "Auto" },
+                { k: "always", label: "Always" },
+                { k: "hidden", label: "Hidden" },
+              ] as const).map(({ k, label }) => (
+                <button
+                  key={k}
+                  aria-selected={visibility === k}
+                  onClick={() => setVisibility(k)}
+                  style={{ flex: 1 }}
+                >{label}</button>
+              ))}
+            </div>
+          </Field>
+
+          {visibility !== "hidden" && (
+            <Field
+              label="Launcher offset"
+              help="Nudge the launcher off the corner (px) so it stacks above another widget's bubble. Applies to the FAB and Pill styles."
+            >
+              <div className="row gap-2 center">
+                <input
+                  className="input mono" type="number" aria-label="Horizontal offset"
+                  value={offsetX} onChange={e => setOffsetX(parseInt(e.target.value, 10) || 0)}
+                  style={{ width: 90 }}
+                />
+                <span className="text-xs muted">x</span>
+                <input
+                  className="input mono" type="number" aria-label="Vertical offset"
+                  value={offsetY} onChange={e => setOffsetY(parseInt(e.target.value, 10) || 0)}
+                  style={{ width: 90 }}
+                />
+                <span className="text-xs muted">y</span>
+              </div>
+            </Field>
+          )}
+
+          <Field
             label="Product URL"
             help="Where the widget is embedded — used to build clickable links in customer notification emails. Leave blank to send link-less emails."
           >
@@ -416,6 +472,10 @@ export function BrandingCard({
               setAccent(initialAccent);
               setLauncherBg(initialLauncherBg);
               setPos(initialPosition);
+              setGlass(initialGlass);
+              setVisibility(initialVisibility);
+              setOffsetX(initialOffsetX);
+              setOffsetY(initialOffsetY);
               setProductUrl(initialProductUrl ?? "");
             }} disabled={pending}>Reset</Btn>
           </div>

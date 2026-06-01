@@ -5,11 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Avatar, Btn, Card, CardHead, Ic, PageHead, Pill, StatusDot, StatusPill } from "@crumb/ui";
 import type { Status } from "@crumb/ui";
-import { createReply, updateStatus } from "./actions";
+import { createReply, updateStatus, draftReplyAction, translateItem } from "./actions";
 import { InitiativePanel, type ThreadInitiativeOption } from "./InitiativePanel";
 import { ThreadSuggestionCard, type ThreadSuggestion } from "./ThreadSuggestionCard";
 import { ExternalTicketTile } from "./ExternalTicketTile";
 import { ReplaySessionCard, type ReplayCardData } from "./ReplaySessionCard";
+import { UsageBreadcrumbCard, type UsageBreadcrumbEntry } from "./UsageBreadcrumbCard";
+import { MergePanel, type ThreadMergeData } from "./MergePanel";
 
 function formatArr(cents: number): string {
   if (cents === 0) return "—";
@@ -115,6 +117,9 @@ export type ThreadData = {
     externalStatus: string | null;
     externalSyncedAt: string | null;
     createdAt: string;
+    detectedLang: string | null;
+    titleTranslated: string | null;
+    bodyTranslated: string | null;
   };
   account: { id: string; name: string; arrCents: number };
   submitter: { name: string; initials: string };
@@ -132,7 +137,10 @@ export type ThreadData = {
     githubInstalledAt: string | null;
   };
   aiTicketAvailable: boolean;
+  aiReplyAvailable: boolean;
   replay: ReplayCardData | null;
+  usageBreadcrumb: UsageBreadcrumbEntry[] | null;
+  merge: ThreadMergeData;
 };
 
 // Unified status list — all 8 in one column. The 3 reason-required
@@ -174,7 +182,7 @@ type TrailEntry =
 
 export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boolean }) {
   const router = useRouter();
-  const { item, account, submitter, assignee, messages, events, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, replay } = data;
+  const { item, account, submitter, assignee, messages, events, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, aiReplyAvailable, replay, usageBreadcrumb, merge } = data;
   const teammateNames = useMemo(() => teammates.map(t => t.name), [teammates]);
 
   const customerMsgs = messages.filter(m => !m.internal);
@@ -199,6 +207,9 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
   const [pendingAttachments, setPendingAttachments] = useState<ThreadAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [showTranslation, setShowTranslation] = useState(false);
 
   // ── @-mention autocomplete (internal notes only) ──
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -335,6 +346,25 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
     });
   };
 
+  // AI reply draft (feature 7) — fills the composer; the vendor edits + sends.
+  const onDraft = () => {
+    setDraftError(null);
+    setDrafting(true);
+    startTransition(async () => {
+      const res = await draftReplyAction(item.shortId);
+      setDrafting(false);
+      if (res.ok) setDraft(res.draft);
+      else setDraftError(res.error === "ai_cap_reached" ? "Monthly AI limit reached." : "Couldn't draft a reply — try again.");
+    });
+  };
+
+  const onTranslate = () => {
+    startTransition(async () => {
+      const res = await translateItem(item.shortId);
+      if (res.ok) { setShowTranslation(true); router.refresh(); }
+    });
+  };
+
   const openReasonFor = (status: Status, label: string) => {
     setReasonForm({ status, label });
     setReasonText("");
@@ -388,6 +418,33 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
         <button aria-selected={tab === "internal"} onClick={() => setTab("internal")}>Internal · {internalMsgs.length}</button>
         <button aria-selected={tab === "trail"}    onClick={() => setTab("trail")}>Trail · {trail.length}</button>
       </div>
+
+      {item.detectedLang && item.detectedLang !== "en" && (
+        <div className="row gap-3 center" style={{
+          padding: "8px 12px", border: "var(--border)", borderRadius: "var(--r-sm)",
+          background: "var(--surface-2)", flexWrap: "wrap",
+        }}>
+          <Ic.globe style={{ width: 14, height: 14, color: "var(--mute)", flexShrink: 0 }} />
+          <span className="text-sm">This feedback is in <strong style={{ fontWeight: 500 }}>{item.detectedLang.toUpperCase()}</strong>.</span>
+          {item.titleTranslated ? (
+            <Btn sm variant="ghost" onClick={() => setShowTranslation(s => !s)}>
+              {showTranslation ? "Hide translation" : "Show translation"}
+            </Btn>
+          ) : aiReplyAvailable && canWrite ? (
+            <Btn sm onClick={onTranslate} disabled={pending}>{pending ? "Translating…" : "Translate to English"}</Btn>
+          ) : null}
+        </div>
+      )}
+
+      {showTranslation && item.titleTranslated && (
+        <Card>
+          <CardHead title="Translation" after={<Pill ring>auto</Pill>} />
+          <div className="card-body col gap-2">
+            <span className="serif text-lg">{item.titleTranslated}</span>
+            {item.bodyTranslated && <p className="text-md" style={{ margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{item.bodyTranslated}</p>}
+          </div>
+        </Card>
+      )}
 
       <div className="cols-2-1" style={{ alignItems: "start" }}>
         <Card>
@@ -583,6 +640,9 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
             {uploadError && (
               <span className="text-xs" style={{ color: "var(--err-text)" }}>{uploadError}</span>
             )}
+            {draftError && (
+              <span className="text-xs" style={{ color: "var(--err-text)" }}>{draftError}</span>
+            )}
             <div className="row gap-2 center">
               <Btn
                 variant="ghost"
@@ -592,6 +652,17 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                 disabled={pending || uploading}
                 aria-label="Attach a file"
               />
+              {aiReplyAvailable && tab !== "internal" && canWrite && (
+                <Btn
+                  sm
+                  variant="ghost"
+                  icon={<Ic.sparkle style={{ width: 12, height: 12 }} />}
+                  onClick={onDraft}
+                  disabled={pending}
+                >
+                  {drafting ? "Drafting…" : "AI draft"}
+                </Btn>
+              )}
               {uploading && <span className="text-xs muted">Uploading…</span>}
               <div style={{ flex: 1 }} />
               <Btn sm onClick={() => { setDraft(""); setPendingAttachments([]); }} disabled={pending || (!draft && pendingAttachments.length === 0)}>Clear</Btn>
@@ -676,6 +747,10 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
             <ThreadSuggestionCard suggestion={suggestion} itemShortId={item.shortId} />
           )}
 
+          {canManageInitiatives && (
+            <MergePanel itemShortId={item.shortId} canManage={canWrite} merge={merge} />
+          )}
+
           <ExternalTicketTile
             itemShortId={item.shortId}
             itemTitle={item.title}
@@ -692,6 +767,8 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
           />
 
           {replay && <ReplaySessionCard replay={replay} />}
+
+          {usageBreadcrumb && usageBreadcrumb.length > 0 && <UsageBreadcrumbCard entries={usageBreadcrumb} />}
 
           <Card>
             <CardHead title="Account" />

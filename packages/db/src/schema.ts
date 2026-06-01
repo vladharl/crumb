@@ -11,8 +11,32 @@ import {
   index,
   doublePrecision,
   bigint,
+  jsonb,
   primaryKey,
+  customType,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+
+// ─── pgvector column type ────────────────────────────────────
+// Drizzle 0.36's pg-core has no native vector type, so we declare one. The
+// dimension is fixed at the column level (pgvector requires it) and MUST match
+// the embedding model configured in lib/ai/embeddings.ts (AISTACK_EMBEDDINGS_MODEL).
+// We pin 1024 and also store the model+dim per row (see itemEmbeddings) so a
+// model swap is detectable and never silently mixes incompatible vector spaces.
+// pgvector accepts/emits the literal "[a,b,c]" text form, which postgres.js
+// passes through verbatim.
+export const VECTOR_DIM = 1024;
+const vector1024 = customType<{ data: number[]; driverData: string }>({
+  dataType() {
+    return `vector(${VECTOR_DIM})`;
+  },
+  toDriver(value: number[]): string {
+    return `[${value.join(",")}]`;
+  },
+  fromDriver(value: string): number[] {
+    return JSON.parse(value) as number[];
+  },
+});
 
 // ─── workspaces (vendor side) ────────────────────────────────
 export const workspaces = pgTable("workspaces", {
@@ -27,6 +51,14 @@ export const workspaces = pgTable("workspaces", {
   position: varchar("position", { length: 16 }).notNull().default("corner"), // corner | pill | tab
   // Opt-in glassmorphism launcher style (translucent + backdrop-blur).
   launcherGlass: boolean("launcher_glass").notNull().default(false),
+  // Whether crumb shows its own launcher bubble. `hidden` lets a site that
+  // already runs Intercom/Zendesk/etc. drive crumb via window.crumb.open()
+  // from their existing chat widget — avoiding two competing bubbles.
+  launcherVisibility: varchar("launcher_visibility", { length: 16 }).notNull().default("auto"), // auto | always | hidden
+  // Pixel nudge added to the launcher's 20px corner inset, so it can stack
+  // above another widget's bubble instead of overlapping it.
+  launcherOffsetX: integer("launcher_offset_x").notNull().default(0),
+  launcherOffsetY: integer("launcher_offset_y").notNull().default(0),
   nextItemSeq: integer("next_item_seq").notNull().default(1),
   // HS256 secret used to verify widget identity JWTs. 64 hex chars = 32 bytes.
   signingSecret: text("signing_secret").notNull().default(sql`encode(gen_random_bytes(32), 'hex')`),
@@ -74,6 +106,31 @@ export const workspaces = pgTable("workspaces", {
   githubAppInstallAccount: text("github_app_install_account"),
   githubDefaultRepo:       text("github_default_repo"),
   githubInstalledAt:       timestamp("github_installed_at", { withTimezone: true }),
+
+  // ── HubSpot CRM install (OAuth) ──────────────────────────────
+  // One-way sync of Companies → accounts + ARR. Tokens are sealed at rest
+  // (lib/crypto-at-rest). portal_id identifies the connected HubSpot account.
+  hubspotAccessToken:    text("hubspot_access_token"),
+  hubspotRefreshToken:   text("hubspot_refresh_token"),
+  hubspotTokenExpiresAt: timestamp("hubspot_token_expires_at", { withTimezone: true }),
+  hubspotPortalId:       text("hubspot_portal_id"),
+  hubspotInstalledAt:    timestamp("hubspot_installed_at", { withTimezone: true }),
+
+  // ── Salesforce CRM install (OAuth web-server flow) ───────────
+  // instance_url is returned with the token and scopes every REST/SOQL call
+  // (orgs live on per-instance hosts). Refresh-token lifecycle mirrors Jira.
+  salesforceAccessToken:    text("salesforce_access_token"),
+  salesforceRefreshToken:   text("salesforce_refresh_token"),
+  salesforceInstanceUrl:    text("salesforce_instance_url"),
+  salesforceTokenExpiresAt: timestamp("salesforce_token_expires_at", { withTimezone: true }),
+  salesforceInstalledAt:    timestamp("salesforce_installed_at", { withTimezone: true }),
+
+  // ── MS Teams incoming webhook (vendor channel firehose; sealed) ──────
+  // A Teams "Workflows"/incoming-webhook URL the workspace pastes; key events
+  // (new submission, customer reply, status change) post an Adaptive Card here.
+  // Not OAuth — a capability the vendor opts into by pasting a URL.
+  teamsWebhookUrl:   text("teams_webhook_url"),
+  teamsConnectedAt:  timestamp("teams_connected_at", { withTimezone: true }),
 
   // ── Session Record (Cloud only) ──────────────────────────────
   // Vendor-side opt-in. The widget receives this flag in /me's response
@@ -137,10 +194,33 @@ export const accounts = pgTable("accounts", {
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   arrCents: integer("arr_cents").notNull().default(0),
+  // Where arrCents came from. "manual" (a PM typed it) is never overwritten by
+  // a CRM sync unless the workspace opts into letting the CRM win; "crm" rows
+  // are kept fresh on each sync. Surfaced in the UI as a "from HubSpot" badge.
+  arrSource: varchar("arr_source", { length: 16 }).notNull().default("manual"), // manual | crm
+  // CRM linkage (feature 1). Set when an account is matched to / created from a
+  // CRM Company. external_crm_id is the provider's record id; the unique index
+  // below makes sync upserts idempotent.
+  externalCrmProvider: varchar("external_crm_provider", { length: 16 }), // hubspot | salesforce
+  externalCrmId: text("external_crm_id"),
+  crmSyncedAt: timestamp("crm_synced_at", { withTimezone: true }),
+  // ── Customer-side chat webhooks (feature: dual-side notifications) ──
+  // The customer's own Slack/Teams channel incoming-webhook URL (sealed at
+  // rest). When set, vendor replies / status changes / roadmap updates also
+  // post a card there, alongside the customer email. Notifications only — no
+  // per-customer OAuth. Per-account toggles parallel accountUsers.notify*.
+  slackWebhookUrl: text("slack_webhook_url"),
+  teamsWebhookUrl: text("teams_webhook_url"),
+  notifyChatReplies: boolean("notify_chat_replies").notNull().default(true),
+  notifyChatStatus:  boolean("notify_chat_status").notNull().default(true),
+  notifyChatRoadmap: boolean("notify_chat_roadmap").notNull().default(true),
   since: timestamp("since", { withTimezone: true, mode: "date" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   byWs: index("accounts_workspace_idx").on(t.workspaceId),
+  // Idempotent CRM upsert key. NULLs are distinct in Postgres, so non-CRM
+  // accounts (both columns NULL) never collide here.
+  uniqCrm: unique("accounts_crm_uniq").on(t.workspaceId, t.externalCrmProvider, t.externalCrmId),
 }));
 
 export const accountUsers = pgTable("account_users", {
@@ -186,12 +266,47 @@ export const items = pgTable("items", {
   externalTicketUrl:  text("external_ticket_url"),
   externalStatus:     text("external_status"),
   externalSyncedAt:   timestamp("external_synced_at", { withTimezone: true }),
+
+  // ── AI auto-triage (feature 3; Cloud-only writes) ────────────
+  // Advisory attributes the triage model fills in fire-and-forget at capture.
+  // These are SUGGESTIONS shown as badges/chips — they never overwrite the
+  // human-owned `type`/`assignee_id`/`status` (a misclassification must not
+  // silently re-route). ai_sentiment is -1..1, ai_urgency 0..1.
+  aiType:               varchar("ai_type", { length: 16 }),     // bug | idea | question | integration
+  aiSeverity:           varchar("ai_severity", { length: 16 }), // low | medium | high | critical
+  aiSentiment:          doublePrecision("ai_sentiment"),
+  aiUrgency:            doublePrecision("ai_urgency"),
+  aiSuggestedAssigneeId: uuid("ai_suggested_assignee_id").references(() => workspaceUsers.id, { onDelete: "set null" }),
+  aiTriageReason:       text("ai_triage_reason"),
+  aiTriagedAt:          timestamp("ai_triaged_at", { withTimezone: true }),
+  aiTriageModel:        varchar("ai_triage_model", { length: 64 }),
+
+  // ── Duplicate merge (feature 4) ──────────────────────────────
+  // When set, this item is a duplicate folded into merged_into_id (the
+  // canonical item). status is flipped to "duplicate" in the same write.
+  // Effective ARR/followers for a canonical item are computed over the group
+  // {canonical} ∪ {items where merged_into_id = canonical}. Self-FK ⇒ needs
+  // the AnyPgColumn return annotation.
+  mergedIntoId:           uuid("merged_into_id").references((): AnyPgColumn => items.id, { onDelete: "set null" }),
+  mergedAt:               timestamp("merged_at", { withTimezone: true }),
+  mergedByWorkspaceUserId: uuid("merged_by_workspace_user_id").references(() => workspaceUsers.id, { onDelete: "set null" }),
+
+  // ── Translation (feature 7; Cloud-only writes) ───────────────
+  // detected_lang is a BCP-47-ish code from language detection at capture.
+  // When it differs from the workspace language we store a translation so the
+  // vendor reads the feedback in their own language without a round-trip.
+  detectedLang:    varchar("detected_lang", { length: 8 }),
+  titleTranslated: text("title_translated"),
+  bodyTranslated:  text("body_translated"),
+  translatedAt:    timestamp("translated_at", { withTimezone: true }),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   uniqShort: unique().on(t.workspaceId, t.shortId),
   byWsStatus: index("items_workspace_status_idx").on(t.workspaceId, t.status),
   byAccount: index("items_account_idx").on(t.accountId),
+  byMergedInto: index("items_merged_into_idx").on(t.mergedIntoId),
 }));
 
 // ─── replies ─────────────────────────────────────────────────
@@ -257,6 +372,10 @@ export const initiatives = pgTable("initiatives", {
   // drag-to-reorder on the Initiatives board.
   roadmapOrder: integer("roadmap_order").notNull().default(0),
   isPublic: boolean("is_public").notNull().default(false),
+  // Usage-event names whose adoption this initiative drives. When set and the
+  // initiative ships, the detail page measures pre/post adoption of these
+  // events (usage analytics). null = no impact tracking.
+  trackedEventNames: text("tracked_event_names").array(),
   ownerWorkspaceUserId: uuid("owner_workspace_user_id").references(() => workspaceUsers.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -316,6 +435,83 @@ export const ticketSuggestions = pgTable("ticket_suggestions", {
 }, (t) => ({
   byItemStatus: index("ticket_sugg_item_status_idx").on(t.itemId, t.status),
 }));
+
+// ─── item embeddings (pgvector; semantic dedup + search) ─────
+// One row per item, kept in a side table so the heavy vector column never
+// bloats item row scans. Written fire-and-forget at capture (and on edit)
+// by the Cloud-only embeddings path; self-host leaves this empty.
+//
+// The HNSW cosine index is created by raw SQL in the migration (drizzle-kit
+// can't express it). model+dim are stored per row so a model change is
+// detectable — a re-embed job re-generates rows where model != the configured
+// model. content_hash (sha256 of title+body) lets us skip re-embedding when
+// the text is unchanged.
+export const itemEmbeddings = pgTable("item_embeddings", {
+  itemId: uuid("item_id").primaryKey().references(() => items.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  embedding: vector1024("embedding").notNull(),
+  model: varchar("model", { length: 64 }).notNull(),
+  dim: integer("dim").notNull().default(VECTOR_DIM),
+  contentHash: varchar("content_hash", { length: 64 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  byWorkspace: index("item_embeddings_ws_idx").on(t.workspaceId),
+}));
+
+// ─── dedupe suggestions (AI duplicate detection; feature 4) ──
+// One row per "item_id looks like a duplicate of candidate_item_id", produced
+// from pgvector similarity at capture. Mirrors the initiative/ticket suggestion
+// lifecycle (pending → accepted/dismissed). Accept performs the smart merge
+// (item_id is folded into candidate_item_id). Cloud-only writes (needs
+// embeddings); on self-host nothing populates it.
+export const dedupeSuggestions = pgTable("dedupe_suggestions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  itemId: uuid("item_id").notNull().references(() => items.id, { onDelete: "cascade" }), // the likely duplicate
+  candidateItemId: uuid("candidate_item_id").notNull().references(() => items.id, { onDelete: "cascade" }), // the canonical match
+  similarity: doublePrecision("similarity").notNull(),
+  status: varchar("status", { length: 16 }).notNull().default("pending"), // pending | accepted | dismissed
+  model: varchar("model", { length: 64 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+}, (t) => ({
+  byItemStatus: index("dedupe_sugg_item_status_idx").on(t.itemId, t.status),
+}));
+
+export type DedupeSuggestion = typeof dedupeSuggestions.$inferSelect;
+export type NewDedupeSuggestion = typeof dedupeSuggestions.$inferInsert;
+
+// ─── inbound captures (meet-customers-where-they-are; pending triage) ──
+// A piece of feedback arriving from an external channel (a forwarded email, a
+// Slack message, a browser/email extension) that hasn't been mapped to a
+// customer yet. It lands here PENDING — items.account_id/submitter_id are NOT
+// NULL, so a capture can't be an item until a vendor confirms the account
+// (accept routes through composeItem, which upserts account+submitter). An AI
+// account suggester (Cloud-only) pre-fills suggested_account_id; self-host
+// leaves it null for manual mapping.
+export const inboundCaptures = pgTable("inbound_captures", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  source: varchar("source", { length: 16 }).notNull(), // email | slack | extension
+  fromEmail: text("from_email"),
+  fromName: text("from_name"),
+  subject: text("subject"),
+  body: text("body").notNull().default(""),
+  suggestedAccountId: uuid("suggested_account_id").references(() => accounts.id, { onDelete: "set null" }),
+  suggestedAccountName: text("suggested_account_name"),
+  suggestedConfidence: doublePrecision("suggested_confidence"),
+  status: varchar("status", { length: 16 }).notNull().default("pending"), // pending | accepted | dismissed
+  createdItemId: uuid("created_item_id").references(() => items.id, { onDelete: "set null" }),
+  rawMeta: text("raw_meta"), // JSON string of the provider payload (message_id, etc.)
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  decidedByWorkspaceUserId: uuid("decided_by_workspace_user_id").references(() => workspaceUsers.id, { onDelete: "set null" }),
+}, (t) => ({
+  byWsStatus: index("inbound_captures_ws_status_idx").on(t.workspaceId, t.status, t.createdAt),
+}));
+
+export type InboundCapture = typeof inboundCaptures.$inferSelect;
+export type NewInboundCapture = typeof inboundCaptures.$inferInsert;
 
 // ─── replay sessions (rrweb session record) ──────────────────
 // One row per distinct customer session inside the widget. Created the
@@ -385,6 +581,47 @@ export const replayChunks = pgTable("replay_chunks", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   uniqSeq: unique().on(t.sessionId, t.sequence),
+}));
+
+// ─── replay summaries (AI; feature 8) ────────────────────────
+// One row per session that's been summarized on-demand. highlights are short
+// human-readable beats ("hunted for Export for 40s"); summary is a paragraph.
+// Cloud-only writes; requires session_record + ai.
+export const replaySummaries = pgTable("replay_summaries", {
+  sessionId: uuid("session_id").primaryKey().references(() => replaySessions.id, { onDelete: "cascade" }),
+  summary: text("summary").notNull(),
+  highlights: text("highlights").array(),
+  model: varchar("model", { length: 64 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ─── usage events (product analytics) ────────────────────────
+// One row per `crumb.track(name, props)` call from the widget. Powers the
+// usage signals on accounts, the churn "went inactive" signal, the thread
+// breadcrumb, initiative adoption, and the AI usage-query interface.
+//
+// This is the one genuinely high-cardinality table — a monthly count cap
+// (lib/usage.ts) and a retention sweep keep it bounded. accountId/accountUserId
+// resolve from the widget's identity (JWT or trusted email), like items.
+export const usageEvents = pgTable("usage_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  // Nullable until identity resolves; in practice always set on Cloud (JWT
+  // required). ON DELETE CASCADE so removing an account drops its events.
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "cascade" }),
+  accountUserId: uuid("account_user_id").references(() => accountUsers.id, { onDelete: "set null" }),
+  name: varchar("name", { length: 64 }).notNull(),
+  props: jsonb("props").notNull().default({}),
+  ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+  // Ties to replay_sessions.session_token when a recording was active — no FK
+  // (replay is Cloud+plan-gated and often off).
+  sessionToken: varchar("session_token", { length: 64 }),
+  pageUrl: text("page_url"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  byWorkspaceTs: index("usage_events_workspace_ts_idx").on(t.workspaceId, t.ts),
+  byAccountTs: index("usage_events_account_ts_idx").on(t.accountId, t.ts),
+  byWorkspaceNameTs: index("usage_events_workspace_name_ts_idx").on(t.workspaceId, t.name, t.ts),
 }));
 
 // ─── auth: magic tokens (single-use) ─────────────────────────
@@ -566,5 +803,29 @@ export const roadmapFollows = pgTable("roadmap_follows", {
 }));
 
 export type RoadmapFollow = typeof roadmapFollows.$inferSelect;
+
+// ─── feedback answers ("Ask your feedback"; feature 5) ───────
+// History of natural-language Q&A over the corpus, with the item ids the
+// answer cited. Kept so QBR exports can reuse a saved answer and so we can
+// show recent questions. Cloud-only writes.
+export const feedbackAnswers = pgTable("feedback_answers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  question: text("question").notNull(),
+  answer: text("answer").notNull(),
+  citedItemIds: uuid("cited_item_ids").array(),
+  model: varchar("model", { length: 64 }),
+  askedByWorkspaceUserId: uuid("asked_by_workspace_user_id").references(() => workspaceUsers.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  byWorkspace: index("feedback_answers_workspace_idx").on(t.workspaceId, t.createdAt),
+}));
+
+export type ItemEmbedding = typeof itemEmbeddings.$inferSelect;
+export type NewItemEmbedding = typeof itemEmbeddings.$inferInsert;
+export type ReplaySummary = typeof replaySummaries.$inferSelect;
+export type NewReplaySummary = typeof replaySummaries.$inferInsert;
+export type FeedbackAnswer = typeof feedbackAnswers.$inferSelect;
+export type NewFeedbackAnswer = typeof feedbackAnswers.$inferInsert;
 
 export const __sql = sql; // re-export for convenience

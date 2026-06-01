@@ -15,7 +15,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 // provider client secrets — guarantees a non-empty key in dev when the
 // admin has configured at least one OAuth app.
 
-export type Provider = "slack" | "linear" | "jira" | "github";
+export type Provider = "slack" | "linear" | "jira" | "github" | "hubspot" | "salesforce";
 
 function stateSecret(): string {
   return (
@@ -25,6 +25,8 @@ function stateSecret(): string {
     process.env.LINEAR_CLIENT_SECRET?.trim() ||
     process.env.JIRA_CLIENT_SECRET?.trim() ||
     process.env.GITHUB_APP_PRIVATE_KEY?.trim() ||
+    process.env.HUBSPOT_CLIENT_SECRET?.trim() ||
+    process.env.SALESFORCE_CLIENT_SECRET?.trim() ||
     ""
   );
 }

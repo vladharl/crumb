@@ -48,8 +48,11 @@ export const css = `
 
 .launcher {
   position: fixed;
-  right: 20px;
-  bottom: 20px;
+  /* Base 20px corner inset + an optional offset so the launcher can stack
+     above another widget's bubble (corner/pill positions; the tab variant
+     docks to the edge and ignores the offset). */
+  right: calc(20px + var(--crumb-offset-x, 0px));
+  bottom: calc(20px + var(--crumb-offset-y, 0px));
   width: 54px;
   height: 54px;
   border-radius: 50%;
@@ -242,8 +245,9 @@ export const css = `
 
 .panel {
   position: fixed;
-  right: 20px;
-  bottom: 84px;
+  /* Track the launcher's offset so the panel stays anchored to the bubble. */
+  right: calc(20px + var(--crumb-offset-x, 0px));
+  bottom: calc(84px + var(--crumb-offset-y, 0px));
   width: 392px;
   max-width: calc(100vw - 40px);
   height: 620px;

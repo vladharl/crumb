@@ -17,6 +17,8 @@ type NavLink = {
 const PRIMARY: NavLink[] = [
   { id: "inbox",    href: "/inbox",         label: "Inbox",         icon: Ic.inbox,
     match: p => p === "/inbox" || p.startsWith("/thread") },
+  { id: "captures", href: "/captures",      label: "Captures",      icon: Ic.filter,
+    match: p => p.startsWith("/captures") },
   { id: "accounts", href: "/accounts",      label: "Accounts",      icon: Ic.building,
     match: p => p.startsWith("/accounts") },
   { id: "initiatives", href: "/initiatives", label: "Initiatives",   icon: Ic.road,
@@ -26,6 +28,13 @@ const PRIMARY: NavLink[] = [
   { id: "notifs",   href: "/notifications", label: "Notifications", icon: Ic.bell,
     match: p => p === "/notifications" },
 ];
+
+// AI-gated "Ask your feedback" (feature 5). Inserted after Insights when the
+// workspace has the AI feature (Cloud + plan). On self-host it stays hidden.
+const ASK_LINK: NavLink = {
+  id: "ask", href: "/ask", label: "Ask", icon: Ic.sparkle,
+  match: p => p === "/ask",
+};
 
 const SECONDARY: NavLink[] = [
   { id: "settings", href: "/settings", label: "Settings", icon: Ic.settings,
@@ -39,7 +48,7 @@ export type ShellUser = {
   workspaceName: string;
 };
 
-export function AppShell({ user, children }: { user: ShellUser; children: ReactNode }) {
+export function AppShell({ user, aiEnabled = false, children }: { user: ShellUser; aiEnabled?: boolean; children: ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -49,7 +58,12 @@ export function AppShell({ user, children }: { user: ShellUser; children: ReactN
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const all = [...PRIMARY, ...SECONDARY];
+  // Insert "Ask" right after Insights when AI is on.
+  const primaryNav = aiEnabled
+    ? PRIMARY.flatMap(n => (n.id === "insights" ? [n, ASK_LINK] : [n]))
+    : PRIMARY;
+
+  const all = [...primaryNav, ...SECONDARY];
   const active = all.find(n => (n.match ?? (p => p === n.href))(pathname));
   const label = active?.label ?? "";
 
@@ -75,7 +89,7 @@ export function AppShell({ user, children }: { user: ShellUser; children: ReactN
           <span className="tag">{user.workspaceName} · follow the trail.</span>
         </div>
 
-        {PRIMARY.map(n => {
+        {primaryNav.map(n => {
           const Icon = n.icon;
           const isActive = (n.match ?? (p => p === n.href))(pathname);
           return (

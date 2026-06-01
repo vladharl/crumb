@@ -11,10 +11,17 @@ type SaveInput = {
   launcherBg?: string;
   launcherGlass?: boolean;
   position?: string;
+  launcherVisibility?: string;
+  launcherOffsetX?: number;
+  launcherOffsetY?: number;
   productUrl?: string;
 };
 
 const VALID_POSITIONS = new Set(["corner", "pill", "tab"]);
+const VALID_VISIBILITY = new Set(["auto", "always", "hidden"]);
+// Keep offsets sane — enough to clear another widget's bubble, not enough to
+// fling the launcher off-screen.
+const MAX_OFFSET = 400;
 
 export type SaveResult = { ok: true } | { ok: false; error: string };
 
@@ -24,7 +31,7 @@ export async function saveBranding(input: SaveInput): Promise<SaveResult> {
   const { workspace, user } = await requireSession();
   if (user.role !== "admin") return { ok: false, error: "Only admins can edit branding." };
 
-  const patch: Record<string, string | boolean | null> = {};
+  const patch: Record<string, string | boolean | number | null> = {};
 
   if (typeof input.name === "string") {
     const name = input.name.trim();
@@ -49,6 +56,19 @@ export async function saveBranding(input: SaveInput): Promise<SaveResult> {
 
   if (typeof input.launcherGlass === "boolean") {
     patch.launcherGlass = input.launcherGlass;
+  }
+
+  if (typeof input.launcherVisibility === "string") {
+    if (!VALID_VISIBILITY.has(input.launcherVisibility)) return { ok: false, error: "Pick a valid launcher visibility." };
+    patch.launcherVisibility = input.launcherVisibility;
+  }
+
+  for (const axis of ["launcherOffsetX", "launcherOffsetY"] as const) {
+    const v = input[axis];
+    if (typeof v === "number") {
+      if (!Number.isFinite(v) || Math.abs(v) > MAX_OFFSET) return { ok: false, error: `Offset must be between -${MAX_OFFSET} and ${MAX_OFFSET}px.` };
+      patch[axis] = Math.round(v);
+    }
   }
 
   if (typeof input.productUrl === "string") {

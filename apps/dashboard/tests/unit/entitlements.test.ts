@@ -3,6 +3,7 @@ import {
   hasFeature,
   workspacePlan,
   integrationsAllowed,
+  usageAnalyticsAllowed,
   workspaceFeatures,
 } from "@/lib/entitlements";
 
@@ -41,6 +42,13 @@ describe("lib/entitlements", () => {
       setTier("self_host");
       expect(integrationsAllowed(ws("free", null))).toBe(true);
     });
+
+    it("allows usage analytics ingestion (capability-gated like integrations)", () => {
+      setTier("self_host");
+      // The AI usage-query path still gates on hasFeature(ws,"ai") (false here);
+      // ingestion + non-AI surfaces are allowed so self-host gets real value.
+      expect(usageAnalyticsAllowed(ws("free", null))).toBe(true);
+    });
   });
 
   describe("cloud", () => {
@@ -66,8 +74,15 @@ describe("lib/entitlements", () => {
     it("growth plan unlocks everything", () => {
       setTier("cloud");
       const w = ws("growth", "active");
-      expect(workspaceFeatures(w).sort()).toEqual(["ai", "integrations", "session_record"]);
+      expect(workspaceFeatures(w).sort()).toEqual(["ai", "integrations", "session_record", "usage_analytics"]);
       expect(hasFeature(w, "session_record")).toBe(true);
+    });
+
+    it("usage analytics requires the plan feature on cloud", () => {
+      setTier("cloud");
+      expect(usageAnalyticsAllowed(ws("free", "active"))).toBe(false);
+      expect(usageAnalyticsAllowed(ws("team", "active"))).toBe(true);
+      expect(usageAnalyticsAllowed(ws("growth", "active"))).toBe(true);
     });
 
     it("treats trialing + past_due as active (paid access)", () => {

@@ -2,6 +2,7 @@ import "server-only";
 import { eq } from "drizzle-orm";
 import { db, roadmapFollows, accountUsers, type Workspace } from "@crumb/db";
 import { sendRoadmapUpdateNotification } from "./email";
+import { notifyAccountChannels } from "./notify/account-channel";
 import { log } from "./log";
 
 // Email everyone following an initiative that it changed on the public
@@ -17,6 +18,7 @@ export async function notifyRoadmapFollowers(
     const followers = await db
       .select({
         id: accountUsers.id,
+        accountId: accountUsers.accountId,
         email: accountUsers.email,
         notifyRoadmap: accountUsers.notifyRoadmap,
         unsubscribedAll: accountUsers.unsubscribedAll,
@@ -36,6 +38,17 @@ export async function notifyRoadmapFollowers(
       productUrl: workspace.productUrl,
       unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${f.id}&t=${f.unsubToken}&scope=roadmap` : null,
     })));
+
+    // Customer-side chat: one card per distinct account that has a follower.
+    const accountIds = Array.from(new Set(recipients.map(f => f.accountId)));
+    for (const accountId of accountIds) {
+      void notifyAccountChannels(accountId, {
+        kind: "roadmap_update",
+        initiativeName,
+        change,
+        url: workspace.productUrl ?? null,
+      }, "roadmap");
+    }
   } catch (err) {
     log.error("roadmap follower notify failed", { scope: "crumb/roadmap", err });
   }

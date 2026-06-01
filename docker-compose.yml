@@ -1,6 +1,10 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector-enabled Postgres 16 (drop-in for postgres:16; same PG16 data
+    # dir, so the crumb-pg-data volume is compatible across the swap). Required
+    # for the embeddings / semantic-search features — the migration runs
+    # `CREATE EXTENSION vector`. Back up crumb-pg-data before first upgrade.
+    image: pgvector/pgvector:pg16
     container_name: crumb-postgres
     restart: unless-stopped
     environment:
@@ -53,9 +57,19 @@ services:
       CRUMB_ENCRYPTION_KEY_ID: ${CRUMB_ENCRYPTION_KEY_ID:-1}
       # Shared secret for the orphan-sweep cron endpoint (503s until set).
       CRUMB_INTERNAL_SWEEP_SECRET: ${CRUMB_INTERNAL_SWEEP_SECRET:-}
+      # ── Inbound email (reply-by-email + forward-to-capture) ──
+      # The domain your mail provider routes to the inbound webhooks. Enables
+      # reply+<FB-id>.<token>@DOMAIN (reply lands on the thread) and
+      # inbox+<slug>.<token>@DOMAIN (forwarded email → a pending capture in
+      # /captures). CRUMB_INBOUND_SECRET signs those addresses + optionally
+      # gates the webhook (Bearer). Generate the secret: openssl rand -hex 32.
+      CRUMB_INBOUND_DOMAIN: ${CRUMB_INBOUND_DOMAIN:-}
+      CRUMB_INBOUND_SECRET: ${CRUMB_INBOUND_SECRET:-}
       # ── Integrations: bring your own OAuth-app creds (see DEPLOY.md) ──
       SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
       SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
+      # Verifies the /crumb slash command + interactivity requests from Slack.
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
       LINEAR_CLIENT_ID: ${LINEAR_CLIENT_ID:-}
       LINEAR_CLIENT_SECRET: ${LINEAR_CLIENT_SECRET:-}
       LINEAR_WEBHOOK_SECRET: ${LINEAR_WEBHOOK_SECRET:-}
@@ -66,6 +80,13 @@ services:
       GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      # ── CRM sync: bring your own OAuth-app creds (see DEPLOY.md) ──
+      # One-way sync of accounts + ARR from HubSpot / Salesforce. Capability-
+      # gated: present creds ⇒ the integration shows up (works on self-host).
+      HUBSPOT_CLIENT_ID: ${HUBSPOT_CLIENT_ID:-}
+      HUBSPOT_CLIENT_SECRET: ${HUBSPOT_CLIENT_SECRET:-}
+      SALESFORCE_CLIENT_ID: ${SALESFORCE_CLIENT_ID:-}
+      SALESFORCE_CLIENT_SECRET: ${SALESFORCE_CLIENT_SECRET:-}
       # ── Email (optional): an SMTP relay, or Resend (cloud tier) ──
       CRUMB_EMAIL_PROVIDER: ${CRUMB_EMAIL_PROVIDER:-}
       CRUMB_EMAIL_FROM: ${CRUMB_EMAIL_FROM:-}

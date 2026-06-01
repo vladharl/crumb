@@ -49,6 +49,40 @@ const nextConfig = {
           /^@\/lib\/ai\/ticket$/,
           resolve(__dirname, "lib/ai/ticket.community.ts"),
         ),
+        // New AI features (cloud-only). Each real module imports the aistack /
+        // embeddings client; the community stub returns null/false so neither
+        // the client nor the prompts enter the self-host bundle.
+        new webpack.NormalModuleReplacementPlugin(
+          /^@\/lib\/ai\/embeddings$/,
+          resolve(__dirname, "lib/ai/embeddings.community.ts"),
+        ),
+        new webpack.NormalModuleReplacementPlugin(
+          /^@\/lib\/ai\/triage$/,
+          resolve(__dirname, "lib/ai/triage.community.ts"),
+        ),
+        // Note: lib/ai/dedup.ts is intentionally NOT replaced — it's pure
+        // pgvector SQL with no aistack import, and degrades to "no candidates"
+        // on self-host (item_embeddings is empty there), so it's bundle-safe.
+        new webpack.NormalModuleReplacementPlugin(
+          /^@\/lib\/ai\/ask$/,
+          resolve(__dirname, "lib/ai/ask.community.ts"),
+        ),
+        new webpack.NormalModuleReplacementPlugin(
+          /^@\/lib\/ai\/ask-usage$/,
+          resolve(__dirname, "lib/ai/ask-usage.community.ts"),
+        ),
+        new webpack.NormalModuleReplacementPlugin(
+          /^@\/lib\/ai\/reply$/,
+          resolve(__dirname, "lib/ai/reply.community.ts"),
+        ),
+        new webpack.NormalModuleReplacementPlugin(
+          /^@\/lib\/ai\/replay-summary$/,
+          resolve(__dirname, "lib/ai/replay-summary.community.ts"),
+        ),
+        new webpack.NormalModuleReplacementPlugin(
+          /^@\/lib\/ai\/match-account$/,
+          resolve(__dirname, "lib/ai/match-account.community.ts"),
+        ),
       );
       // Belt-and-suspenders: make the heavy Stripe SDK resolve to an empty
       // module so any stray/direct import (e.g. the webhook route's

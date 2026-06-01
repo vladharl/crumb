@@ -33,6 +33,14 @@ const COLUMNS_BY_PROVIDER: Record<Provider, Partial<typeof workspaces.$inferInse
     jiraCloudId: null, jiraSiteUrl: null, jiraDefaultProjectKey: null, jiraInstalledAt: null,
   },
   github: { githubAppInstallId: null, githubAppInstallAccount: null, githubDefaultRepo: null, githubInstalledAt: null },
+  hubspot: {
+    hubspotAccessToken: null, hubspotRefreshToken: null, hubspotTokenExpiresAt: null,
+    hubspotPortalId: null, hubspotInstalledAt: null,
+  },
+  salesforce: {
+    salesforceAccessToken: null, salesforceRefreshToken: null, salesforceInstanceUrl: null,
+    salesforceTokenExpiresAt: null, salesforceInstalledAt: null,
+  },
 };
 
 export async function clearProviderInstall(workspaceId: string, provider: Provider): Promise<void> {

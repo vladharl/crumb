@@ -25,6 +25,8 @@ type Status =
   | "open" | "review" | "planned" | "progress"
   | "shipped" | "declined" | "deferred" | "duplicate";
 
+type LauncherVisibility = "auto" | "always" | "hidden";
+
 type Config = {
   workspace: string;
   /** Optional identity JWT. When present, sent as Authorization: Bearer
@@ -35,7 +37,66 @@ type Config = {
   userName?: string;
   accountName: string;
   apiBase: string;
+  /** Per-embed `data-launcher` override. When set it wins over the
+   *  workspace's launcherVisibility — lets one page hide crumb's bubble
+   *  (e.g. it already runs Intercom) while others keep it. */
+  launcherOverride?: LauncherVisibility;
+  /** Per-embed `data-offset="x,y"` (px). Nudges the launcher off the corner
+   *  so it can sit above another widget's bubble instead of overlapping. */
+  offsetX?: number;
+  offsetY?: number;
+  /** `data-launcher-avoid="auto"` — best-effort: watch for a known chat
+   *  widget (Intercom/Zendesk/Drift/Freshchat) and stack crumb above it. */
+  avoidAuto?: boolean;
 };
+
+// ─── public JS API ─────────────────────────────────────────
+// `window.crumb` is the public surface a host page drives — open the panel
+// from their own button or existing chat widget, and record usage events.
+// (Distinct from the internal `window.__crumbRecord__` recorder bundle.)
+type CrumbApi = {
+  /** Open the panel; pass a short id (e.g. "FB-12") to jump to that thread. */
+  open: (shortId?: string) => void;
+  close: () => void;
+  toggle: () => void;
+  /** Record a product-usage event for the identified account/user. */
+  track: (name: string, props?: Record<string, unknown>) => void;
+  /** Fires once the widget has mounted (immediately if already mounted). */
+  onReady: (cb: () => void) => void;
+  /** Fires with the unread-reply count whenever it changes — lets a host
+   *  badge their own launcher when crumb's is hidden. */
+  onUnread: (cb: (count: number) => void) => void;
+  /** Internal: queued calls awaiting mount; drained by init(). */
+  q?: Array<[keyof CrumbApi, unknown[]]>;
+  /** Internal: guards against a double-injected snippet. */
+  __mounted?: boolean;
+};
+
+declare global {
+  interface Window {
+    crumb?: CrumbApi;
+  }
+}
+
+// Install a queuing stub the moment widget.js executes (the script is
+// `defer`, so a host's onclick="crumb.open()" or early crumb.track() must not
+// throw before init() runs). init() swaps in the real implementation and
+// replays the queue — the same stub-then-hydrate pattern Intercom/Segment use.
+function installApiStub(): void {
+  if (window.crumb) return; // already a stub, or already mounted
+  const q: Array<[keyof CrumbApi, unknown[]]> = [];
+  const enqueue = (name: keyof CrumbApi) =>
+    ((...args: unknown[]) => { q.push([name, args]); }) as never;
+  window.crumb = {
+    open: enqueue("open"),
+    close: enqueue("close"),
+    toggle: enqueue("toggle"),
+    track: enqueue("track"),
+    onReady: enqueue("onReady"),
+    onUnread: enqueue("onUnread"),
+    q,
+  };
+}
 
 type ItemSummary = {
   short_id: string;
@@ -95,7 +156,7 @@ type RoadmapData = { columns: { now: RoadmapEntry[]; next: RoadmapEntry[]; later
 type NotifPrefs = { replies: boolean; status: boolean; roadmap: boolean; unsubscribed_all: boolean };
 type Me = {
   user: { id: string; name: string; email: string; initials: string; role: string };
-  workspace: { slug: string; name: string; accent?: string; launcher_bg?: string; launcher_glass?: boolean; position?: string; session_record_enabled?: boolean };
+  workspace: { slug: string; name: string; accent?: string; launcher_bg?: string; launcher_glass?: boolean; position?: string; session_record_enabled?: boolean; usage_tracking_enabled?: boolean; launcher_visibility?: LauncherVisibility; launcher_offset_x?: number; launcher_offset_y?: number };
   account: { id: string; name: string; member_count: number };
   is_account_admin: boolean;
   has_roadmap?: boolean;
@@ -140,6 +201,23 @@ function readConfig(): Config | null {
   const explicitApi = d("api");
   const apiBase = explicitApi || new URL(script.src, location.href).origin || location.origin;
 
+  const launcherAttr = d("launcher");
+  const launcherOverride =
+    launcherAttr === "auto" || launcherAttr === "always" || launcherAttr === "hidden"
+      ? (launcherAttr as LauncherVisibility)
+      : undefined;
+  // data-offset accepts "x,y" or a single value applied to both axes.
+  const offsetRaw = d("offset");
+  let offsetX: number | undefined;
+  let offsetY: number | undefined;
+  if (offsetRaw) {
+    const parts = offsetRaw.split(",").map(s => parseInt(s.trim(), 10));
+    const x = parts[0];
+    const y = parts.length > 1 ? parts[1] : parts[0];
+    if (x != null && Number.isFinite(x)) offsetX = x;
+    if (y != null && Number.isFinite(y)) offsetY = y;
+  }
+
   return {
     workspace,
     jwt,
@@ -147,6 +225,10 @@ function readConfig(): Config | null {
     userName: d("userName") || undefined,
     accountName: accountName || "",
     apiBase,
+    launcherOverride,
+    offsetX,
+    offsetY,
+    avoidAuto: d("launcherAvoid") === "auto",
   };
 }
 
@@ -281,6 +363,10 @@ function ensureRecorder(apiBase: string, workspaceSlug: string, sessionToken: st
 
 // ─── main ─────────────────────────────────────────────────
 function init(config: Config) {
+  // Guard against a snippet injected twice (some tag managers do this) — the
+  // first mount owns window.crumb; later calls would double the launcher.
+  if (window.crumb?.__mounted) return;
+
   // host element
   const host = document.createElement("div");
   host.id = "crumb-widget";
@@ -415,12 +501,78 @@ function init(config: Config) {
   // Apply branding (colors / position / name) to the launcher. Idempotent —
   // called once on first paint with cached/default values, then again when
   // /me returns with the authoritative values.
+  // Configured offset (workspace setting or per-embed data-offset) plus an
+  // auto-detected nudge (data-launcher-avoid). Composed onto host CSS vars
+  // that both the launcher and panel read, so they move together.
+  let cfgOffsetX = config.offsetX ?? 0;
+  let cfgOffsetY = config.offsetY ?? 0;
+  let autoOffsetY = 0;
+  function applyOffsets() {
+    host.style.setProperty("--crumb-offset-x", `${cfgOffsetX}px`);
+    host.style.setProperty("--crumb-offset-y", `${cfgOffsetY + autoOffsetY}px`);
+  }
+
+  // Effective launcher visibility: a per-embed data-launcher override always
+  // wins over the workspace setting (so one page can hide the bubble while
+  // others keep it). Defaults to "auto" (= shown).
+  let brandVisibility: LauncherVisibility = "auto";
+  function launcherHidden(): boolean {
+    return (config.launcherOverride ?? brandVisibility) === "hidden";
+  }
+  function applyVisibility() {
+    launcher.style.display = launcherHidden() ? "none" : "";
+  }
+
+  // Best-effort detection of a co-resident chat widget. These selectors are
+  // the stable container ids the major widgets mount; they can change without
+  // notice and load async, so this is opt-in and purely additive to any
+  // configured offset — the configured offset stays the robust path.
+  function startLauncherAvoidance() {
+    const SELECTORS = [
+      "#intercom-container", "#intercom-frame", ".intercom-lightweight-app", // Intercom
+      "iframe#webWidget", "#launcher", "div[data-garden-id='buttons.icon_button']", // Zendesk
+      "#drift-widget", "iframe#drift-frame-controller", // Drift
+      "#fc_frame", // Freshchat
+      "#hubspot-messages-iframe-container", // HubSpot
+    ];
+    let applied = false;
+    const check = () => {
+      if (applied) return;
+      if (!SELECTORS.some(s => { try { return document.querySelector(s); } catch { return false; } })) return;
+      applied = true;
+      // Lift crumb above a typical ~56px bubble plus breathing room.
+      autoOffsetY = 76;
+      applyOffsets();
+      obs.disconnect();
+    };
+    const obs = new MutationObserver(check);
+    check();
+    if (!applied) {
+      obs.observe(document.documentElement, { childList: true, subtree: true });
+      // Chat widgets load early; stop watching after 15s rather than forever.
+      setTimeout(() => obs.disconnect(), 15_000);
+    }
+  }
+
+  // Host hooks for the unread-reply signal — lets a site that hid crumb's
+  // launcher badge their own. Notified from render() when the count changes.
+  const unreadListeners: Array<(n: number) => void> = [];
+  let lastUnread = -1;
+  function notifyUnread(count: number) {
+    if (count === lastUnread) return;
+    lastUnread = count;
+    for (const cb of unreadListeners) { try { cb(count); } catch { /* host cb */ } }
+  }
+
   function applyBranding(opts: {
     dot?: string | null;
     bg?: string | null;
     position?: string | null;
     workspaceName?: string | null;
     glass?: boolean | null;
+    visibility?: LauncherVisibility | null;
+    offsetX?: number | null;
+    offsetY?: number | null;
   }) {
     if (opts.dot) launcher.style.setProperty("--crumb-accent", opts.dot);
     if (opts.bg)  launcher.style.setProperty("--crumb-launcher-bg", opts.bg);
@@ -431,6 +583,14 @@ function init(config: Config) {
       launcherNameEl.textContent = `Share feedback for ${opts.workspaceName}`;
     }
     if (opts.glass != null) launcher.classList.toggle("glass", opts.glass);
+    // Offsets: only the workspace/cache values flow through here; a per-embed
+    // data-offset (config.offsetX/Y) is already baked into cfgOffsetX/Y. Don't
+    // let a null/absent server value clobber an explicit per-embed offset.
+    if (config.offsetX == null && opts.offsetX != null) cfgOffsetX = opts.offsetX;
+    if (config.offsetY == null && opts.offsetY != null) cfgOffsetY = opts.offsetY;
+    applyOffsets();
+    if (opts.visibility) brandVisibility = opts.visibility;
+    applyVisibility();
   }
 
   function settleLauncher(opts: {
@@ -439,8 +599,15 @@ function init(config: Config) {
     position?: string | null;
     workspaceName?: string | null;
     glass?: boolean | null;
+    visibility?: LauncherVisibility | null;
+    offsetX?: number | null;
+    offsetY?: number | null;
   }) {
     applyBranding(opts);
+
+    // Launcher hidden (host drives crumb via window.crumb.open()) — nothing to
+    // reveal. The panel still works; we just never paint the bubble.
+    if (launcherHidden()) return;
 
     // Reveal in-place (opacity transition is the entrance) and play a brief
     // branded shimmer, then settle. We no longer gate reveal on /me, so this
@@ -490,13 +657,14 @@ function init(config: Config) {
   let me: Me | null = null;
   let meState: AsyncState = { kind: "idle" };
   let memberMsg: string | null = null;
+  let channelMsg: string | null = null;
 
   const setView = (v: View) => { view = v; render(); };
 
   // ── branding cache (instant first paint) ──────────────────
   // Persist /me branding so repeat visits paint the launcher with the correct
   // colors/position immediately — no waiting on the /me round-trip.
-  type CachedBrand = { accent?: string; launcher_bg?: string; launcher_glass?: boolean; position?: string; name?: string };
+  type CachedBrand = { accent?: string; launcher_bg?: string; launcher_glass?: boolean; position?: string; name?: string; launcher_visibility?: LauncherVisibility; launcher_offset_x?: number; launcher_offset_y?: number };
   function brandKey(): string { return `crumb_brand:${config.workspace}`; }
   function readCachedBrand(): CachedBrand | null {
     try { return JSON.parse(localStorage.getItem(brandKey()) || "null"); } catch { return null; }
@@ -561,6 +729,58 @@ function init(config: Config) {
       account_name: config.accountName,
       ...extra,
     });
+  }
+
+  // ── usage events (crumb.track) ─────────────────────────────
+  // Buffered and flushed in batches — same philosophy as the recorder's chunk
+  // flushing (timer + on unload). Dropped past a cap so a chatty host can't
+  // grow memory unbounded; no-ops until /me confirms tracking is enabled.
+  type QueuedEvent = { name: string; props: Record<string, unknown>; ts: string; page_url: string };
+  const USAGE_MAX_BUFFER = 100; // hard cap on buffered events
+  const USAGE_BATCH = 25;       // flush at this many…
+  const USAGE_FLUSH_MS = 5000;  // …or this often
+  let usageBuffer: QueuedEvent[] = [];
+  let usageFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function track(name: string, props?: Record<string, unknown>) {
+    if (typeof name !== "string" || !name) return;
+    const ev: QueuedEvent = {
+      name: name.slice(0, 64),
+      props: props && typeof props === "object" && !Array.isArray(props) ? props : {},
+      ts: new Date().toISOString(),
+      page_url: location.href,
+    };
+    if (usageBuffer.length >= USAGE_MAX_BUFFER) usageBuffer.shift(); // drop oldest
+    usageBuffer.push(ev);
+    if (usageBuffer.length >= USAGE_BATCH) flushUsage();
+    else if (!usageFlushTimer) usageFlushTimer = setTimeout(flushUsage, USAGE_FLUSH_MS);
+  }
+
+  function flushUsage() {
+    if (usageFlushTimer) { clearTimeout(usageFlushTimer); usageFlushTimer = null; }
+    if (!usageBuffer.length) return;
+    if (!me?.workspace.usage_tracking_enabled) {
+      // /me still loading → keep waiting; resolved-and-off → drop so the
+      // buffer can't accumulate forever.
+      if (meState.kind === "loading") usageFlushTimer = setTimeout(flushUsage, USAGE_FLUSH_MS);
+      else usageBuffer = [];
+      return;
+    }
+    const batch = usageBuffer;
+    usageBuffer = [];
+    // Tie to a replay session only when one exists (recorder running) — mirrors
+    // how submitNew links the session token. Null otherwise.
+    const sessionToken = window.__crumbRecord__?.getSessionToken?.() ?? undefined;
+    const body = authBody({ events: batch, session_token: sessionToken });
+    try {
+      // keepalive so an unload-time flush still lands.
+      fetch(`${config.apiBase}/api/v1/usage-events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body,
+        keepalive: true,
+      }).catch(() => { /* best-effort */ });
+    } catch { /* ignore */ }
   }
 
   async function fetchList() {
@@ -668,6 +888,35 @@ function init(config: Config) {
     } catch {
       void fetchMe(); // fall back to server truth
     }
+  }
+
+  // ── customer chat channel (account admins) ──
+  // Posts a Slack/Teams channel incoming-webhook URL to the account so vendor
+  // replies / status changes / roadmap updates also land in the customer's own
+  // workspace. Write-only (we never echo the sealed secret back); a transient
+  // message confirms the save. Reads the inputs from the admin card on submit.
+  async function saveChannels() {
+    const slackUrl = panel.querySelector<HTMLInputElement>('input[data-act="slack-webhook"]')?.value.trim() || "";
+    const teamsUrl = panel.querySelector<HTMLInputElement>('input[data-act="teams-webhook"]')?.value.trim() || "";
+    if (!slackUrl && !teamsUrl) { channelMsg = "Paste a Slack or Teams webhook URL."; render(); return; }
+    let ok = true, lastErr = "";
+    for (const [provider, url] of [["slack", slackUrl], ["teams", teamsUrl]] as const) {
+      if (!url) continue;
+      try {
+        const res = await fetch(`${config.apiBase}/api/v1/account/integrations/webhook`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: authBody({ provider, url }),
+        });
+        if (!res.ok) { ok = false; lastErr = (await res.json().catch(() => ({})))?.error || ""; }
+      } catch { ok = false; lastErr = "network"; }
+    }
+    channelMsg = ok
+      ? "Saved — notifications will post to your channel."
+      : lastErr === "invalid_url" ? "That isn't a valid https webhook URL."
+      : lastErr === "forbidden" ? "Only account admins can set this."
+      : "Couldn't save — try again.";
+    render();
   }
 
   // ── account member management (admins) ──
@@ -846,6 +1095,7 @@ function init(config: Config) {
     // customer last opened that thread (a vendor/inbound reply they haven't seen).
     const seen = getSeen();
     const unreadCount = items?.reduce((n, it) => n + (it.reply_count > (seen[it.short_id] ?? 0) ? 1 : 0), 0) ?? 0;
+    notifyUnread(unreadCount);
     const existingBadge = launcher.querySelector(".badge");
     if (existingBadge) existingBadge.remove();
     if (unreadCount > 0 && !open) {
@@ -985,6 +1235,18 @@ function init(config: Config) {
           ${membersHtml}
           ${isAdmin ? `<p class="set-sub" style="margin:12px 2px 0">Teammates appear here automatically when they open the widget. Change a role or remove someone above.</p>` : ""}
         </section>
+        ${isAdmin ? `
+        <section class="admin-card">
+          <div class="admin-card-head">
+            <span class="admin-card-title">Notify a channel</span>
+            <span class="admin-card-sub">Slack / Teams</span>
+          </div>
+          <p class="set-sub" style="margin:0 2px 8px">Get replies, status changes, and roadmap updates in your own Slack or Teams channel — paste a channel incoming-webhook URL.</p>
+          ${channelMsg ? `<div class="set-sub" style="margin:0 2px 8px">${escapeHtml(channelMsg)}</div>` : ""}
+          <input class="field" data-act="slack-webhook" placeholder="Slack webhook (https://hooks.slack.com/…)" style="margin-bottom:8px" />
+          <input class="field" data-act="teams-webhook" placeholder="Teams webhook (https://…webhook.office.com/…)" style="margin-bottom:8px" />
+          <button class="primary" data-act="save-channels">Save channel</button>
+        </section>` : ""}
       </div>`;
   }
 
@@ -1282,6 +1544,7 @@ function init(config: Config) {
       if (id) removeMember(id);
       return;
     }
+    if (act === "save-channels") { void saveChannels(); return; }
     if (act === "follow") {
       const id = target.dataset.id;
       if (id) toggleFollow(id, target.dataset.following !== "1");
@@ -1393,7 +1656,14 @@ function init(config: Config) {
     position: cachedBrand?.position ?? null,
     workspaceName: cachedBrand?.name ?? null,
     glass: cachedBrand?.launcher_glass ?? null,
+    visibility: cachedBrand?.launcher_visibility ?? null,
+    offsetX: cachedBrand?.launcher_offset_x ?? null,
+    offsetY: cachedBrand?.launcher_offset_y ?? null,
   });
+
+  // Best-effort co-positioning: if the host already runs a known chat widget,
+  // stack crumb above it instead of overlapping. Opt-in via data-launcher-avoid.
+  if (config.avoidAuto && !launcherHidden()) startLauncherAvoidance();
 
   fetchMe().then(() => {
     if (me) {
@@ -1403,6 +1673,9 @@ function init(config: Config) {
         position: me.workspace.position ?? null,
         workspaceName: me.workspace.name ?? null,
         glass: me.workspace.launcher_glass ?? false,
+        visibility: me.workspace.launcher_visibility ?? null,
+        offsetX: me.workspace.launcher_offset_x ?? null,
+        offsetY: me.workspace.launcher_offset_y ?? null,
       });
       writeCachedBrand({
         accent: me.workspace.accent,
@@ -1410,6 +1683,9 @@ function init(config: Config) {
         launcher_glass: me.workspace.launcher_glass,
         position: me.workspace.position,
         name: me.workspace.name,
+        launcher_visibility: me.workspace.launcher_visibility,
+        launcher_offset_x: me.workspace.launcher_offset_x,
+        launcher_offset_y: me.workspace.launcher_offset_y,
       });
       // Consent-gated: only (re)start recording if the customer already opted
       // in earlier this tab. A fresh visitor records nothing until they tick
@@ -1451,8 +1727,44 @@ function init(config: Config) {
     else { open = false; render(); }
   });
 
+  // Last-chance flush of buffered usage events when the page goes away.
+  window.addEventListener("pagehide", () => { try { flushUsage(); } catch { /* ignore */ } });
+
+  // ── public API: replace the queuing stub and drain it ──────
+  function openApi(shortId?: string) {
+    open = true;
+    if (me === null && meState.kind !== "loading") fetchMe();
+    fetchList();
+    if (shortId) { view = { kind: "thread", shortId, reply: "" }; fetchThread(shortId); }
+    render();
+  }
+  function closeApi() { open = false; expanded = false; render(); }
+
+  const queued = window.crumb?.q ?? [];
+  const api: CrumbApi = {
+    open: openApi,
+    close: closeApi,
+    toggle: () => { if (open) closeApi(); else openApi(); },
+    track,
+    onReady: (cb) => { try { queueMicrotask(() => cb()); } catch { setTimeout(cb, 0); } },
+    onUnread: (cb) => {
+      unreadListeners.push(cb);
+      if (lastUnread >= 0) { try { cb(lastUnread); } catch { /* host cb */ } }
+    },
+    __mounted: true,
+  };
+  window.crumb = api;
+  for (const [name, args] of queued) {
+    const fn = api[name];
+    if (typeof fn === "function") {
+      try { (fn as (...a: unknown[]) => void)(...args); } catch { /* host call */ }
+    }
+  }
+
   render();
 }
+
+installApiStub();
 
 const cfg = readConfig();
 if (cfg) {

@@ -16,9 +16,11 @@ function setupFor(provider: Provider, origin: string): { rows: Row[]; env: strin
       return {
         rows: [
           { label: "Redirect URL", value: cb("slack"), mono: true },
-          { label: "Bot scopes", value: "chat:write, im:write, users:read, users:read.email", mono: true },
+          { label: "Bot scopes", value: "chat:write, im:write, users:read, users:read.email, commands", mono: true },
+          { label: "Slash command (/crumb) Request URL", value: `${origin}/api/integrations/slack/commands`, mono: true },
+          { label: "Interactivity Request URL", value: `${origin}/api/integrations/slack/interactivity`, mono: true },
         ],
-        env: ["SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET"],
+        env: ["SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET", "SLACK_SIGNING_SECRET (for the slash command)"],
         docs: "https://api.slack.com/apps",
       };
     case "linear":
@@ -51,6 +53,25 @@ function setupFor(provider: Provider, origin: string): { rows: Row[]; env: strin
         ],
         env: ["GITHUB_APP_ID", "GITHUB_APP_SLUG", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET"],
         docs: "https://github.com/settings/apps/new",
+      };
+    case "hubspot":
+      return {
+        rows: [
+          { label: "Redirect URL", value: cb("hubspot"), mono: true },
+          { label: "Scopes", value: "crm.objects.companies.read", mono: true },
+        ],
+        env: ["HUBSPOT_CLIENT_ID", "HUBSPOT_CLIENT_SECRET"],
+        docs: "https://developers.hubspot.com/docs/api/oauth-quickstart-guide",
+      };
+    case "salesforce":
+      return {
+        rows: [
+          { label: "Callback URL", value: cb("salesforce"), mono: true },
+          { label: "OAuth scopes", value: "api, refresh_token", mono: true },
+          { label: "Sandbox?", value: "set SALESFORCE_LOGIN_URL=https://test.salesforce.com", mono: false },
+        ],
+        env: ["SALESFORCE_CLIENT_ID", "SALESFORCE_CLIENT_SECRET"],
+        docs: "https://help.salesforce.com/s/articleView?id=sf.connected_app_create.htm",
       };
   }
 }

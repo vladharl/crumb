@@ -3,9 +3,30 @@ import { Avatar, Card, Pill } from "@crumb/ui";
 import { db, accounts } from "@crumb/db";
 import { eq, sql } from "drizzle-orm";
 import { getActiveWorkspace } from "@/lib/server";
+import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
+import { accountRiskSignals, atRiskArrCents } from "@/lib/insights/churn";
+import { accountUsageSignals } from "@/lib/usage/signals";
 
-// Account · ARR (bar + value) · Open · Shipped · Total · Since
+// Account · ARR (bar + value) · Open · Shipped · Total · [Active] · Since
+// The "Active" column only appears when usage analytics is enabled — the grid
+// gains a column so the other cells stay aligned.
 const GRID = "1.5fr 220px 64px 70px 56px 76px";
+const GRID_USAGE = "1.5fr 220px 64px 70px 56px 72px 76px";
+
+// Compact "time since" for the Last active column — "3d", "2w", or "—".
+function fmtActive(d: Date | null): string {
+  if (!d) return "—";
+  const ms = Date.now() - d.getTime();
+  if (ms < 60_000) return "now";
+  const units: Array<[string, number]> = [
+    ["w", 1000 * 60 * 60 * 24 * 7],
+    ["d", 1000 * 60 * 60 * 24],
+    ["h", 1000 * 60 * 60],
+    ["m", 1000 * 60],
+  ];
+  for (const [u, mss] of units) if (ms >= mss) return `${Math.floor(ms / mss)}${u}`;
+  return "now";
+}
 
 // NOTE: correlated subqueries are written with fully table-qualified raw column
 // refs (account_users.account_id = accounts.id). Interpolating drizzle column
@@ -81,11 +102,25 @@ function Kpi({ label, value }: { label: string; value: string }) {
 
 export async function AccountsTableTile() {
   const ws = await getActiveWorkspace();
-  const rows = await loadAccounts(ws.id);
+  const aiEntitled = hasFeature(ws, "ai");
+  const showUsage = usageAnalyticsAllowed(ws);
+  const [rows, signals, usageByAccount] = await Promise.all([
+    loadAccounts(ws.id),
+    accountRiskSignals(ws.id),
+    showUsage ? accountUsageSignals(ws.id) : Promise.resolve(new Map()),
+  ]);
+  const riskByAccount = new Map(signals.map(s => [s.accountId, s]));
+  // Only show the column if the workspace is entitled AND at least one account
+  // has activity — otherwise it's a column of dashes.
+  const hasUsage = showUsage && usageByAccount.size > 0;
+  const grid = hasUsage ? GRID_USAGE : GRID;
 
   const totalArr = rows.reduce((n, r) => n + r.arrCents, 0);
   const openArr = rows.reduce((n, r) => n + (r.openCount > 0 ? r.arrCents : 0), 0);
   const atRiskArr = rows.reduce((n, r) => n + (r.awaitingCount > 0 ? r.arrCents : 0), 0);
+  // Sentiment-based at-risk ARR (feature 6) — only meaningful when AI sentiment
+  // is populated (Cloud + AI); hidden on self-host where it'd always be $0.
+  const sentimentRiskArr = atRiskArrCents(signals);
   const maxArr = rows.reduce((n, r) => Math.max(n, r.arrCents), 0) || 1;
 
   return (
@@ -96,34 +131,49 @@ export async function AccountsTableTile() {
           <Kpi label="Total ARR" value={arr(totalArr)} />
           <Kpi label="Accounts" value={String(rows.length)} />
           <Kpi label="ARR with open feedback" value={arr(openArr)} />
-          <Kpi label="At-risk ARR" value={arr(atRiskArr)} />
+          <Kpi label="Awaiting-reply ARR" value={arr(atRiskArr)} />
+          {aiEntitled && <Kpi label="Sentiment-risk ARR" value={arr(sentimentRiskArr)} />}
         </div>
       </Card>
 
       <Card style={{ padding: 0 }}>
         <div className="list">
-          <div className="list-row head" style={{ gridTemplateColumns: GRID }}>
+          <div className="list-row head" style={{ gridTemplateColumns: grid }}>
             <span>Account</span>
             <span>ARR</span>
             <span>Open</span>
             <span>Shipped</span>
             <span>Total</span>
+            {hasUsage && <span>Active</span>}
             <span>Since</span>
           </div>
           {rows.map(r => {
             const h = health(r.openCount, r.awaitingCount);
             const pct = Math.max(2, Math.round((r.arrCents / maxArr) * 100));
+            const risk = riskByAccount.get(r.id);
+            const showRisk = aiEntitled && risk && risk.riskLevel !== "low";
             return (
               <Link
                 key={r.id}
                 href={`/accounts/${r.id}`}
                 className="list-row"
-                style={{ gridTemplateColumns: GRID }}
+                style={{ gridTemplateColumns: grid }}
               >
                 <div className="row gap-3 center" style={{ minWidth: 0 }}>
                   <Avatar kind="ink">{r.name[0]}</Avatar>
                   <div className="col" style={{ minWidth: 0 }}>
-                    <span className="serif text-md truncate">{r.name}</span>
+                    <span className="row gap-2 center" style={{ minWidth: 0 }}>
+                      <span className="serif text-md truncate">{r.name}</span>
+                      {showRisk && (
+                        <span
+                          className="text-2xs fw-med"
+                          title={`Sentiment ${risk!.avgSentiment?.toFixed(2) ?? "—"}${risk!.sentimentTrend != null ? ` · trend ${risk!.sentimentTrend > 0 ? "+" : ""}${risk!.sentimentTrend.toFixed(2)}` : ""}`}
+                          style={{ color: risk!.riskLevel === "high" ? "var(--rust)" : "var(--amber)", flexShrink: 0 }}
+                        >
+                          ↓ at-risk
+                        </span>
+                      )}
+                    </span>
                     <span className="row gap-2 center text-xs muted" style={{ minWidth: 0 }}>
                       <span aria-hidden style={{ width: 7, height: 7, borderRadius: 999, background: h.color, flexShrink: 0 }} title={h.label} />
                       <span className="truncate">{h.label} · {r.userCount} {r.userCount === 1 ? "user" : "users"}</span>
@@ -139,6 +189,11 @@ export async function AccountsTableTile() {
                 <span className="text-sm">{r.openCount > 0 ? <Pill ring ringFill>{r.openCount}</Pill> : <span className="muted-2">—</span>}</span>
                 <span className="text-sm muted">{r.shippedCount}</span>
                 <span className="text-xs muted">{r.totalCount}</span>
+                {hasUsage && (
+                  <span className="text-xs muted" title="Last product activity">
+                    {fmtActive(usageByAccount.get(r.id)?.lastActiveAt ?? null)}
+                  </span>
+                )}
                 <span className="text-xs muted">
                   {r.since ? new Date(r.since).toLocaleDateString("en-US", { month: "short", year: "2-digit" }) : "—"}
                 </span>

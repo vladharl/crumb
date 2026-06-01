@@ -33,6 +33,18 @@ export default defineConfig({
     command: "pnpm dev",
     url: baseURL,
     reuseExistingServer: true,
-    timeout: 60_000,
+    timeout: 120_000,
+    // Env for the inbound-email / slack-command / webhook-delivery specs. Only
+    // applied when Playwright boots the dev server (ignored when reusing an
+    // already-running one). CI sets the same vars at the job level.
+    env: {
+      // Force self-host tier even if a local .env.local sets CRUMB_TIER=cloud —
+      // this suite tests the self-host (trusted-email / tier-gated) behaviour.
+      CRUMB_TIER: "self_host",
+      CRUMB_INBOUND_SECRET: "e2e-inbound",
+      CRUMB_INBOUND_DOMAIN: "crumb.test",
+      CRUMB_WEBHOOK_ALLOW_ANY: "1",
+      SLACK_SIGNING_SECRET: "e2e-slack-signing",
+    },
   },
 });

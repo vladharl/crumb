@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { InitiativeHeaderTile } from "./InitiativeHeaderTile";
+import { InitiativeImpactTile } from "./InitiativeImpactTile";
 import { InitiativeFeedbackTile } from "./InitiativeFeedbackTile";
 import { InitiativeHeaderSkeleton, InitiativeFeedbackSkeleton } from "./InitiativeSkeletons";
 
@@ -14,6 +15,9 @@ export default function InitiativeDetailPage({ params }: { params: { id: string 
     <>
       <Suspense fallback={<InitiativeHeaderSkeleton />}>
         <InitiativeHeaderTile id={params.id} />
+      </Suspense>
+      <Suspense fallback={null}>
+        <InitiativeImpactTile id={params.id} />
       </Suspense>
       <Suspense fallback={<InitiativeFeedbackSkeleton />}>
         <InitiativeFeedbackTile id={params.id} />

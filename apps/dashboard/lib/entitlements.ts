@@ -25,15 +25,15 @@ import { isActiveStatus } from "@/lib/stripe";
 //     feature, since Cloud supplies the shared OAuth apps. Use
 //     `integrationsAllowed()` for that combined rule.
 
-export type Feature = "ai" | "session_record" | "integrations";
+export type Feature = "ai" | "session_record" | "integrations" | "usage_analytics";
 export type Plan = "free" | "team" | "growth";
 
 // Which features each plan unlocks. Tune freely as pricing evolves — this is
 // the single source of truth for the plan→feature mapping.
 const PLAN_FEATURES: Record<Plan, readonly Feature[]> = {
   free: [],
-  team: ["ai", "integrations"],
-  growth: ["ai", "integrations", "session_record"],
+  team: ["ai", "integrations", "usage_analytics"],
+  growth: ["ai", "integrations", "session_record", "usage_analytics"],
 };
 
 const KNOWN_PLANS = new Set<Plan>(["free", "team", "growth"]);
@@ -74,6 +74,17 @@ export function integrationsAllowed(
   ws: Pick<Workspace, "planId" | "subscriptionStatus">,
 ): boolean {
   return isSelfHost() || hasFeature(ws, "integrations");
+}
+
+// Usage-event ingestion + the non-AI usage surfaces (account signals, churn,
+// breadcrumb, initiative impact). Capability-gated like integrations: self-host
+// gets it (it's just data, no AI cost; the surfaces render zeros when empty),
+// Cloud requires the "usage_analytics" plan feature. The AI usage-query path
+// gates separately on hasFeature(ws, "ai") and lives under ee/.
+export function usageAnalyticsAllowed(
+  ws: Pick<Workspace, "planId" | "subscriptionStatus">,
+): boolean {
+  return isSelfHost() || hasFeature(ws, "usage_analytics");
 }
 
 // All features the workspace currently has — handy for the billing page's

@@ -98,6 +98,7 @@ export async function updateInitiative(
     status?: string;
     color?: string | null;
     ownerWorkspaceUserId?: string | null;
+    trackedEventNames?: string[] | null;
   },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!id || typeof id !== "string") return { ok: false, error: "no_id" };
@@ -144,6 +145,23 @@ export async function updateInitiative(
       updates.ownerWorkspaceUserId = u.id;
     } else {
       updates.ownerWorkspaceUserId = null;
+    }
+  }
+
+  if (patch.trackedEventNames !== undefined) {
+    if (patch.trackedEventNames === null) {
+      updates.trackedEventNames = null;
+    } else {
+      if (!Array.isArray(patch.trackedEventNames)) return { ok: false, error: "bad_events" };
+      // Normalize: trim, drop empties, cap each name + the list, dedupe.
+      const cleaned = Array.from(new Set(
+        patch.trackedEventNames
+          .filter((s): s is string => typeof s === "string")
+          .map(s => s.trim())
+          .filter(Boolean)
+          .map(s => s.slice(0, 64)),
+      )).slice(0, 20);
+      updates.trackedEventNames = cleaned.length ? cleaned : null;
     }
   }
 

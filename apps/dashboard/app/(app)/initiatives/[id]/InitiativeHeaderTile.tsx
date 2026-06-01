@@ -19,6 +19,7 @@ async function loadHeader(workspaceId: string, id: string) {
       createdAt: initiatives.createdAt,
       updatedAt: initiatives.updatedAt,
       ownerWorkspaceUserId: initiatives.ownerWorkspaceUserId,
+      trackedEventNames: initiatives.trackedEventNames,
       ownerName: workspaceUsers.name,
       ownerInitials: workspaceUsers.initials,
     })
@@ -85,6 +86,7 @@ export async function InitiativeHeaderTile({ id }: { id: string }) {
               status: initiative.status,
               color: initiative.color,
               ownerWorkspaceUserId: initiative.ownerWorkspaceUserId,
+              trackedEventNames: initiative.trackedEventNames,
             }}
             members={members}
             canManage={canManage}

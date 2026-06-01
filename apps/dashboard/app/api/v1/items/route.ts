@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
-import { db, workspaces, items, replies, statusEvents, initiatives, initiativeSuggestions, replaySessions } from "@crumb/db";
+import { createHash } from "node:crypto";
+import { db, workspaces, workspaceUsers, items, itemEmbeddings, dedupeSuggestions, replies, statusEvents, initiatives, initiativeSuggestions, replaySessions } from "@crumb/db";
 import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { suggestInitiative, clusterConfigured, CLUSTER_MODEL } from "@/lib/ai/cluster";
+import { suggestTriage, triageConfigured, TRIAGE_MODEL } from "@/lib/ai/triage";
+import { embedText, embeddingsConfigured, EMBEDDINGS_MODEL, EMBEDDINGS_DIM } from "@/lib/ai/embeddings";
+import { findDuplicateCandidates } from "@/lib/ai/dedup";
+import { withAiBudget } from "@/lib/ai/run";
+import { notifyWorkspaceChannel } from "@/lib/notify/chat";
 import { hasFeature } from "@/lib/entitlements";
 import { createItemSchema, parseJsonBody } from "@/lib/validation";
 import { consumeAi } from "@/lib/usage";
@@ -171,6 +177,25 @@ export async function POST(req: Request) {
     void autoCluster(ws, created!.id, created!.title, created!.body, created!.type);
   }
 
+  // Fire-and-forget AI auto-triage + embedding (feature 3/4). Same deal: the
+  // item is saved, the customer never waits on the 36 GB model's cold-load.
+  // Triage + embedding share ONE metered unit (withAiBudget) to bound cost on
+  // a path that touches every captured item; clustering above is its own unit.
+  if (hasFeature(ws, "ai") && (triageConfigured() || embeddingsConfigured())) {
+    void autoTriage(ws, created!.id, created!.title, created!.body, created!.type);
+  }
+
+  // Vendor Teams firehose — new submission from the widget (if connected).
+  void notifyWorkspaceChannel(ws.id, {
+    kind: "new_submission",
+    shortId: created!.shortId,
+    title: created!.title,
+    type: created!.type,
+    accountName: account_name ?? "a customer",
+    submitterName: user.name,
+    url: null,
+  });
+
   return cors(NextResponse.json({
     id: created!.id,
     short_id: created!.shortId,
@@ -219,3 +244,99 @@ async function autoCluster(
     log.error("autoCluster failed", { scope: "crumb/ai", err });
   }
 }
+
+// Triage (advisory ai_* columns) + embedding (item_embeddings, for dedup/
+// search) under a single metered unit. Best-effort: any failure is swallowed
+// — the item is already saved and these are enrichment.
+async function autoTriage(
+  ws: Workspace,
+  itemId: string,
+  title: string,
+  body: string,
+  type: string,
+): Promise<void> {
+  try {
+    const members = await db
+      .select({ id: workspaceUsers.id, name: workspaceUsers.name, role: workspaceUsers.role })
+      .from(workspaceUsers)
+      .where(eq(workspaceUsers.workspaceId, ws.id))
+      .limit(50);
+
+    const res = await withAiBudget(ws, async () => {
+      const triage = triageConfigured() ? await suggestTriage({ title, body, type }, members) : null;
+      const embedding = embeddingsConfigured() ? await embedText(`${title}\n\n${body}`) : null;
+      return { triage, embedding };
+    });
+    if (!res.ok) {
+      if (res.error === "ai_cap_reached") {
+        log.warn("ai cap reached — skipping autoTriage", { scope: "crumb/ai", workspaceId: ws.id });
+      }
+      return;
+    }
+
+    const { triage, embedding } = res.value;
+
+    if (triage) {
+      await db
+        .update(items)
+        .set({
+          aiType: triage.type,
+          aiSeverity: triage.severity,
+          aiSentiment: triage.sentiment,
+          aiUrgency: triage.urgency,
+          aiSuggestedAssigneeId: triage.suggestedAssigneeId,
+          aiTriageReason: triage.reason,
+          aiTriagedAt: new Date(),
+          aiTriageModel: TRIAGE_MODEL,
+          detectedLang: triage.lang,
+        })
+        .where(eq(items.id, itemId));
+    }
+
+    if (embedding) {
+      const contentHash = createHash("sha256").update(`${title}\n\n${body}`).digest("hex");
+      await db
+        .insert(itemEmbeddings)
+        .values({
+          itemId,
+          workspaceId: ws.id,
+          embedding,
+          model: EMBEDDINGS_MODEL,
+          dim: EMBEDDINGS_DIM,
+          contentHash,
+        })
+        .onConflictDoUpdate({
+          target: itemEmbeddings.itemId,
+          set: { embedding, model: EMBEDDINGS_MODEL, contentHash, updatedAt: new Date() },
+        });
+
+      // With the embedding stored, check for a near-duplicate and record a
+      // pending suggestion so the inbox arrives pre-flagged (feature 4). Higher
+      // bar than the thread's browse threshold to keep the auto-flag quiet.
+      try {
+        const [best] = await findDuplicateCandidates({
+          workspaceId: ws.id,
+          itemId,
+          limit: 1,
+          threshold: DEDUP_SUGGEST_THRESHOLD,
+        });
+        if (best) {
+          await db.insert(dedupeSuggestions).values({
+            itemId,
+            candidateItemId: best.itemId,
+            similarity: best.similarity,
+            model: EMBEDDINGS_MODEL,
+          });
+        }
+      } catch (err) {
+        log.error("autoDedup failed", { scope: "crumb/ai", err });
+      }
+    }
+  } catch (err) {
+    log.error("autoTriage failed", { scope: "crumb/ai", err });
+  }
+}
+
+// Only auto-flag a duplicate at capture when we're quite sure — keeps the
+// inbox chip trustworthy. PMs can still browse looser matches in the thread.
+const DEDUP_SUGGEST_THRESHOLD = 0.88;

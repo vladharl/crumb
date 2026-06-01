@@ -54,6 +54,49 @@ export const createReplySchema = z
 
 export type CreateReplyInput = z.infer<typeof createReplySchema>;
 
+// Usage-event ingestion (crumb.track). A batch of named events with bounded
+// props — caps mirror the widget's client-side batching so a hostile or chatty
+// client can't push unbounded JSON. props is capped by serialized size after
+// parse (see USAGE_PROPS_MAX_BYTES below) since zod can't weigh bytes cheaply.
+export const USAGE_EVENTS_PER_BATCH = 50;
+export const USAGE_PROPS_MAX_BYTES = 4_096;
+export const USAGE_PROPS_MAX_KEYS = 30;
+
+const usageEventSchema = z.object({
+  name: z.string().trim().min(1, "missing_event_name").max(64, "event_name_too_long"),
+  props: z.record(z.string(), z.unknown()).optional(),
+  ts: z.string().datetime({ offset: true }).optional(),
+  page_url: z.string().max(2_048).optional(),
+});
+
+export const createUsageEventsSchema = z
+  .object({
+    workspace_slug: optSlug,
+    account_user_email: optEmail,
+    account_user_name: optName,
+    account_name: optName,
+    session_token: z.string().regex(/^[0-9a-f]{32}$/, "invalid_session_token").optional(),
+    events: z.array(usageEventSchema).min(1, "no_events").max(USAGE_EVENTS_PER_BATCH, "too_many_events"),
+  })
+  .strip();
+
+export type CreateUsageEventsInput = z.infer<typeof createUsageEventsSchema>;
+
+// Bound a single event's props to a key count + serialized byte budget.
+// Returns a sanitized object (empty when over budget or not a plain object) —
+// belt-and-suspenders alongside the client-side cap.
+export function sanitizeEventProps(props: unknown): Record<string, unknown> {
+  if (!props || typeof props !== "object" || Array.isArray(props)) return {};
+  const entries = Object.entries(props as Record<string, unknown>).slice(0, USAGE_PROPS_MAX_KEYS);
+  const obj = Object.fromEntries(entries);
+  try {
+    if (Buffer.byteLength(JSON.stringify(obj), "utf8") > USAGE_PROPS_MAX_BYTES) return {};
+  } catch {
+    return {};
+  }
+  return obj;
+}
+
 export type ParseResult<T> =
   | { ok: true; data: T }
   | { ok: false; status: number; error: string };

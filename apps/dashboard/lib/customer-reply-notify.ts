@@ -5,6 +5,7 @@ import { sendCustomerReplyNotification } from "./email";
 import { resolveSlackUserId, sendDirectMessage, buildCustomerReplyBlocks } from "./slack/notify";
 import { openNullable } from "./crypto-at-rest";
 import { clearProviderInstall, isSlackRevokedError } from "./integrations/revoke";
+import { notifyWorkspaceChannel } from "./notify/chat";
 import { originFromHeaders } from "./origin";
 import { log } from "./log";
 
@@ -56,6 +57,18 @@ export async function notifyVendorsOfCustomerReply(opts: {
   } catch {
     ctx.slackBotToken = null;
   }
+
+  // Vendor Teams firehose — post the customer reply to the workspace channel
+  // (if connected), independent of the per-recipient DM/email below.
+  void notifyWorkspaceChannel(ctx.workspaceId, {
+    kind: "customer_reply",
+    shortId: ctx.shortId,
+    title: ctx.title,
+    accountName: ctx.accountName,
+    customerName: opts.customerName,
+    body: opts.replyBody,
+    url: opts.dashboardOrigin ? `${opts.dashboardOrigin}/thread/${ctx.shortId}` : null,
+  });
 
   // Pick recipient pool: assignee, or all admins. Pull slack fields so
   // we can route DMs without another query.

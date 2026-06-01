@@ -1,7 +1,12 @@
 "use server";
 
-import { db, items, replies, replyMentions, accountUsers, workspaceUsers, statusEvents, attachments, workspaces, ticketSuggestions } from "@crumb/db";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { db, items, replies, replyMentions, accountUsers, workspaceUsers, statusEvents, attachments, workspaces, ticketSuggestions, dedupeSuggestions, replaySessions } from "@crumb/db";
+import { and, desc, eq, inArray, isNull, isNotNull } from "drizzle-orm";
+import { findDuplicateCandidates } from "@/lib/ai/dedup";
+import { replyConfigured, draftReply, translate } from "@/lib/ai/reply";
+import { withAiBudget } from "@/lib/ai/run";
+import { notifyWorkspaceChannel } from "@/lib/notify/chat";
+import { notifyAccountChannels } from "@/lib/notify/account-channel";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { getActiveSession } from "@/lib/server";
@@ -76,6 +81,7 @@ export async function createReply(input: {
       id: items.id,
       title: items.title,
       status: items.status,
+      accountId: items.accountId,
       submitterId: accountUsers.id,
       submitterEmail: accountUsers.email,
       submitterNotifyReplies: accountUsers.notifyReplies,
@@ -162,6 +168,19 @@ export async function createReply(input: {
     }
   }
 
+  // Customer-side chat: post the vendor reply to the account's Slack/Teams
+  // channel (if connected), alongside the email above. Internal notes excluded.
+  if (!input.internal) {
+    void notifyAccountChannels(row.accountId, {
+      kind: "vendor_reply",
+      shortId: input.itemShortId,
+      title: row.title,
+      vendorName: user.name,
+      body,
+      url: workspace.productUrl ?? null,
+    }, "replies");
+  }
+
   return { ok: true as const };
 }
 
@@ -189,6 +208,7 @@ export async function updateStatus(input: {
       id: items.id,
       title: items.title,
       type: items.type,
+      accountId: items.accountId,
       currentStatus: items.status,
       submitterId: accountUsers.id,
       submitterEmail: accountUsers.email,
@@ -230,6 +250,27 @@ export async function updateStatus(input: {
     reason,
     at: new Date().toISOString(),
   });
+
+  // Chat cards: vendor Teams firehose + the customer's account channel.
+  const statusOrigin = originFromHeaders(headers());
+  void notifyWorkspaceChannel(workspace.id, {
+    kind: "status_change",
+    shortId: input.itemShortId,
+    title: row.title,
+    fromStatus: row.currentStatus,
+    toStatus: input.status,
+    reason,
+    url: statusOrigin ? `${statusOrigin}/thread/${input.itemShortId}` : null,
+  });
+  void notifyAccountChannels(row.accountId, {
+    kind: "status_change",
+    shortId: input.itemShortId,
+    title: row.title,
+    fromStatus: row.currentStatus,
+    toStatus: input.status,
+    reason,
+    url: workspace.productUrl ?? null,
+  }, "status");
 
   // Email the customer; never let a flaky provider undo a status write. Honor
   // the submitter's prefs (skip if muted or status updates are off).
@@ -663,4 +704,235 @@ export async function updateProviderDefault(provider: Provider, target: string):
   }
 
   return { ok: false, error: "provider_not_supported" };
+}
+
+// ─── duplicate detection & smart merge (feature 4) ───────────
+
+export type DuplicateCandidateView = {
+  shortId: string;
+  title: string;
+  status: string;
+  similarity: number;
+};
+
+// Semantic neighbours for this item (pgvector). Empty on self-host (no
+// embeddings) or when nothing is similar enough. Admin/pm only.
+export async function listDuplicateCandidates(
+  itemShortId: string,
+): Promise<{ ok: true; candidates: DuplicateCandidateView[] } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+
+  const [item] = await db
+    .select({ id: items.id })
+    .from(items)
+    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
+    .limit(1);
+  if (!item) return { ok: false, error: "not_found" };
+
+  // Looser threshold than the capture-time auto-flag — PMs are browsing here.
+  const candidates = await findDuplicateCandidates({
+    workspaceId: workspace.id,
+    itemId: item.id,
+    limit: 8,
+    threshold: 0.78,
+  });
+  return {
+    ok: true,
+    candidates: candidates.map((c) => ({
+      shortId: c.shortId,
+      title: c.title,
+      status: c.status,
+      similarity: c.similarity,
+    })),
+  };
+}
+
+// Fold `source` into `target` (the canonical). Source becomes status=duplicate
+// with merged_into_id set; its replay sessions re-point to the canonical so
+// they surface there, and any pending dedupe suggestion resolves. The group's
+// combined ARR/followers are computed at read time (ThreadViewTile), never
+// stored, so they stay correct as ARR changes. Admin/pm only.
+export async function mergeItems(
+  sourceShortId: string,
+  targetShortId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (sourceShortId === targetShortId) return { ok: false, error: "same_item" };
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+
+  const rows = await db
+    .select({ id: items.id, shortId: items.shortId, status: items.status, mergedIntoId: items.mergedIntoId })
+    .from(items)
+    .where(and(eq(items.workspaceId, workspace.id), inArray(items.shortId, [sourceShortId, targetShortId])));
+  const source = rows.find((r) => r.shortId === sourceShortId);
+  const target = rows.find((r) => r.shortId === targetShortId);
+  if (!source || !target) return { ok: false, error: "not_found" };
+  // Can't merge into something that's itself a duplicate (would create a chain).
+  if (target.mergedIntoId) return { ok: false, error: "target_is_duplicate" };
+  // Source must not already have duplicates folded into it (keep a depth-1 tree).
+  const [dep] = await db
+    .select({ id: items.id })
+    .from(items)
+    .where(and(eq(items.workspaceId, workspace.id), eq(items.mergedIntoId, source.id)))
+    .limit(1);
+  if (dep) return { ok: false, error: "source_has_duplicates" };
+
+  await db
+    .update(items)
+    .set({
+      status: "duplicate",
+      mergedIntoId: target.id,
+      mergedAt: new Date(),
+      mergedByWorkspaceUserId: user.id,
+      updatedAt: new Date(),
+    })
+    .where(eq(items.id, source.id));
+  await db.insert(statusEvents).values({
+    itemId: source.id,
+    fromStatus: source.status,
+    toStatus: "duplicate",
+    reason: `Merged into ${targetShortId}`,
+    byWorkspaceUserId: user.id,
+  });
+  // Re-point replay sessions to the canonical item.
+  await db.update(replaySessions).set({ itemId: target.id }).where(eq(replaySessions.itemId, source.id));
+  // Resolve any pending dedupe suggestion that proposed this merge.
+  await db
+    .update(dedupeSuggestions)
+    .set({ status: "accepted", decidedAt: new Date() })
+    .where(and(eq(dedupeSuggestions.itemId, source.id), eq(dedupeSuggestions.status, "pending")));
+
+  revalidatePath(`/thread/${targetShortId}`);
+  revalidatePath(`/thread/${sourceShortId}`);
+  revalidatePath("/inbox");
+  return { ok: true };
+}
+
+// Reverse a merge: the item returns to the open inbox as a standalone request.
+export async function unmergeItem(shortId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+
+  const [row] = await db
+    .select({ id: items.id, mergedIntoId: items.mergedIntoId })
+    .from(items)
+    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, shortId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "not_found" };
+  if (!row.mergedIntoId) return { ok: false, error: "not_merged" };
+
+  await db
+    .update(items)
+    .set({ status: "open", mergedIntoId: null, mergedAt: null, mergedByWorkspaceUserId: null, updatedAt: new Date() })
+    .where(eq(items.id, row.id));
+  await db.insert(statusEvents).values({
+    itemId: row.id,
+    fromStatus: "duplicate",
+    toStatus: "open",
+    reason: "Unmerged",
+    byWorkspaceUserId: user.id,
+  });
+
+  revalidatePath(`/thread/${shortId}`);
+  revalidatePath("/inbox");
+  return { ok: true };
+}
+
+// Dismiss a pending dedupe suggestion without merging (the inbox flag clears).
+export async function dismissDuplicateSuggestion(
+  itemShortId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+
+  const [item] = await db
+    .select({ id: items.id })
+    .from(items)
+    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
+    .limit(1);
+  if (!item) return { ok: false, error: "not_found" };
+
+  await db
+    .update(dedupeSuggestions)
+    .set({ status: "dismissed", decidedAt: new Date() })
+    .where(and(eq(dedupeSuggestions.itemId, item.id), eq(dedupeSuggestions.status, "pending")));
+
+  revalidatePath(`/thread/${itemShortId}`);
+  revalidatePath("/inbox");
+  return { ok: true };
+}
+
+// ─── AI reply drafting + translation (feature 7) ─────────────
+
+// The vendor's working language. No per-workspace setting yet — default English;
+// translation targets this when inbound feedback is in another language.
+const WORKSPACE_LANG = "en";
+
+// Draft a customer-facing close-the-loop reply in the vendor's voice. Returns
+// the draft text for the composer to load (the vendor edits before sending).
+export async function draftReplyAction(
+  itemShortId: string,
+): Promise<{ ok: true; draft: string } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+  if (!replyConfigured()) return { ok: false, error: "not_configured" };
+
+  const [item] = await db
+    .select({ title: items.title, body: items.body, type: items.type, status: items.status })
+    .from(items)
+    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
+    .limit(1);
+  if (!item) return { ok: false, error: "not_found" };
+
+  // A few recent customer-facing vendor replies across the workspace, for voice.
+  const recent = await db
+    .select({ body: replies.body })
+    .from(replies)
+    .innerJoin(items, eq(items.id, replies.itemId))
+    .where(and(eq(items.workspaceId, workspace.id), isNotNull(replies.workspaceUserId), eq(replies.internal, false)))
+    .orderBy(desc(replies.createdAt))
+    .limit(5);
+
+  const budget = await withAiBudget(workspace, () =>
+    draftReply({ item, recentVendorReplies: recent.map(r => r.body) }),
+  );
+  if (!budget.ok) return { ok: false, error: budget.error };
+  if (!budget.value) return { ok: false, error: "draft_failed" };
+  return { ok: true, draft: budget.value.draft };
+}
+
+// Translate the inbound feedback into the workspace language, stored on the item
+// (title_translated / body_translated). Idempotent-ish: re-running re-translates.
+export async function translateItem(
+  itemShortId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+  if (!replyConfigured()) return { ok: false, error: "not_configured" };
+
+  const [item] = await db
+    .select({ id: items.id, title: items.title, body: items.body })
+    .from(items)
+    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
+    .limit(1);
+  if (!item) return { ok: false, error: "not_found" };
+
+  const budget = await withAiBudget(workspace, async () => {
+    const [t, b] = await Promise.all([
+      translate(item.title, WORKSPACE_LANG),
+      item.body ? translate(item.body, WORKSPACE_LANG) : Promise.resolve(""),
+    ]);
+    return { title: t, body: b ?? "" };
+  });
+  if (!budget.ok) return { ok: false, error: budget.error };
+  const v = budget.value;
+  if (!v.title && !v.body) return { ok: false, error: "translate_failed" };
+
+  await db
+    .update(items)
+    .set({ titleTranslated: v.title, bodyTranslated: v.body, translatedAt: new Date() })
+    .where(eq(items.id, item.id));
+  revalidatePath(`/thread/${itemShortId}`);
+  return { ok: true };
 }

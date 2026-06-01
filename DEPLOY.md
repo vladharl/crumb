@@ -42,6 +42,7 @@ Fill in at minimum:
 - `CRUMB_ENCRYPTION_KEY` → `openssl rand -hex 32` (encrypts integration tokens)
 - `CRUMB_INTERNAL_SWEEP_SECRET` → `openssl rand -hex 32`
 - `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` (and any other integrations you've registered)
+- *(optional)* CRM sync — `HUBSPOT_CLIENT_ID`/`HUBSPOT_CLIENT_SECRET` and/or `SALESFORCE_CLIENT_ID`/`SALESFORCE_CLIENT_SECRET` to pull accounts + ARR. Redirect URLs: `…/api/integrations/hubspot/callback` and `…/api/integrations/salesforce/callback`.
 - `CLOUDFLARE_TUNNEL_TOKEN` → from step 5
 
 `.env` is gitignored — never commit it.
@@ -92,13 +93,22 @@ redirect URL is exactly `https://crumb.localhostlabs.net/api/integrations/slack/
 git pull && docker compose --profile tunnel up -d --build
 ```
 
-**Maintenance cron** (orphan attachment/replay sweep) — add to the VPS crontab:
+**Maintenance cron** (orphan attachment/replay sweep + usage-event retention) — add to the VPS crontab:
 ```bash
 # daily at 03:00
 0 3 * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" http://127.0.0.1:3000/api/v1/internal/replay-sweep
 ```
+The same endpoint prunes `usage_events` older than `CRUMB_USAGE_EVENTS_RETENTION_DAYS` (default 180). If you instrument `crumb.track()` heavily, run this daily so the high-cardinality `usage_events` table stays bounded.
+
+**CRM refresh cron** (optional, only if you connected HubSpot/Salesforce) — keeps accounts + ARR fresh. The "Sync now" button and connect-time sync work without it:
+```bash
+# every 6 hours
+0 */6 * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" http://127.0.0.1:3000/api/v1/internal/crm-sync
+```
 
 **Backups** (Postgres): `docker compose exec postgres pg_dump -U crumb crumb | gzip > crumb-$(date +%F).sql.gz` (see README "Backups & restore").
+
+**pgvector upgrade note:** the Postgres image is `pgvector/pgvector:pg16` (needed for the embeddings / semantic-search features — the migration runs `CREATE EXTENSION vector`). It's a drop-in replacement for the stock `postgres:16` and reuses the same `crumb-pg-data` volume, but **take a backup before the first `up -d` that pulls it** (command above). If you run an **external/managed Postgres** instead of the bundled container, install the extension once as a superuser: `CREATE EXTENSION IF NOT EXISTS vector;` (most managed providers — RDS, Cloud SQL, Supabase — ship it).
 
 **Firewall:** with the tunnel, you can keep inbound 80/443 **closed** — cloudflared only needs outbound. Allow SSH only.
 

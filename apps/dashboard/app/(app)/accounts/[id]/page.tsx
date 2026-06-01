@@ -3,7 +3,9 @@ import { notFound } from "next/navigation";
 import { AccountHeroTile } from "./AccountHeroTile";
 import { AccountFeedbackTile } from "./AccountFeedbackTile";
 import { AccountSidebarTile } from "./AccountSidebarTile";
+import { AccountUsageTile } from "./AccountUsageTile";
 import { AccountSessionsTile } from "./AccountSessionsTile";
+import { AccountChannelsTile } from "./AccountChannelsTile";
 import { AccountFeedbackSkeleton, AccountHeroSkeleton, AccountSessionsSkeleton, AccountSidebarSkeleton } from "./AccountSkeletons";
 
 export const dynamic = "force-dynamic";
@@ -28,8 +30,14 @@ export default function AccountDetailPage({ params }: { params: { id: string } }
           <Suspense fallback={<AccountSidebarSkeleton />}>
             <AccountSidebarTile accountId={params.id} />
           </Suspense>
+          <Suspense fallback={null}>
+            <AccountUsageTile accountId={params.id} />
+          </Suspense>
           <Suspense fallback={<AccountSessionsSkeleton />}>
             <AccountSessionsTile accountId={params.id} />
+          </Suspense>
+          <Suspense fallback={null}>
+            <AccountChannelsTile accountId={params.id} />
           </Suspense>
         </div>
       </div>

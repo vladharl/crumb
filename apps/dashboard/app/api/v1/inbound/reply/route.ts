@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db, items, accountUsers, replies, workspaces } from "@crumb/db";
 import { parseReplyAddress, verifyReplyToken } from "@/lib/reply-token";
+import { extractSender, stripQuotedTail } from "@/lib/inbound-text";
 import { notifyVendorsOfCustomerReply, dashboardOriginFromHeaders } from "@/lib/customer-reply-notify";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { LIMITS } from "@/lib/validation";
@@ -43,32 +44,6 @@ function pickReplyAddress(to: InboundPayload["to"]): { shortId: string; token: s
     if (parsed) return parsed;
   }
   return null;
-}
-
-function extractSender(from: string | undefined): string | null {
-  if (!from) return null;
-  const angle = from.match(/<([^>]+)>/);
-  const addr = (angle ? angle[1]! : from).trim().toLowerCase();
-  if (!addr.includes("@")) return null;
-  return addr;
-}
-
-// Strip quoted reply / forward blocks. Conservative — only the lines we're
-// confident are quoted history. Keeps everything above the first marker.
-function stripQuotedTail(text: string): string {
-  const lines = text.split(/\r?\n/);
-  const markers: RegExp[] = [
-    /^On\s.+\s+wrote:\s*$/i,
-    /^-----Original Message-----\s*$/i,
-    /^From:\s.+/i,
-    /^>+\s/,
-  ];
-  let cutAt = lines.length;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (markers.some(re => re.test(line))) { cutAt = i; break; }
-  }
-  return lines.slice(0, cutAt).join("\n").trimEnd();
 }
 
 function authorized(req: Request): boolean {

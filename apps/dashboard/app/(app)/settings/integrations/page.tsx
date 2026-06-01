@@ -1,4 +1,6 @@
 import { headers } from "next/headers";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { db, accounts } from "@crumb/db";
 import { Card, CardHead, Pill } from "@crumb/ui";
 import { getActiveSession } from "@/lib/server";
 import { isCloud } from "@/lib/tier";
@@ -9,10 +11,17 @@ import { slackConfigured } from "@/lib/slack/install";
 import { linearConfigured } from "@/lib/integrations/linear";
 import { jiraConfigured } from "@/lib/integrations/jira";
 import { githubConfigured } from "@/lib/integrations/github";
+import { crmConfigured } from "@/lib/integrations/crm";
 import { ConnectSlackButton, DisconnectSlackButton } from "./SlackActions";
 import { ConnectLinearButton, DisconnectLinearButton } from "./LinearActions";
 import { ConnectJiraButton, DisconnectJiraButton } from "./JiraActions";
 import { ConnectGithubButton, DisconnectGithubButton } from "./GithubActions";
+import {
+  ConnectHubspotButton, DisconnectHubspotButton,
+  ConnectSalesforceButton, DisconnectSalesforceButton,
+  SyncCrmButton,
+} from "./CrmActions";
+import { ConnectTeamsForm, TeamsConnectedActions } from "./TeamsActions";
 import { SessionRecordToggle } from "./SessionRecordToggle";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +60,14 @@ const GITHUB_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
   error_meta_failed:   { kind: "err", text: "Couldn't fetch the App installation metadata. Check that the App's private key is configured." },
 };
 
+const CRM_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+  connected:             { kind: "ok",  text: "CRM connected. Accounts and ARR are syncing — see them on the Accounts page. Manually-set ARR is preserved." },
+  error_missing_params:  { kind: "err", text: "The CRM didn't include a valid response. Please try again." },
+  error_bad_state:       { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
+  error_workspace_gone:  { kind: "err", text: "Workspace not found while finishing the install." },
+  error_exchange_failed: { kind: "err", text: "The CRM rejected the token exchange. Check your app's client secret + redirect URL." },
+};
+
 function Banner({ kind, text }: { kind: "ok" | "err"; text: string }) {
   return (
     <div className="text-sm" style={{
@@ -69,7 +86,7 @@ function Banner({ kind, text }: { kind: "ok" | "err"; text: string }) {
 export default async function IntegrationsPage({
   searchParams,
 }: {
-  searchParams: { slack?: string; linear?: string; jira?: string; github?: string };
+  searchParams: { slack?: string; linear?: string; jira?: string; github?: string; hubspot?: string; salesforce?: string };
 }) {
   const { workspace: ws, user } = await getActiveSession();
   const cloud = isCloud();
@@ -107,6 +124,34 @@ export default async function IntegrationsPage({
   const githubBanner = searchParams.github
     ? (GITHUB_BANNER[searchParams.github] ?? { kind: "err" as const, text: searchParams.github.replace(/^error_/, "") })
     : null;
+
+  // CRM: account count + last sync per provider, for the connected-state copy.
+  const crmStatRows = await db
+    .select({
+      provider: accounts.externalCrmProvider,
+      count: sql<number>`COUNT(*)::int`,
+      lastSync: sql<Date | null>`MAX(${accounts.crmSyncedAt})`,
+    })
+    .from(accounts)
+    .where(and(eq(accounts.workspaceId, ws.id), isNotNull(accounts.externalCrmProvider)))
+    .groupBy(accounts.externalCrmProvider);
+  const crmStats = Object.fromEntries(crmStatRows.map(r => [r.provider, { count: r.count, lastSync: r.lastSync }]));
+  const fmtSync = (d: Date | null | undefined) =>
+    d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null;
+
+  const hubspotInstalled = !!ws.hubspotAccessToken;
+  const hubspotCanInstall = crmConfigured("hubspot");
+  const hubspotBanner = searchParams.hubspot
+    ? (CRM_BANNER[searchParams.hubspot] ?? { kind: "err" as const, text: searchParams.hubspot.replace(/^error_/, "") })
+    : null;
+
+  const salesforceInstalled = !!ws.salesforceAccessToken;
+  const salesforceCanInstall = crmConfigured("salesforce");
+  const salesforceBanner = searchParams.salesforce
+    ? (CRM_BANNER[searchParams.salesforce] ?? { kind: "err" as const, text: searchParams.salesforce.replace(/^error_/, "") })
+    : null;
+
+  const teamsConnected = !!ws.teamsWebhookUrl;
 
   return (
     <>
@@ -282,6 +327,116 @@ export default async function IntegrationsPage({
         </div>
       </Card>
 
+      {/* ─── HubSpot (CRM: accounts + ARR) ──────────────────── */}
+      <Card>
+        <CardHead
+          title="HubSpot"
+          after={
+            hubspotInstalled
+              ? <Pill ring ringFill>Connected</Pill>
+              : !hubspotCanInstall
+                ? <Pill ring ringFill>{cloud ? "Cloud" : "Set HUBSPOT_CLIENT_ID"}</Pill>
+                : <Pill>Not connected</Pill>
+          }
+        />
+        <div className="card-body col gap-3">
+          {hubspotBanner && <Banner kind={hubspotBanner.kind} text={hubspotBanner.text} />}
+
+          {hubspotInstalled ? (
+            <>
+              <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+                Connected{ws.hubspotPortalId ? <> to portal <span className="mono">{ws.hubspotPortalId}</span></> : ""}
+                {ws.hubspotInstalledAt && (
+                  <> since {ws.hubspotInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
+                )}.{" "}
+                {crmStats["hubspot"] ? <>{crmStats["hubspot"].count} accounts synced{fmtSync(crmStats["hubspot"].lastSync) ? <> · last {fmtSync(crmStats["hubspot"].lastSync)}</> : null}.</> : "Run a sync to pull accounts."}
+              </p>
+              <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+                Companies sync into Accounts with ARR from the <span className="mono">annualrevenue</span> property. Manually-set ARR is never overwritten.
+              </p>
+              <div className="row gap-3 center" style={{ flexWrap: "wrap" }}>
+                <SyncCrmButton provider="hubspot" />
+                {isAdmin
+                  ? <DisconnectHubspotButton />
+                  : <span className="text-xs muted">Only workspace admins can disconnect.</span>}
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+                One-way sync of companies + ARR from HubSpot, so prioritization by revenue uses live dollar figures instead of hand-entered ones.
+              </p>
+              {!hubspotCanInstall && (
+                <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
+                  {cloud
+                    ? "HubSpot isn't configured on this deployment yet."
+                    : <>Self-host needs a registered HubSpot app: set <span className="mono">HUBSPOT_CLIENT_ID</span> and <span className="mono">HUBSPOT_CLIENT_SECRET</span>, then restart.</>}
+                </p>
+              )}
+              {!hubspotCanInstall && !cloud && <SelfHostSetup provider="hubspot" origin={origin} />}
+              <div className="row gap-2">
+                {isAdmin && hubspotCanInstall && integrationsEntitled ? <ConnectHubspotButton /> : null}
+              </div>
+            </>
+          )}
+        </div>
+      </Card>
+
+      {/* ─── Salesforce (CRM: accounts + ARR) ───────────────── */}
+      <Card>
+        <CardHead
+          title="Salesforce"
+          after={
+            salesforceInstalled
+              ? <Pill ring ringFill>Connected</Pill>
+              : !salesforceCanInstall
+                ? <Pill ring ringFill>{cloud ? "Cloud" : "Set SALESFORCE_CLIENT_ID"}</Pill>
+                : <Pill>Not connected</Pill>
+          }
+        />
+        <div className="card-body col gap-3">
+          {salesforceBanner && <Banner kind={salesforceBanner.kind} text={salesforceBanner.text} />}
+
+          {salesforceInstalled ? (
+            <>
+              <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+                Connected{ws.salesforceInstanceUrl ? <> to <span className="mono">{ws.salesforceInstanceUrl.replace(/^https?:\/\//, "")}</span></> : ""}
+                {ws.salesforceInstalledAt && (
+                  <> since {ws.salesforceInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
+                )}.{" "}
+                {crmStats["salesforce"] ? <>{crmStats["salesforce"].count} accounts synced{fmtSync(crmStats["salesforce"].lastSync) ? <> · last {fmtSync(crmStats["salesforce"].lastSync)}</> : null}.</> : "Run a sync to pull accounts."}
+              </p>
+              <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+                Accounts sync from the <span className="mono">AnnualRevenue</span> field. Manually-set ARR is never overwritten.
+              </p>
+              <div className="row gap-3 center" style={{ flexWrap: "wrap" }}>
+                <SyncCrmButton provider="salesforce" />
+                {isAdmin
+                  ? <DisconnectSalesforceButton />
+                  : <span className="text-xs muted">Only workspace admins can disconnect.</span>}
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+                One-way sync of Accounts + ARR from Salesforce. Sandboxes are supported via <span className="mono">SALESFORCE_LOGIN_URL</span>.
+              </p>
+              {!salesforceCanInstall && (
+                <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
+                  {cloud
+                    ? "Salesforce isn't configured on this deployment yet."
+                    : <>Self-host needs a Salesforce Connected App: set <span className="mono">SALESFORCE_CLIENT_ID</span> and <span className="mono">SALESFORCE_CLIENT_SECRET</span>, then restart.</>}
+                </p>
+              )}
+              {!salesforceCanInstall && !cloud && <SelfHostSetup provider="salesforce" origin={origin} />}
+              <div className="row gap-2">
+                {isAdmin && salesforceCanInstall && integrationsEntitled ? <ConnectSalesforceButton /> : null}
+              </div>
+            </>
+          )}
+        </div>
+      </Card>
+
       {/* ─── Slack (vendor notifications) ──────────────────── */}
       <Card>
         <CardHead
@@ -331,6 +486,33 @@ export default async function IntegrationsPage({
                   : null}
               </div>
             </>
+          )}
+        </div>
+      </Card>
+
+      {/* ─── MS Teams (channel notifications) ───────────────── */}
+      <Card>
+        <CardHead
+          title="Microsoft Teams"
+          after={teamsConnected ? <Pill ring ringFill>Connected</Pill> : <Pill>Not connected</Pill>}
+        />
+        <div className="card-body col gap-3">
+          <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+            Post new submissions, customer replies, and status changes to a Teams channel. In Teams, add a <strong style={{ fontWeight: 500 }}>Workflows</strong> → "When a Teams webhook request is received" flow and paste its URL here — no app install required.
+          </p>
+          {teamsConnected ? (
+            <>
+              <p className="text-sm" style={{ margin: 0 }}>
+                Connected{ws.teamsConnectedAt && <> since {ws.teamsConnectedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>}.
+              </p>
+              {isAdmin
+                ? <TeamsConnectedActions />
+                : <span className="text-xs muted">Only workspace admins can change this.</span>}
+            </>
+          ) : isAdmin ? (
+            <ConnectTeamsForm />
+          ) : (
+            <span className="text-xs muted">Only workspace admins can connect Teams.</span>
           )}
         </div>
       </Card>

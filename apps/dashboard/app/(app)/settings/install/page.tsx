@@ -93,6 +93,62 @@ function signCrumbIdentity(user) {
       </Card>
 
       <Card>
+        <CardHead title="Coexisting with another chat widget" after={<Pill ring>Intercom · Zendesk · …</Pill>} />
+        <div className="card-body col gap-4">
+          <p className="text-md muted" style={{ margin: 0, maxWidth: "62ch", lineHeight: 1.55 }}>
+            Already running Intercom, Zendesk, Freshchat, or your own help bubble? Hide crumb's launcher so you don't get two bubbles, and open the feedback panel from your existing widget or any button. Set <span className="mono">Launcher visibility → Hidden</span> in <a href="/settings/branding" style={{ color: "var(--ink)" }}>Branding</a>, or hide it per-page with <span className="mono">data-launcher="hidden"</span>:
+          </p>
+
+          <div className="code">
+{`<script src="https://your-crumb-host/widget.js"
+        data-workspace="`}<span className="k">{workspace.slug}</span>{`"
+        data-user-jwt="`}<span className="k">{`{signedIdentityJwt}`}</span>{`"
+        data-launcher="hidden"
+        defer></script>`}
+          </div>
+
+          <p className="text-sm muted" style={{ margin: 0, maxWidth: "62ch", lineHeight: 1.55 }}>
+            Then trigger crumb from anywhere — the public <span className="mono">window.crumb</span> API is safe to call before the script finishes loading (calls queue and replay on mount):
+          </p>
+
+          <div className="code">
+{`<!-- your own button -->
+<button onclick="crumb.open()">Give feedback</button>
+
+// jump straight to a thread
+crumb.open("FB-12");
+crumb.close();  crumb.toggle();
+
+// keep your launcher badged when crumb is hidden
+crumb.onUnread(function (count) { /* show your own dot */ });`}
+          </div>
+
+          <div className="col gap-2">
+            <span className="eyebrow">From Intercom</span>
+            <div className="code">
+{`// hide Intercom's launcher and add a "Give feedback" item that opens crumb
+Intercom("update", { hide_default_launcher: true });
+document.querySelector("#your-feedback-link")
+  .addEventListener("click", function () { crumb.open(); });`}
+            </div>
+          </div>
+
+          <div className="col gap-2">
+            <span className="eyebrow">From Zendesk</span>
+            <div className="code">
+{`// a CTA that closes the Zendesk messenger and opens crumb
+zE("messenger", "close");
+crumb.open();`}
+            </div>
+          </div>
+
+          <p className="text-xs muted" style={{ margin: 0, maxWidth: "62ch", lineHeight: 1.5 }}>
+            Prefer to keep both bubbles? Leave the launcher visible and set a <span className="mono">Launcher offset</span> in Branding (or <span className="mono">data-offset="0,76"</span>) to stack crumb above the other one. Add <span className="mono">data-launcher-avoid="auto"</span> to have crumb best-effort detect a known widget and lift itself automatically.
+          </p>
+        </div>
+      </Card>
+
+      <Card>
         <CardHead
           title="Inbound email replies"
           after={inboundDomain ? <Pill ring ringFill>Configured</Pill> : <Pill ring>Not configured</Pill>}

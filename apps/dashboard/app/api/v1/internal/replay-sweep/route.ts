@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { sweepOrphanSessions, sweepAgedSessions } from "@/lib/replay/sweep";
 import { sweepOrphanAttachments } from "@/lib/attachments/sweep";
+import { sweepAgedUsageEvents } from "@/lib/usage/sweep";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -61,5 +62,6 @@ export async function POST(req: Request) {
   const result = await sweepOrphanSessions(opts);
   const retention = await sweepAgedSessions(opts);
   const attachments = await sweepOrphanAttachments(opts);
-  return NextResponse.json({ ...result, retention, attachments });
+  const usageEvents = await sweepAgedUsageEvents(opts);
+  return NextResponse.json({ ...result, retention, attachments, usageEvents });
 }

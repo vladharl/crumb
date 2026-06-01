@@ -14,6 +14,8 @@ const ERROR_COPY: Record<string, string> = {
   linear_not_configured: "Linear isn't configured on this deployment yet.",
   jira_not_configured: "Jira isn't configured on this deployment yet.",
   github_not_configured: "GitHub isn't configured on this deployment yet.",
+  hubspot_not_configured: "HubSpot isn't configured on this deployment yet.",
+  salesforce_not_configured: "Salesforce isn't configured on this deployment yet.",
 };
 
 // A server-action redirect surfaces client-side as an error whose `digest`

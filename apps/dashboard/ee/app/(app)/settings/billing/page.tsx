@@ -9,6 +9,7 @@ const FEATURE_LABEL: Record<Feature, string> = {
   ai: "AI clustering + ticket drafts",
   session_record: "Session Record (replay)",
   integrations: "Linear / Jira / GitHub / Slack",
+  usage_analytics: "Product usage analytics",
 };
 
 export const dynamic = "force-dynamic";

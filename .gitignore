@@ -27,6 +27,7 @@ apps/dashboard/.crumb-uploads/
 .pnpm-store
 coverage
 apps/dashboard/tests/e2e/.auth
+apps/dashboard/tests/e2e-ai/.auth
 apps/dashboard/test-results
 apps/dashboard/playwright-report
 

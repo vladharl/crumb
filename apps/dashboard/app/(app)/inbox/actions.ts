@@ -63,3 +63,45 @@ export async function bulkAssign(itemIds: string[], assigneeId: string | null): 
   revalidatePath("/inbox");
   return { ok: true, affected: result.length };
 }
+
+export type ActionResult = { ok: true } | { ok: false; error: string };
+
+// Accept the AI triage's suggested owner (feature 3): promote ai_suggested_
+// assignee_id to the real assignee, then clear the suggestion so the chip
+// disappears. The suggestion is advisory until a PM accepts here.
+export async function acceptTriageAssignee(itemId: string): Promise<ActionResult> {
+  if (typeof itemId !== "string" || !itemId) return { ok: false, error: "no_item" };
+  const { workspace: ws, user } = await getActiveSession();
+  if (!canManage(user.role)) return { ok: false, error: "forbidden" };
+
+  const [it] = await db
+    .select({ suggested: items.aiSuggestedAssigneeId })
+    .from(items)
+    .where(and(eq(items.workspaceId, ws.id), eq(items.id, itemId)))
+    .limit(1);
+  if (!it) return { ok: false, error: "not_found" };
+  if (!it.suggested) return { ok: false, error: "no_suggestion" };
+
+  await db
+    .update(items)
+    .set({ assigneeId: it.suggested, aiSuggestedAssigneeId: null, updatedAt: new Date() })
+    .where(and(eq(items.workspaceId, ws.id), eq(items.id, itemId)));
+
+  revalidatePath("/inbox");
+  return { ok: true };
+}
+
+// Dismiss the AI's suggested owner without assigning anyone.
+export async function dismissTriage(itemId: string): Promise<ActionResult> {
+  if (typeof itemId !== "string" || !itemId) return { ok: false, error: "no_item" };
+  const { workspace: ws, user } = await getActiveSession();
+  if (!canManage(user.role)) return { ok: false, error: "forbidden" };
+
+  await db
+    .update(items)
+    .set({ aiSuggestedAssigneeId: null, updatedAt: new Date() })
+    .where(and(eq(items.workspaceId, ws.id), eq(items.id, itemId)));
+
+  revalidatePath("/inbox");
+  return { ok: true };
+}
