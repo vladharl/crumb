@@ -8,6 +8,7 @@
     "seed": "pnpm -C .. db:seed",
     "stage": "tsx capture/stage.ts",
     "capture": "tsx capture/run.ts",
+    "features": "tsx capture/features.ts",
     "measure": "node scripts/measure.mjs",
     "gif": "bash scripts/to-gif.sh",
     "video": "remotion render remotion/index.ts LandingHero out/landing.mp4 --overwrite && remotion render remotion/index.ts LandingHero out/landing.webm --overwrite",
