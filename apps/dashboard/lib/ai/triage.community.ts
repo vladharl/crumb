@@ -17,6 +17,7 @@ export type TriageResult = {
   suggestedAssigneeId: string | null;
   isDuplicateLikely: boolean;
   lang: string | null;
+  summary: string | null;
   reason: string;
   confidence: number;
 };

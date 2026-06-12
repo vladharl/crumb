@@ -34,6 +34,11 @@ export default async function globalSetup(): Promise<void> {
   const userId = psql("SELECT id FROM workspace_users WHERE email='lina@southbeam.io' AND workspace_id='" + wsId + "' LIMIT 1");
   if (!wsId || !userId) throw new Error("[e2e-ai setup] seeded admin row not found");
 
+  // Seeded users are fresh (guide_completed_at IS NULL), so the first-sign-in
+  // tour would auto-open and its modal overlay intercepts every click — same
+  // fix as tests/e2e/setup.ts.
+  psql(`UPDATE workspace_users SET guide_completed_at = now() WHERE workspace_id='${wsId}'`);
+
   // Expose the workspace signing secret so AI specs can mint a widget JWT and
   // submit items via the capture path (which fires triage + embeddings).
   const signingSecret = psql("SELECT signing_secret FROM workspaces WHERE slug='southbeam' LIMIT 1");

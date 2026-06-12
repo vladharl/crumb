@@ -13,6 +13,7 @@ import { withAiBudget } from "@/lib/ai/run";
 import { notifyWorkspaceChannel } from "@/lib/notify/chat";
 import { hasFeature } from "@/lib/entitlements";
 import { createItemSchema, parseJsonBody } from "@/lib/validation";
+import { loopTurn } from "@/lib/loop";
 import { log } from "@/lib/log";
 import type { Workspace } from "@crumb/db";
 
@@ -58,6 +59,35 @@ export async function GET(req: Request) {
         WHERE replies.item_id = items.id
           AND replies.internal = false
       )`,
+      // Loop-turn inputs for the launcher: who moved last, and the latest
+      // customer-visible event (reply vs status change) so the whisper tab
+      // can phrase "Maya replied" / "Shipped: …" without another request.
+      lastReplySide: sql<"vendor" | "customer" | null>`(
+        SELECT CASE WHEN r.workspace_user_id IS NOT NULL THEN 'vendor' ELSE 'customer' END
+        FROM replies r
+        WHERE r.item_id = items.id AND r.internal = false
+        ORDER BY r.created_at DESC
+        LIMIT 1
+      )`,
+      lastReplyAtMs: sql<number | null>`(
+        SELECT (EXTRACT(EPOCH FROM MAX(r.created_at)) * 1000)::double precision
+        FROM replies r
+        WHERE r.item_id = items.id AND r.internal = false
+      )`,
+      lastReplyAuthor: sql<string | null>`(
+        SELECT COALESCE(wu.name, au.name)
+        FROM replies r
+        LEFT JOIN workspace_users wu ON wu.id = r.workspace_user_id
+        LEFT JOIN account_users au ON au.id = r.account_user_id
+        WHERE r.item_id = items.id AND r.internal = false
+        ORDER BY r.created_at DESC
+        LIMIT 1
+      )`,
+      lastStatusAtMs: sql<number | null>`(
+        SELECT (EXTRACT(EPOCH FROM MAX(se.at)) * 1000)::double precision
+        FROM status_events se
+        WHERE se.item_id = items.id AND se.from_status IS NOT NULL
+      )`,
     })
     .from(items)
     .where(and(
@@ -67,15 +97,30 @@ export async function GET(req: Request) {
     .orderBy(desc(items.updatedAt));
 
   return cors(NextResponse.json({
-    items: rows.map(row => ({
-      short_id: row.shortId,
-      title: row.title,
-      type: row.type,
-      status: row.status,
-      created_at: row.createdAt,
-      updated_at: row.updatedAt,
-      reply_count: row.replyCount,
-    })),
+    items: rows.map(row => {
+      const replyEvent = row.lastReplyAtMs !== null
+        ? { kind: "reply" as const, at: new Date(row.lastReplyAtMs).toISOString(), author_name: row.lastReplyAuthor }
+        : null;
+      const statusEvent = row.lastStatusAtMs !== null
+        ? { kind: "status" as const, at: new Date(row.lastStatusAtMs).toISOString(), status: row.status }
+        : null;
+      const lastEvent =
+        replyEvent && statusEvent
+          ? (row.lastReplyAtMs! >= row.lastStatusAtMs! ? replyEvent : statusEvent)
+          : replyEvent ?? statusEvent;
+      return {
+        short_id: row.shortId,
+        title: row.title,
+        type: row.type,
+        status: row.status,
+        created_at: row.createdAt,
+        updated_at: row.updatedAt,
+        reply_count: row.replyCount,
+        last_reply_side: row.lastReplySide,
+        turn: loopTurn({ status: row.status, lastReplySide: row.lastReplySide }),
+        last_event: lastEvent,
+      };
+    }),
   }));
 }
 
@@ -245,6 +290,7 @@ async function autoTriage(
           aiUrgency: triage.urgency,
           aiSuggestedAssigneeId: triage.suggestedAssigneeId,
           aiTriageReason: triage.reason,
+          aiSummary: triage.summary,
           aiTriagedAt: new Date(),
           aiTriageModel: TRIAGE_MODEL,
           detectedLang: triage.lang,

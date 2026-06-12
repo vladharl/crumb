@@ -7,17 +7,7 @@
 //           data-account-name="Acme Co"
 //           defer></script>
 
-import { animate, type AnimationPlaybackControls } from "motion";
 import { css } from "./styles";
-
-// We use Motion for the SVG-root rotation (single-element animations
-// compose cleanly) and native WAAPI element.animate() for the per-circle
-// opacity wave. Motion's array form silently no-ops on SVGCircleElement
-// collections inside a shadow root, but raw element.animate() works.
-
-// Spring shape for the settle. Approximates stiffness:220/damping:18 with a
-// cubic-bezier overshoot — keeps us off the full spring physics module.
-const SPRING_OVERSHOOT_EASE: [number, number, number, number] = [0.34, 1.56, 0.64, 1];
 
 type ItemType = "bug" | "idea" | "question";
 
@@ -38,16 +28,13 @@ type Config = {
   accountName: string;
   apiBase: string;
   /** Per-embed `data-launcher` override. When set it wins over the
-   *  workspace's launcherVisibility — lets one page hide crumb's bubble
+   *  workspace's launcherVisibility — lets one page hide crumb's tab
    *  (e.g. it already runs Intercom) while others keep it. */
   launcherOverride?: LauncherVisibility;
-  /** Per-embed `data-offset="x,y"` (px). Nudges the launcher off the corner
-   *  so it can sit above another widget's bubble instead of overlapping. */
-  offsetX?: number;
+  /** Per-embed `data-offset` (px). Vertical nudge along the docked edge
+   *  (positive = down from center) so the tab clears anything the host
+   *  renders mid-edge. */
   offsetY?: number;
-  /** `data-launcher-avoid="auto"` — best-effort: watch for a known chat
-   *  widget (Intercom/Zendesk/Drift/Freshchat) and stack crumb above it. */
-  avoidAuto?: boolean;
 };
 
 // ─── public JS API ─────────────────────────────────────────
@@ -98,6 +85,13 @@ function installApiStub(): void {
   };
 }
 
+type LoopTurn = "yours" | "waiting" | "closed";
+
+// The latest customer-visible event on an item — a reply or a status change.
+// Computed server-side so the launcher can phrase loop news ("Maya replied",
+// "Shipped: …") without re-deriving loop semantics client-side.
+type LastEvent = { kind: "reply" | "status"; at: string; status?: Status; author_name?: string | null };
+
 type ItemSummary = {
   short_id: string;
   title: string;
@@ -106,6 +100,9 @@ type ItemSummary = {
   created_at: string;
   updated_at: string;
   reply_count: number;
+  last_reply_side?: "vendor" | "customer" | null;
+  turn?: LoopTurn;
+  last_event?: LastEvent | null;
 };
 
 type ThreadAttachment = {
@@ -156,7 +153,7 @@ type RoadmapData = { columns: { now: RoadmapEntry[]; next: RoadmapEntry[]; later
 type NotifPrefs = { replies: boolean; status: boolean; roadmap: boolean; unsubscribed_all: boolean };
 type Me = {
   user: { id: string; name: string; email: string; initials: string; role: string };
-  workspace: { slug: string; name: string; accent?: string; launcher_bg?: string; launcher_glass?: boolean; position?: string; session_record_enabled?: boolean; usage_tracking_enabled?: boolean; launcher_visibility?: LauncherVisibility; launcher_offset_x?: number; launcher_offset_y?: number };
+  workspace: { slug: string; name: string; accent?: string; launcher_bg?: string; launcher_edge?: string; session_record_enabled?: boolean; usage_tracking_enabled?: boolean; launcher_visibility?: LauncherVisibility; launcher_offset_y?: number };
   account: { id: string; name: string; member_count: number };
   is_account_admin: boolean;
   has_roadmap?: boolean;
@@ -206,15 +203,13 @@ function readConfig(): Config | null {
     launcherAttr === "auto" || launcherAttr === "always" || launcherAttr === "hidden"
       ? (launcherAttr as LauncherVisibility)
       : undefined;
-  // data-offset accepts "x,y" or a single value applied to both axes.
+  // data-offset is a single px value: vertical nudge along the docked edge.
+  // (Accepts the legacy "x,y" form by reading the y component.)
   const offsetRaw = d("offset");
-  let offsetX: number | undefined;
   let offsetY: number | undefined;
   if (offsetRaw) {
     const parts = offsetRaw.split(",").map(s => parseInt(s.trim(), 10));
-    const x = parts[0];
     const y = parts.length > 1 ? parts[1] : parts[0];
-    if (x != null && Number.isFinite(x)) offsetX = x;
     if (y != null && Number.isFinite(y)) offsetY = y;
   }
 
@@ -226,9 +221,7 @@ function readConfig(): Config | null {
     accountName: accountName || "",
     apiBase,
     launcherOverride,
-    offsetX,
     offsetY,
-    avoidAuto: d("launcherAvoid") === "auto",
   };
 }
 
@@ -289,6 +282,11 @@ const STATUS_LABEL: Record<Status, string> = {
   deferred:  "Set aside",
   duplicate: "Duplicate",
 };
+
+// Statuses worth interrupting the customer for: their loop moved somewhere
+// meaningful (committed, in motion, or closed with an outcome). open/review/
+// deferred/duplicate are vendor bookkeeping — the launcher stays quiet.
+const NEWS_STATUSES = new Set<Status>(["planned", "progress", "shipped", "declined"]);
 
 // ─── time helper ──────────────────────────────────────────
 function ageFrom(iso: string): string {
@@ -382,138 +380,42 @@ function init(config: Config) {
   style.textContent = css;
   shadow.appendChild(style);
 
-  // launcher + tooltip. The button carries the loop mark; the bar variants
-  // (top/inline) reveal a workspace-name label + CTA via CSS once we set the
-  // host's `data-pos`.
-  //
-  // The launcher reveals immediately using branding cached from a prior visit
-  // (or the corner default on first-ever load), then refreshes when /me
-  // resolves. On repeat visits the cached position is correct, so there's no
-  // corner→bar jump; only a brand-new visitor configured for top/inline sees
-  // a one-time settle. This keeps first paint off the /me round-trip.
-  host.setAttribute("data-pos", "corner"); // safe default before cache/me apply
+  // launcher — the "edge whisper" tab: a slim flat tab docked to a viewport
+  // edge. Nearly invisible at rest; earns an ember dot (plus a hair of width)
+  // when there's loop news, and a small flag with the latest event slides out
+  // on hover/focus. It reveals immediately using branding cached from a prior
+  // visit (or the right-edge default on first-ever load), then refreshes in
+  // place when /me resolves — first paint never waits on the round-trip.
+  host.setAttribute("data-edge", "right"); // safe default before cache/me apply
   const launcher = document.createElement("button");
   launcher.className = "launcher";
+  launcher.dataset.state = "rest";
   launcher.setAttribute("aria-label", "Open Crumb feedback");
   launcher.style.pointerEvents = "none";
   launcher.style.opacity = "0";
-  launcher.style.transition = "opacity 220ms ease";
-  launcher.innerHTML = `${LOOP_LAUNCHER}<span class="launcher-name"></span><span class="launcher-cta">Share feedback</span>`;
+  launcher.innerHTML = `
+    <span class="l-mark">${LOOP_LAUNCHER}</span>
+    <span class="l-label">Feedback</span>
+    <span class="l-dot" hidden></span>
+    <span class="l-flag" aria-hidden="true"><span class="l-flag-text"></span><span class="l-flag-count"></span></span>`;
   shadow.appendChild(launcher);
-  const launcherNameEl = launcher.querySelector(".launcher-name") as HTMLSpanElement;
-  const launcherSvg = launcher.querySelector("svg") as SVGSVGElement;
-  const launcherCircles = Array.from(launcher.querySelectorAll("svg circle")) as SVGCircleElement[];
-
-  // We can't reliably scale individual SVG <circle> elements via WAAPI in a
-  // shadow-root context (transform-box: fill-box has uneven plumbing). We
-  // animate two things that DO compose cleanly:
-  //   - opacity on each circle (the wave)
-  //   - rotation on the whole <svg> (the loop literally loops)
-  // The <svg> root is an HTML element, so transforms apply normally.
-  launcherSvg.style.transformOrigin = "center";
+  const flagTextEl = launcher.querySelector(".l-flag-text") as HTMLSpanElement;
+  const flagCountEl = launcher.querySelector(".l-flag-count") as HTMLSpanElement;
+  const newsDotEl = launcher.querySelector(".l-dot") as HTMLSpanElement;
 
   const reducedMotion = (typeof window !== "undefined")
     && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-  // Capture the original SVG opacity attribute so the boot loop returns to
-  // the right resting state — circles have varying opacity (0.45 → 1.0) to
-  // give the loop its tapered look. We then *remove* the attribute and
-  // move the value to inline style: WAAPI animations don't reliably beat a
-  // presentation attribute in a shadow root, so the attribute would freeze
-  // each circle at its declared value and Motion's keyframes would have
-  // no visible effect.
-  const restingOpacity = launcherCircles.map(c => parseFloat(c.getAttribute("opacity") ?? "1"));
-  for (let i = 0; i < launcherCircles.length; i++) {
-    const c = launcherCircles[i]!;
-    c.removeAttribute("opacity");
-    c.style.opacity = String(restingOpacity[i]);
-  }
-
-  let bootSpin: AnimationPlaybackControls | null = null;
-  const bootDotAnims: Animation[] = []; // native WAAPI handles per-circle
-
-  function startBootShimmer() {
-    if (reducedMotion) return;
-    // Two animations compose:
-    //   1. Motion drives the <svg> rotation — the loop mark literally
-    //      loops while we wait for /me. Linear ease keeps the spin steady
-    //      (springs feel wrong on continuous rotation).
-    //   2. Each <circle> opacity wave is driven by native element.animate()
-    //      because Motion's array form silently no-ops on SVGCircleElement
-    //      collections (it doesn't write inline style or attach a WAAPI
-    //      animation to them). Native WAAPI handles SVG circles correctly.
-    bootSpin = animate(
-      launcherSvg,
-      { rotate: [0, 360] },
-      { duration: 1.6, repeat: Infinity, ease: "linear" },
-    );
-    for (let i = 0; i < launcherCircles.length; i++) {
-      const anim = launcherCircles[i]!.animate(
-        [{ opacity: 0.3 }, { opacity: 1 }, { opacity: 0.55 }],
-        {
-          duration: 1100,
-          delay: i * 90,
-          iterations: Infinity,
-          easing: "cubic-bezier(0.32, 0.72, 0.36, 1)",
-        },
-      );
-      bootDotAnims.push(anim);
-    }
-  }
-
-  function stopBootShimmerAndSettle() {
-    if (bootSpin) { bootSpin.stop(); bootSpin = null; }
-    for (const a of bootDotAnims) a.cancel();
-    bootDotAnims.length = 0;
-
-    if (reducedMotion) {
-      launcherSvg.style.transform = "rotate(0deg)";
-      for (let i = 0; i < launcherCircles.length; i++) {
-        launcherCircles[i]!.style.opacity = String(restingOpacity[i]);
-      }
-      return;
-    }
-    // Settle: SVG snaps to 0deg with an overshoot ease (a small spring
-    // counter-rotation past 0 then back). Dots ease into their resting
-    // opacity in a quick wave via native WAAPI with fill:'forwards' so
-    // they hold the final value after the animation completes.
-    animate(
-      launcherSvg,
-      { rotate: [null, 0] },
-      { duration: 0.7, ease: SPRING_OVERSHOOT_EASE },
-    );
-    for (let i = 0; i < launcherCircles.length; i++) {
-      launcherCircles[i]!.animate(
-        [{ opacity: 0.7 }, { opacity: restingOpacity[i] ?? 1 }],
-        {
-          duration: 550,
-          delay: i * 50,
-          easing: "cubic-bezier(0.34, 1.56, 0.64, 1)",
-          fill: "forwards",
-        },
-      );
-    }
-  }
-
-  // Apply branding (colors, position, name) BEFORE we reveal the launcher,
-  // so the loading shimmer plays in the final layout. Then, after the
-  // minimum visible boot duration, settle into the static state.
-  // Apply branding (colors / position / name) to the launcher. Idempotent —
-  // called once on first paint with cached/default values, then again when
-  // /me returns with the authoritative values.
-  // Configured offset (workspace setting or per-embed data-offset) plus an
-  // auto-detected nudge (data-launcher-avoid). Composed onto host CSS vars
-  // that both the launcher and panel read, so they move together.
-  let cfgOffsetX = config.offsetX ?? 0;
+  // Vertical nudge along the edge (workspace setting or per-embed
+  // data-offset), composed onto a host CSS var that both the launcher and
+  // panel read, so they move together.
   let cfgOffsetY = config.offsetY ?? 0;
-  let autoOffsetY = 0;
   function applyOffsets() {
-    host.style.setProperty("--crumb-offset-x", `${cfgOffsetX}px`);
-    host.style.setProperty("--crumb-offset-y", `${cfgOffsetY + autoOffsetY}px`);
+    host.style.setProperty("--crumb-offset-y", `${cfgOffsetY}px`);
   }
 
   // Effective launcher visibility: a per-embed data-launcher override always
-  // wins over the workspace setting (so one page can hide the bubble while
+  // wins over the workspace setting (so one page can hide the tab while
   // others keep it). Defaults to "auto" (= shown).
   let brandVisibility: LauncherVisibility = "auto";
   function launcherHidden(): boolean {
@@ -523,38 +425,7 @@ function init(config: Config) {
     launcher.style.display = launcherHidden() ? "none" : "";
   }
 
-  // Best-effort detection of a co-resident chat widget. These selectors are
-  // the stable container ids the major widgets mount; they can change without
-  // notice and load async, so this is opt-in and purely additive to any
-  // configured offset — the configured offset stays the robust path.
-  function startLauncherAvoidance() {
-    const SELECTORS = [
-      "#intercom-container", "#intercom-frame", ".intercom-lightweight-app", // Intercom
-      "iframe#webWidget", "#launcher", "div[data-garden-id='buttons.icon_button']", // Zendesk
-      "#drift-widget", "iframe#drift-frame-controller", // Drift
-      "#fc_frame", // Freshchat
-      "#hubspot-messages-iframe-container", // HubSpot
-    ];
-    let applied = false;
-    const check = () => {
-      if (applied) return;
-      if (!SELECTORS.some(s => { try { return document.querySelector(s); } catch { return false; } })) return;
-      applied = true;
-      // Lift crumb above a typical ~56px bubble plus breathing room.
-      autoOffsetY = 76;
-      applyOffsets();
-      obs.disconnect();
-    };
-    const obs = new MutationObserver(check);
-    check();
-    if (!applied) {
-      obs.observe(document.documentElement, { childList: true, subtree: true });
-      // Chat widgets load early; stop watching after 15s rather than forever.
-      setTimeout(() => obs.disconnect(), 15_000);
-    }
-  }
-
-  // Host hooks for the unread-reply signal — lets a site that hid crumb's
+  // Host hooks for the loop-news signal — lets a site that hid crumb's
   // launcher badge their own. Notified from render() when the count changes.
   const unreadListeners: Array<(n: number) => void> = [];
   let lastUnread = -1;
@@ -567,26 +438,18 @@ function init(config: Config) {
   function applyBranding(opts: {
     dot?: string | null;
     bg?: string | null;
-    position?: string | null;
-    workspaceName?: string | null;
-    glass?: boolean | null;
+    edge?: string | null;
     visibility?: LauncherVisibility | null;
-    offsetX?: number | null;
     offsetY?: number | null;
   }) {
     if (opts.dot) launcher.style.setProperty("--crumb-accent", opts.dot);
     if (opts.bg)  launcher.style.setProperty("--crumb-launcher-bg", opts.bg);
-    if (opts.position === "corner" || opts.position === "pill" || opts.position === "tab") {
-      host.setAttribute("data-pos", opts.position);
+    if (opts.edge === "right" || opts.edge === "left") {
+      host.setAttribute("data-edge", opts.edge);
     }
-    if (opts.workspaceName && launcherNameEl) {
-      launcherNameEl.textContent = `Share feedback for ${opts.workspaceName}`;
-    }
-    if (opts.glass != null) launcher.classList.toggle("glass", opts.glass);
-    // Offsets: only the workspace/cache values flow through here; a per-embed
-    // data-offset (config.offsetX/Y) is already baked into cfgOffsetX/Y. Don't
+    // Offset: only the workspace/cache value flows through here; a per-embed
+    // data-offset (config.offsetY) is already baked into cfgOffsetY. Don't
     // let a null/absent server value clobber an explicit per-embed offset.
-    if (config.offsetX == null && opts.offsetX != null) cfgOffsetX = opts.offsetX;
     if (config.offsetY == null && opts.offsetY != null) cfgOffsetY = opts.offsetY;
     applyOffsets();
     if (opts.visibility) brandVisibility = opts.visibility;
@@ -596,46 +459,34 @@ function init(config: Config) {
   function settleLauncher(opts: {
     dot?: string | null;
     bg?: string | null;
-    position?: string | null;
-    workspaceName?: string | null;
-    glass?: boolean | null;
+    edge?: string | null;
     visibility?: LauncherVisibility | null;
-    offsetX?: number | null;
     offsetY?: number | null;
   }) {
     applyBranding(opts);
 
     // Launcher hidden (host drives crumb via window.crumb.open()) — nothing to
-    // reveal. The panel still works; we just never paint the bubble.
+    // reveal. The panel still works; we just never paint the tab.
     if (launcherHidden()) return;
 
-    // Reveal in-place (opacity transition is the entrance) and play a brief
-    // branded shimmer, then settle. We no longer gate reveal on /me, so this
-    // fires immediately on load.
+    // Reveal with a single quiet fade — the whisper tab doesn't announce
+    // itself. (Instant under prefers-reduced-motion.)
+    launcher.style.transition = reducedMotion ? "none" : "opacity 200ms cubic-bezier(0.25, 1, 0.5, 1)";
     launcher.style.opacity = "1";
     launcher.style.pointerEvents = "auto";
-    startBootShimmer();
-
-    const elapsed = Date.now() - bootStartedAt;
-    const remaining = Math.max(0, MIN_BOOT_MS - elapsed);
-    setTimeout(stopBootShimmerAndSettle, remaining);
   }
 
-  const tooltip = document.createElement("div");
-  tooltip.className = "tooltip";
-  tooltip.textContent = "Share feedback";
-  shadow.appendChild(tooltip);
-
-  // scrim (only visible when expanded)
+  // scrim (only visible when expanded). Pointer-events live in CSS — the
+  // closed panel/scrim must stay click-through (an inline `auto` here would
+  // beat the stylesheet and leave an invisible hit-target over the host page,
+  // swallowing the launcher's hover now that both sit mid-edge).
   const scrim = document.createElement("div");
   scrim.className = "scrim";
-  scrim.style.pointerEvents = "none";
   shadow.appendChild(scrim);
 
   // panel
   const panel = document.createElement("div");
   panel.className = "panel";
-  panel.style.pointerEvents = "auto";
   shadow.appendChild(panel);
 
   // state
@@ -664,7 +515,7 @@ function init(config: Config) {
   // ── branding cache (instant first paint) ──────────────────
   // Persist /me branding so repeat visits paint the launcher with the correct
   // colors/position immediately — no waiting on the /me round-trip.
-  type CachedBrand = { accent?: string; launcher_bg?: string; launcher_glass?: boolean; position?: string; name?: string; launcher_visibility?: LauncherVisibility; launcher_offset_x?: number; launcher_offset_y?: number };
+  type CachedBrand = { accent?: string; launcher_bg?: string; launcher_edge?: string; launcher_visibility?: LauncherVisibility; launcher_offset_y?: number };
   function brandKey(): string { return `crumb_brand:${config.workspace}`; }
   function readCachedBrand(): CachedBrand | null {
     try { return JSON.parse(localStorage.getItem(brandKey()) || "null"); } catch { return null; }
@@ -702,6 +553,40 @@ function init(config: Config) {
     const m = getSeen();
     m[shortId] = count;
     try { localStorage.setItem(seenKey(), JSON.stringify(m)); } catch { /* storage blocked — cache still updated */ }
+  }
+
+  // ── status watermark (loop-progress signal) ────────────────
+  // localStorage map { short_id: status } per workspace+user. An item carries
+  // status news when its status moved to a customer-meaningful one (planned/
+  // progress/shipped/declined) since the customer last saw it — so a shipped
+  // outcome lights the launcher even when no reply was written. Same
+  // best-effort storage posture as the reply watermark above.
+  function statusSeenKey(): string {
+    return `crumb_status_seen:${config.workspace}:${config.userEmail || "jwt"}`;
+  }
+  let statusSeenCache: Record<string, string> | null = null;
+  function getStatusSeen(): Record<string, string> {
+    if (statusSeenCache) return statusSeenCache;
+    let m: Record<string, string>;
+    try { m = JSON.parse(localStorage.getItem(statusSeenKey()) || "{}") || {}; } catch { m = {}; }
+    statusSeenCache = m;
+    return m;
+  }
+  function writeStatusSeen(m: Record<string, string>) {
+    try { localStorage.setItem(statusSeenKey(), JSON.stringify(m)); } catch { /* storage blocked — cache still updated */ }
+  }
+  function markStatusSeen(shortId: string, status: string) {
+    const m = getStatusSeen();
+    m[shortId] = status;
+    writeStatusSeen(m);
+  }
+  // The list view shows every item's status pill, so rendering it counts as
+  // "seen" for all of them.
+  function markAllStatusesSeen() {
+    if (!items) return;
+    const m = getStatusSeen();
+    for (const it of items) m[it.short_id] = it.status;
+    writeStatusSeen(m);
   }
 
   // ── network ────────────────────────────────────────────
@@ -829,6 +714,8 @@ function init(config: Config) {
       // message count (same units as the list's reply_count) so the launcher
       // badge drops this item, even on a deep-link open before the list loads.
       markThreadSeen(shortId, Array.isArray(thread.messages) ? thread.messages.length : 0);
+      // The thread shows its status too — clears this item's status news.
+      if (thread.item?.status) markStatusSeen(shortId, thread.item.status);
     } catch (err) {
       threadState = { kind: "error", message: err instanceof Error ? err.message : "Could not load" };
     }
@@ -1091,19 +978,37 @@ function init(config: Config) {
     panel.classList.toggle("expanded", open && expanded);
     scrim.classList.toggle("show", open && expanded);
 
-    // Unread badge on launcher: items whose reply_count grew since the
-    // customer last opened that thread (a vendor/inbound reply they haven't seen).
+    // Loop news on the launcher: vendor replies the customer hasn't seen
+    // (reply_count grew since they last opened that thread) plus customer-
+    // meaningful status moves (planned/progress/shipped/declined) since they
+    // last saw the item. News = the ember dot + the hover flag's event text.
     const seen = getSeen();
-    const unreadCount = items?.reduce((n, it) => n + (it.reply_count > (seen[it.short_id] ?? 0) ? 1 : 0), 0) ?? 0;
-    notifyUnread(unreadCount);
-    const existingBadge = launcher.querySelector(".badge");
-    if (existingBadge) existingBadge.remove();
-    if (unreadCount > 0 && !open) {
-      // A pulsing attention dot (not a count) — the exact unread items are
-      // surfaced inside the list. Cleaner + draws the eye only when new.
-      const b = document.createElement("span");
-      b.className = "badge";
-      launcher.appendChild(b);
+    const statusSeen = getStatusSeen();
+    const replyNews = (it: ItemSummary) => it.reply_count > (seen[it.short_id] ?? 0);
+    const statusNews = (it: ItemSummary) => NEWS_STATUSES.has(it.status) && statusSeen[it.short_id] !== it.status;
+    const newsItems = (items ?? []).filter(it => replyNews(it) || statusNews(it));
+    notifyUnread(newsItems.length);
+    const hasNews = newsItems.length > 0 && !open;
+    launcher.dataset.state = hasNews ? "news" : "rest";
+    newsDotEl.hidden = !hasNews;
+    if (hasNews) {
+      // Phrase the most recent event: "Maya replied" / "Shipped: Dark mode".
+      const eventAt = (it: ItemSummary) => new Date(it.last_event?.at ?? it.updated_at).getTime();
+      const top = newsItems.reduce((a, b) => (eventAt(b) > eventAt(a) ? b : a));
+      let phrase: string;
+      if (replyNews(top) && top.last_event?.kind === "reply") {
+        phrase = top.last_event.author_name ? `${top.last_event.author_name} replied` : "New reply";
+      } else if (statusNews(top)) {
+        const t = top.title.length > 24 ? `${top.title.slice(0, 24).replace(/\s+$/, "")}…` : top.title;
+        phrase = `${STATUS_LABEL[top.status]}: ${t}`;
+      } else {
+        phrase = "New reply";
+      }
+      flagTextEl.textContent = phrase;
+      flagCountEl.textContent = newsItems.length > 1 ? `· ${newsItems.length}` : "";
+    } else {
+      flagTextEl.textContent = "Share feedback";
+      flagCountEl.textContent = "";
     }
 
     if (!open) return;
@@ -1147,6 +1052,9 @@ function init(config: Config) {
 
   function renderList() {
     const isLoading = listState.kind === "loading" && items === null;
+    // The customer is looking at every status pill right now — that clears
+    // status news (reply news still clears per-thread, on open).
+    markAllStatusesSeen();
     let bodyHtml = tabStripHtml("feedback");
 
     if (isLoading) {
@@ -1643,48 +1551,32 @@ function init(config: Config) {
 
   // First paint must NOT wait on the /me round-trip (which can be 1–3s on a
   // cold serverless function or dev compile). We reveal the launcher
-  // immediately using branding cached from a previous visit — or safe corner
-  // defaults on the very first ever load — then refresh colors/position in
+  // immediately using branding cached from a previous visit — or right-edge
+  // defaults on the very first ever load — then refresh colors/edge in
   // place when /me resolves and cache it for next time.
-  const bootStartedAt = Date.now();
-  const MIN_BOOT_MS = 600; // brief branded entrance shimmer, not a loading gate
-
   const cachedBrand = readCachedBrand();
   settleLauncher({
     dot: cachedBrand?.accent ?? null,
     bg: cachedBrand?.launcher_bg ?? null,
-    position: cachedBrand?.position ?? null,
-    workspaceName: cachedBrand?.name ?? null,
-    glass: cachedBrand?.launcher_glass ?? null,
+    edge: cachedBrand?.launcher_edge ?? null,
     visibility: cachedBrand?.launcher_visibility ?? null,
-    offsetX: cachedBrand?.launcher_offset_x ?? null,
     offsetY: cachedBrand?.launcher_offset_y ?? null,
   });
-
-  // Best-effort co-positioning: if the host already runs a known chat widget,
-  // stack crumb above it instead of overlapping. Opt-in via data-launcher-avoid.
-  if (config.avoidAuto && !launcherHidden()) startLauncherAvoidance();
 
   fetchMe().then(() => {
     if (me) {
       applyBranding({
         dot: me.workspace.accent ?? null,
         bg: me.workspace.launcher_bg ?? null,
-        position: me.workspace.position ?? null,
-        workspaceName: me.workspace.name ?? null,
-        glass: me.workspace.launcher_glass ?? false,
+        edge: me.workspace.launcher_edge ?? null,
         visibility: me.workspace.launcher_visibility ?? null,
-        offsetX: me.workspace.launcher_offset_x ?? null,
         offsetY: me.workspace.launcher_offset_y ?? null,
       });
       writeCachedBrand({
         accent: me.workspace.accent,
         launcher_bg: me.workspace.launcher_bg,
-        launcher_glass: me.workspace.launcher_glass,
-        position: me.workspace.position,
-        name: me.workspace.name,
+        launcher_edge: me.workspace.launcher_edge,
         launcher_visibility: me.workspace.launcher_visibility,
-        launcher_offset_x: me.workspace.launcher_offset_x,
         launcher_offset_y: me.workspace.launcher_offset_y,
       });
       // Consent-gated: only (re)start recording if the customer already opted

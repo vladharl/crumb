@@ -13,7 +13,6 @@
     "typescript": "^5.5.4"
   },
   "dependencies": {
-    "motion": "^11.18.2",
     "rrweb": "2.0.0-alpha.20"
   }
 }

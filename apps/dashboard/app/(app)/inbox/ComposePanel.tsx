@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Field, Ic } from "@crumb/ui";
 import { composeOnBehalf } from "./compose-actions";
@@ -23,12 +23,12 @@ export function ComposePanel({ knownAccounts }: { knownAccounts: string[] }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  if (!open) {
-    return (
-      <Btn variant="primary" icon={<Ic.plus style={{ width: 12, height: 12 }} />} onClick={() => setOpen(true)}>
-        Compose
-      </Btn>
-    );
+  // Closing keeps the draft — only a successful create clears it, so a stray
+  // scrim click or Escape can't eat a half-typed email transcription.
+  function close() {
+    if (pending) return;
+    setOpen(false);
+    setError(null);
   }
 
   function reset() {
@@ -58,103 +58,181 @@ export function ComposePanel({ knownAccounts }: { knownAccounts: string[] }) {
   }
 
   return (
-    <div style={{
-      border: "var(--border)",
-      borderRadius: "var(--r-md)",
-      padding: 14,
-      background: "var(--surface)",
-      maxWidth: 520,
-    }}>
-      <div className="row gap-2 center" style={{ marginBottom: 10 }}>
-        <span className="serif text-md grow">Compose on behalf</span>
-        <Btn sm variant="ghost" onClick={reset} disabled={pending}>Cancel</Btn>
-      </div>
-      <p className="text-xs muted" style={{ margin: "0 0 12px", lineHeight: 1.55 }}>
-        For when a customer emails or calls instead of using the widget. The item appears as if they submitted it themselves; reply threads + notifications flow to their email.
-      </p>
+    <>
+      <Btn variant="primary" icon={<Ic.plus style={{ width: 12, height: 12 }} />} onClick={() => setOpen(true)}>
+        Compose
+      </Btn>
+      {open && (
+        <ComposeModal
+          onClose={close}
+          pending={pending}
+          error={error}
+          submit={submit}
+          fields={{
+            accountName, setAccountName,
+            submitterEmail, setSubmitterEmail,
+            submitterName, setSubmitterName,
+            type, setType,
+            title, setTitle,
+            body, setBody,
+          }}
+          knownAccounts={knownAccounts}
+        />
+      )}
+    </>
+  );
+}
 
-      <div className="col gap-3">
-        <Field label="Customer account">
-          <input
-            className="input"
-            list="known-accounts"
-            placeholder="Acme Co"
-            value={accountName}
-            onChange={e => setAccountName(e.target.value)}
+function ComposeModal({
+  onClose, pending, error, submit, fields, knownAccounts,
+}: {
+  onClose: () => void;
+  pending: boolean;
+  error: string | null;
+  submit: () => void;
+  fields: {
+    accountName: string; setAccountName: (v: string) => void;
+    submitterEmail: string; setSubmitterEmail: (v: string) => void;
+    submitterName: string; setSubmitterName: (v: string) => void;
+    type: typeof TYPES[number]["key"]; setType: (v: typeof TYPES[number]["key"]) => void;
+    title: string; setTitle: (v: string) => void;
+    body: string; setBody: (v: string) => void;
+  };
+  knownAccounts: string[];
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Compose on behalf"
+      style={{
+        position: "fixed", inset: 0, background: "rgba(28, 24, 21, 0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 50, padding: 24,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "var(--paper, var(--surface))",
+          border: "1px solid var(--line, var(--hair))",
+          borderRadius: "var(--r-md)",
+          padding: 20,
+          width: "min(560px, 100%)",
+          maxHeight: "90vh",
+          overflow: "auto",
+          boxShadow: "var(--sh-soft)",
+        }}
+      >
+        <div className="row between center" style={{ marginBottom: 8 }}>
+          <h3 className="serif" style={{ margin: 0, fontSize: 18 }}>Compose on behalf</h3>
+          <button
+            aria-label="Close"
+            onClick={onClose}
             disabled={pending}
-          />
-          <datalist id="known-accounts">
-            {knownAccounts.map(n => <option key={n} value={n} />)}
-          </datalist>
-        </Field>
-
-        <div className="row gap-2" style={{ flexWrap: "wrap" }}>
-          <Field label="Submitter email">
-            <input
-              className="input"
-              type="email"
-              placeholder="maya@acme.co"
-              value={submitterEmail}
-              onChange={e => setSubmitterEmail(e.target.value)}
-              disabled={pending}
-            />
-          </Field>
-          <Field label="Submitter name (optional)">
-            <input
-              className="input"
-              placeholder="Maya"
-              value={submitterName}
-              onChange={e => setSubmitterName(e.target.value)}
-              disabled={pending}
-            />
-          </Field>
+            style={{ background: "none", border: 0, padding: 4, cursor: "pointer", color: "var(--mute)" }}
+          >
+            <Ic.x style={{ width: 14, height: 14 }} />
+          </button>
         </div>
+        <p className="text-xs muted" style={{ margin: "0 0 14px", lineHeight: 1.55 }}>
+          For when a customer emails or calls instead of using the widget. The item appears as if they submitted it themselves; reply threads + notifications flow to their email.
+        </p>
 
-        <Field label="Type">
-          <div className="seg" style={{ width: "100%" }}>
-            {TYPES.map(t => (
-              <button key={t.key} aria-selected={type === t.key} onClick={() => setType(t.key)} style={{ flex: 1 }}>
-                {t.label}
-              </button>
-            ))}
+        <div className="col gap-3">
+          <Field label="Customer account">
+            <input
+              className="input"
+              list="known-accounts"
+              placeholder="Acme Co"
+              value={fields.accountName}
+              onChange={e => fields.setAccountName(e.target.value)}
+              disabled={pending}
+              autoFocus
+            />
+            <datalist id="known-accounts">
+              {knownAccounts.map(n => <option key={n} value={n} />)}
+            </datalist>
+          </Field>
+
+          <div className="row gap-2" style={{ flexWrap: "wrap" }}>
+            <Field label="Submitter email">
+              <input
+                className="input"
+                type="email"
+                placeholder="maya@acme.co"
+                value={fields.submitterEmail}
+                onChange={e => fields.setSubmitterEmail(e.target.value)}
+                disabled={pending}
+              />
+            </Field>
+            <Field label="Submitter name (optional)">
+              <input
+                className="input"
+                placeholder="Maya"
+                value={fields.submitterName}
+                onChange={e => fields.setSubmitterName(e.target.value)}
+                disabled={pending}
+              />
+            </Field>
           </div>
-        </Field>
 
-        <Field label="Title">
-          <input
-            className="input"
-            placeholder="One line: what's the gist?"
-            value={title}
-            onChange={e => setTitle(e.target.value)}
-            disabled={pending}
-          />
-        </Field>
+          <Field label="Type">
+            <div className="seg" style={{ width: "100%" }}>
+              {TYPES.map(t => (
+                <button key={t.key} aria-selected={fields.type === t.key} onClick={() => fields.setType(t.key)} style={{ flex: 1 }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </Field>
 
-        <Field label="Details (optional)">
-          <textarea
-            className="input"
-            rows={3}
-            placeholder="What did they say? Paste the email body here."
-            value={body}
-            onChange={e => setBody(e.target.value)}
-            disabled={pending}
-          />
-        </Field>
+          <Field label="Title">
+            <input
+              className="input"
+              placeholder="One line: what's the gist?"
+              value={fields.title}
+              onChange={e => fields.setTitle(e.target.value)}
+              disabled={pending}
+            />
+          </Field>
 
-        {error && (
-          <div className="text-sm" style={{
-            background: "var(--err-bg)",
-            border: "1px solid var(--err-border)",
-            color: "var(--err-text)",
-            borderRadius: "var(--r-sm)",
-            padding: "8px 10px",
-          }}>{error}</div>
-        )}
+          <Field label="Details (optional)">
+            <textarea
+              className="input"
+              rows={4}
+              placeholder="What did they say? Paste the email body here."
+              value={fields.body}
+              onChange={e => fields.setBody(e.target.value)}
+              disabled={pending}
+            />
+          </Field>
 
-        <div className="row gap-2">
-          <Btn variant="primary" icon={<Ic.send style={{ width: 12, height: 12 }} />} onClick={submit} disabled={pending}>
-            {pending ? "Creating…" : "Create item"}
-          </Btn>
+          {error && (
+            <div className="text-sm" style={{
+              background: "var(--err-bg)",
+              border: "1px solid var(--err-border)",
+              color: "var(--err-text)",
+              borderRadius: "var(--r-sm)",
+              padding: "8px 10px",
+            }}>{error}</div>
+          )}
+
+          <div className="row gap-2" style={{ justifyContent: "flex-end" }}>
+            <Btn variant="ghost" onClick={onClose} disabled={pending}>Cancel</Btn>
+            <Btn variant="primary" icon={<Ic.send style={{ width: 12, height: 12 }} />} onClick={submit} disabled={pending}>
+              {pending ? "Creating…" : "Create item"}
+            </Btn>
+          </div>
         </div>
       </div>
     </div>

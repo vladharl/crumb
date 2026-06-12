@@ -31,6 +31,7 @@ export type TriageResult = {
   suggestedAssigneeId: string | null;
   isDuplicateLikely: boolean;
   lang: string | null; // ISO 639-1 (e.g. "en", "es") — feeds translation (#7)
+  summary: string | null; // one-line inbox preview, vendor-facing
   reason: string;
   confidence: number;
 };
@@ -51,6 +52,7 @@ type RawTriage = {
   suggested_assignee_id?: string | null;
   is_duplicate_likely?: boolean;
   lang?: string;
+  summary?: string;
   reason?: string;
   confidence?: number;
 };
@@ -79,7 +81,7 @@ Feedback:
 - body: ${body}
 
 Respond with a single line of JSON only — no prose, no code fences. Schema:
-{"type":"bug|idea|question|integration","severity":"low|medium|high|critical","sentiment":<number -1..1>,"urgency":<number 0..1>,"suggested_assignee_id":"<id from the list, or null>","is_duplicate_likely":<true|false>,"lang":"<ISO 639-1 code, e.g. en/es/fr/de/ja>","reason":"<one short sentence>","confidence":<number 0..1>}
+{"type":"bug|idea|question|integration","severity":"low|medium|high|critical","sentiment":<number -1..1>,"urgency":<number 0..1>,"suggested_assignee_id":"<id from the list, or null>","is_duplicate_likely":<true|false>,"lang":"<ISO 639-1 code, e.g. en/es/fr/de/ja>","summary":"<one line>","reason":"<one short sentence>","confidence":<number 0..1>}
 
 Rules:
 - type: correct the declared type only if it's clearly wrong, otherwise echo it.
@@ -88,6 +90,7 @@ Rules:
 - suggested_assignee_id MUST be one of the ids listed above, or null. Never invent an id.
 - is_duplicate_likely: true if this reads like a frequently-repeated request.
 - lang: the ISO 639-1 language code the feedback is written in.
+- summary: one plain sentence ≤ 140 characters a product team member can scan in an inbox — what the customer wants or reports, concrete, in English, no preamble like "The customer...".
 - reason ≤ 120 characters, referencing the feedback's substance.`;
 
   const text = await aistackChat(prompt, { maxTokens: 1024, temperature: 0.1, scope: "crumb/ai" });
@@ -109,6 +112,10 @@ Rules:
     suggestedAssigneeId,
     isDuplicateLikely: parsed.is_duplicate_likely === true,
     lang: typeof parsed.lang === "string" && /^[a-z]{2}$/i.test(parsed.lang) ? parsed.lang.toLowerCase() : null,
+    summary:
+      typeof parsed.summary === "string" && parsed.summary.trim()
+        ? parsed.summary.trim().replace(/\s+/g, " ").slice(0, 200)
+        : null,
     reason: (parsed.reason ?? "").slice(0, 240),
     confidence: clampOrNull(parsed.confidence, 0, 1) ?? 0,
   };

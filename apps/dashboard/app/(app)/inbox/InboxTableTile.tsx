@@ -47,6 +47,14 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     WHERE r.item_id = items.id AND r.internal = false AND r.workspace_user_id IS NOT NULL
   )`.as("vendor_replied");
 
+  // One-line inbox preview: the AI summary when triage produced one, else a
+  // whitespace-collapsed snippet of the body. LEFT(…, 141) caps it in SQL so
+  // full bodies never ship to the client; the mapper turns char 141 into "…".
+  // ('\\s' because a single backslash in this template degrades to plain "s".)
+  const preview = sql<string | null>`
+    NULLIF(LEFT(regexp_replace(COALESCE(items.ai_summary, items.body), '\\s+', ' ', 'g'), 141), '')
+  `.as("preview");
+
   // Suggested-initiative join: aliasing initiatives a second time so the
   // primary join (current assignment) and the secondary join (AI guess)
   // don't collide.
@@ -66,6 +74,7 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
       id: items.id,
       shortId: items.shortId,
       title: items.title,
+      preview,
       type: items.type,
       status: items.status,
       assigneeId: items.assigneeId,
@@ -115,6 +124,7 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     id: r.id,
     shortId: r.shortId,
     title: r.title,
+    preview: r.preview === null ? null : r.preview.length > 140 ? r.preview.slice(0, 140).trimEnd() + "…" : r.preview,
     type: r.type,
     status: r.status,
     assigneeId: r.assigneeId,

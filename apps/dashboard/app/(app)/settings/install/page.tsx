@@ -96,7 +96,7 @@ function signCrumbIdentity(user) {
         <CardHead title="Coexisting with another chat widget" after={<Pill ring>Intercom · Zendesk · …</Pill>} />
         <div className="card-body col gap-4">
           <p className="text-md muted" style={{ margin: 0, maxWidth: "62ch", lineHeight: 1.55 }}>
-            Already running Intercom, Zendesk, Freshchat, or your own help bubble? Hide crumb's launcher so you don't get two bubbles, and open the feedback panel from your existing widget or any button. Set <span className="mono">Launcher visibility → Hidden</span> in <a href="/settings/branding" style={{ color: "var(--ink)" }}>Branding</a>, or hide it per-page with <span className="mono">data-launcher="hidden"</span>:
+            Already running Intercom, Zendesk, Freshchat, or your own help widget? You can hide crumb's edge tab entirely and open the feedback panel from your existing widget or any button. Set <span className="mono">Launcher visibility → Hidden</span> in <a href="/settings/branding" style={{ color: "var(--ink)" }}>Branding</a>, or hide it per-page with <span className="mono">data-launcher="hidden"</span>:
           </p>
 
           <div className="code">
@@ -143,7 +143,7 @@ crumb.open();`}
           </div>
 
           <p className="text-xs muted" style={{ margin: 0, maxWidth: "62ch", lineHeight: 1.5 }}>
-            Prefer to keep both bubbles? Leave the launcher visible and set a <span className="mono">Launcher offset</span> in Branding (or <span className="mono">data-offset="0,76"</span>) to stack crumb above the other one. Add <span className="mono">data-launcher-avoid="auto"</span> to have crumb best-effort detect a known widget and lift itself automatically.
+            Prefer to keep both? Crumb's tab docks to the middle of the screen edge, so it doesn't collide with corner chat bubbles. If your product renders something mid-edge, set a <span className="mono">Vertical nudge</span> in Branding (or <span className="mono">data-offset="120"</span>) to slide the tab along the edge.
           </p>
         </div>
       </Card>

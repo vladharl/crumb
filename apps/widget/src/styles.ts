@@ -43,110 +43,107 @@ export const css = `
 }
 * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif; }
 
+/* ── launcher: the edge whisper tab ─────────────────────────
+   A slim flat tab docked flush to a viewport edge, vertically centered.
+   Borders-only depth — no blur, no gloss, one hairline shadow. It earns
+   presence only when there's loop news (.l-dot + 2px of width); hovering
+   or focusing slides a small flat flag out with the latest event. */
 .launcher {
   position: fixed;
-  /* Base 20px corner inset + an optional offset so the launcher can stack
-     above another widget's bubble (corner/pill positions; the tab variant
-     docks to the edge and ignores the offset). */
-  right: calc(20px + var(--crumb-offset-x, 0px));
-  bottom: calc(20px + var(--crumb-offset-y, 0px));
-  width: 54px;
-  height: 54px;
-  border-radius: 50%;
-  /* Flat "liquid glass": a translucent fill + backdrop blur gives the frosted
-     glass quality (the page shows through, slightly muted), a hairline rim
-     catches light, and a soft flat elevation shadow lifts it. No 3D gradient /
-     bevel — matte and modern. Stays legible on light pages at this opacity;
-     the opt-in .glass variant pushes the frost further. */
-  background: color-mix(in srgb, var(--crumb-launcher-bg) 82%, transparent);
-  -webkit-backdrop-filter: blur(14px) saturate(0.95);
-  backdrop-filter: blur(14px) saturate(0.95);
+  right: 0;
+  top: calc(50% + var(--crumb-offset-y, 0px));
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 28px;
+  padding: 12px 0;
+  background: var(--crumb-launcher-bg);
   color: #FFFFFF;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-right: 0;
+  border-radius: 8px 0 0 8px;
+  box-shadow: 0 1px 2px rgba(74, 46, 31, 0.08);
   cursor: pointer;
-  display: grid;
-  place-items: center;
-  box-shadow:
-    0 1px 2px rgba(74, 46, 31, 0.12),
-    0 6px 18px rgba(74, 46, 31, 0.16),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  transition: transform 220ms cubic-bezier(0.34, 1.4, 0.5, 1), box-shadow 200ms var(--ease), background 240ms var(--ease);
+  transition: width 200ms cubic-bezier(0.25, 1, 0.5, 1), background 200ms cubic-bezier(0.25, 1, 0.5, 1);
   z-index: 2147483646;
 }
-/* whisper-thin top sheen — the single glass highlight, kept flat */
-.launcher::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  z-index: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0) 40%);
+:host([data-edge="left"]) .launcher {
+  left: 0; right: auto;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
 }
-.launcher > svg, .launcher .launcher-cta, .launcher .launcher-name { position: relative; z-index: 1; }
+.launcher[data-state="news"] { width: 30px; }
+.launcher:hover, .launcher:focus-visible { width: 32px; }
+.launcher:focus-visible { outline: 2px solid var(--crumb-accent); outline-offset: 2px; }
 
-/* The mark + label/CTA inside the launcher. Hidden for the corner circle;
-   revealed for the pill + tab variants. */
-.launcher-name, .launcher-cta { display: none; }
-
-/* ── pill: rounded, labeled button (bottom-right) ── */
-:host([data-pos="pill"]) .launcher {
-  width: auto; height: 48px;
-  border-radius: 999px;
-  padding: 0 18px 0 15px;
-  display: flex; justify-content: flex-start; align-items: center; gap: 9px;
-}
-:host([data-pos="pill"]) .launcher svg { width: 20px; height: 20px; }
-:host([data-pos="pill"]) .launcher-cta {
-  display: inline-block; font-size: 14px; font-weight: 500; white-space: nowrap;
-}
-
-/* ── tab: slim vertical bar docked to the right edge ── */
-:host([data-pos="tab"]) .launcher {
-  right: 0; left: auto; bottom: auto; top: 50%;
-  transform: translateY(-50%);
-  width: auto; height: auto;
-  border-radius: 12px 0 0 12px;
-  padding: 15px 8px;
-  display: flex; flex-direction: column; align-items: center; gap: 10px;
-}
-:host([data-pos="tab"]) .launcher svg { width: 20px; height: 20px; }
-:host([data-pos="tab"]) .launcher-cta {
-  display: inline-block; writing-mode: vertical-rl;
-  font-size: 13px; font-weight: 500; letter-spacing: 0.02em;
-}
-:host([data-pos="tab"]) .launcher:hover { transform: translateY(-50%) scale(1.04); }
-:host([data-pos="tab"]) .launcher:active { transform: translateY(-50%) scale(0.97); }
-
-/* springy hover / press (corner + pill) */
-.launcher:hover {
-  transform: translateY(-2px) scale(1.04);
-  box-shadow:
-    0 2px 4px rgba(74, 46, 31, 0.14),
-    0 12px 28px rgba(74, 46, 31, 0.20),
-    inset 0 1px 0 rgba(255, 255, 255, 0.14);
-}
-.launcher:active { transform: translateY(0) scale(0.97); }
-.launcher svg { width: 24px; height: 24px; overflow: visible; }
+.launcher .l-mark { display: inline-flex; }
+.launcher .l-mark svg { width: 16px; height: 16px; overflow: visible; }
 /* The loop mark is the brand "dot color" (configurable in Branding) — same in
    the dashboard preview, so what a vendor sets is what their customers see. */
 .launcher svg circle { fill: var(--crumb-accent); transition: fill 240ms var(--ease); }
 
-/* opt-in glassmorphism: pushes the frost further — more translucent + heavier
-   blur — for busy or dark host pages. Same flat treatment, no gloss. */
-.launcher.glass {
-  background: color-mix(in srgb, var(--crumb-launcher-bg) 62%, transparent);
-  backdrop-filter: blur(18px) saturate(1.5);
-  -webkit-backdrop-filter: blur(18px) saturate(1.5);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  box-shadow:
-    0 1px 2px rgba(74, 46, 31, 0.10),
-    0 8px 24px rgba(74, 46, 31, 0.14),
-    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+.launcher .l-label {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  /* Follows the dot color so one branding choice controls everything on the
+     tab — and the Branding contrast warning (dot vs launcher bg) covers the
+     label's readability too. */
+  color: var(--crumb-accent);
+  user-select: none;
 }
 
-/* Boot pulse + settle are driven from JS via Motion One (see widget.ts).
-   prefers-reduced-motion is honored in the JS driver. */
+/* Loop-news dot: ember, static — restraint over pulse. */
+.launcher .l-dot {
+  width: 6px; height: 6px;
+  border-radius: 999px;
+  background: var(--crumb-accent);
+}
+.launcher .l-dot[hidden] { display: none; }
+
+/* The flag: a flat paper card that slides out beside the tab on hover/focus
+   with the latest loop event ("Maya replied · 2" / "Shipped: Dark mode").
+   Part of the button, so it stays open under the cursor and clicks through. */
+.launcher .l-flag {
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%) translateX(4px);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  background: var(--c-bg);
+  color: var(--c-ink);
+  border: 1px solid var(--c-line-2);
+  border-radius: var(--r-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(74, 46, 31, 0.08);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms cubic-bezier(0.25, 1, 0.5, 1), transform 200ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+:host([data-edge="left"]) .launcher .l-flag {
+  right: auto;
+  left: calc(100% + 8px);
+  transform: translateY(-50%) translateX(-4px);
+}
+.launcher:hover .l-flag, .launcher:focus-visible .l-flag {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+.launcher .l-flag-count { color: var(--c-accent-ink); font-weight: 600; }
+.launcher .l-flag-count:empty { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .launcher, .launcher .l-flag, .launcher svg circle { transition: none; }
+}
 
 /* ── attachments ── */
 .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -200,55 +197,16 @@ export const css = `
 .brand-mark svg { width: 18px; height: 18px; }
 .brand-mark svg circle { fill: var(--c-accent); }
 
-/* Unread = a small pulsing attention dot (count lives in the list). The
-   double ring uses box-shadow so it works on any launcher background. */
-.badge {
-  position: absolute;
-  top: 1px; right: 1px;
-  width: 11px; height: 11px;
-  border-radius: 999px;
-  background: var(--c-accent);
-  border: 2px solid var(--crumb-launcher-bg);
-  box-shadow: 0 0 0 0 var(--c-accent);
-  animation: crumb-pulse 1.8s var(--ease) infinite;
-}
-:host([data-pos="tab"]) .badge { top: -3px; right: -3px; }
-@keyframes crumb-pulse {
-  0%   { box-shadow: 0 0 0 0 rgba(226, 125, 58, 0.45); }
-  70%  { box-shadow: 0 0 0 7px rgba(226, 125, 58, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(226, 125, 58, 0); }
-}
-@media (prefers-reduced-motion: reduce) { .badge { animation: none; } }
-
-.tooltip {
-  position: fixed;
-  right: 80px;
-  bottom: 32px;
-  background: var(--c-ink);
-  color: #FFFFFF;
-  padding: 7px 11px;
-  border-radius: 8px;
-  font-size: 12px;
-  pointer-events: none;
-  opacity: 0;
-  transform: translateX(6px);
-  transition: opacity 140ms var(--ease), transform 140ms var(--ease);
-  z-index: 2147483645;
-  white-space: nowrap;
-}
-.launcher:hover ~ .tooltip { opacity: 1; transform: translateX(0); }
-:host([data-pos="pill"]) .tooltip,
-:host([data-pos="tab"]) .tooltip { display: none; }
-
 .panel {
   position: fixed;
-  /* Track the launcher's offset so the panel stays anchored to the bubble. */
-  right: calc(20px + var(--crumb-offset-x, 0px));
-  bottom: calc(84px + var(--crumb-offset-y, 0px));
+  /* Anchored beside the edge tab: vertically centered on the same nudge the
+     launcher tracks, a small inset off the edge. */
+  right: 16px;
+  top: calc(50% + var(--crumb-offset-y, 0px));
   width: 392px;
   max-width: calc(100vw - 40px);
   height: 620px;
-  max-height: calc(100vh - 110px);
+  max-height: calc(100vh - 32px);
   background: var(--c-bg);
   border: 1px solid var(--c-line);
   border-radius: var(--r-lg);
@@ -260,20 +218,25 @@ export const css = `
   flex-direction: column;
   overflow: hidden;
   opacity: 0;
-  transform: translateY(10px) scale(0.985);
-  transform-origin: bottom right;
+  transform: translateY(-50%) translateX(8px) scale(0.985);
+  transform-origin: right center;
   pointer-events: none;
-  transition: opacity 180ms var(--ease), transform 220ms var(--ease), width 220ms var(--ease), height 220ms var(--ease), right 220ms var(--ease), bottom 220ms var(--ease);
+  transition: opacity 180ms var(--ease), transform 220ms var(--ease), width 220ms var(--ease), height 220ms var(--ease), right 220ms var(--ease), top 220ms var(--ease);
   z-index: 2147483647;
 }
 .panel.open {
   opacity: 1;
-  transform: translateY(0) scale(1);
+  transform: translateY(-50%) translateX(0) scale(1);
   pointer-events: auto;
 }
-
-/* pill + tab both anchor the panel bottom-right (base rules above); the tab
-   launcher sits mid-right-edge and the panel opens below it. */
+:host([data-edge="left"]) .panel {
+  left: 16px; right: auto;
+  transform-origin: left center;
+  transform: translateY(-50%) translateX(-8px) scale(0.985);
+}
+:host([data-edge="left"]) .panel.open {
+  transform: translateY(-50%) translateX(0) scale(1);
+}
 
 .scrim {
   position: fixed;
@@ -289,14 +252,19 @@ export const css = `
 .scrim.show { opacity: 1; pointer-events: auto; }
 .panel.expanded {
   right: 50%;
-  bottom: 50%;
-  transform: translate(50%, 50%);
+  top: 50%;
+  transform: translate(50%, -50%);
   width: min(780px, calc(100vw - 48px));
   height: min(720px, calc(100vh - 48px));
   max-height: calc(100vh - 48px);
   border-radius: var(--r-lg);
 }
-.panel.expanded.open { transform: translate(50%, 50%); }
+.panel.expanded.open { transform: translate(50%, -50%); }
+:host([data-edge="left"]) .panel.expanded,
+:host([data-edge="left"]) .panel.expanded.open {
+  left: 50%; right: auto;
+  transform: translate(-50%, -50%);
+}
 
 .head {
   display: flex;

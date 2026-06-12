@@ -43,21 +43,19 @@ export const workspaces = pgTable("workspaces", {
   id: uuid("id").primaryKey().defaultRandom(),
   slug: varchar("slug", { length: 64 }).notNull().unique(),
   name: text("name").notNull(),
-  // Launcher circle background — a warm ink the white loop mark sits inside.
+  // Launcher tab background — a warm ink the loop mark sits inside.
   launcherBg: varchar("launcher_bg", { length: 16 }).notNull().default("#1C1A17"),
-  // Brand accent — used for the unread pulse dot on the launcher and
+  // Brand accent — used for the loop-news dot on the launcher and
   // sparingly as an accent on the dashboard.
   accent: varchar("accent", { length: 16 }).notNull().default("#E27D3A"),
-  position: varchar("position", { length: 16 }).notNull().default("corner"), // corner | pill | tab
-  // Opt-in glassmorphism launcher style (translucent + backdrop-blur).
-  launcherGlass: boolean("launcher_glass").notNull().default(false),
-  // Whether crumb shows its own launcher bubble. `hidden` lets a site that
+  // Which viewport edge the whisper-tab launcher docks to.
+  launcherEdge: varchar("launcher_edge", { length: 8 }).notNull().default("right"), // right | left
+  // Whether crumb shows its own launcher tab. `hidden` lets a site that
   // already runs Intercom/Zendesk/etc. drive crumb via window.crumb.open()
-  // from their existing chat widget — avoiding two competing bubbles.
+  // from their existing chat widget — avoiding two competing widgets.
   launcherVisibility: varchar("launcher_visibility", { length: 16 }).notNull().default("auto"), // auto | always | hidden
-  // Pixel nudge added to the launcher's 20px corner inset, so it can stack
-  // above another widget's bubble instead of overlapping it.
-  launcherOffsetX: integer("launcher_offset_x").notNull().default(0),
+  // Pixel nudge along the docked edge (positive = down from center), so the
+  // tab can clear anything the host renders mid-edge.
   launcherOffsetY: integer("launcher_offset_y").notNull().default(0),
   nextItemSeq: integer("next_item_seq").notNull().default(1),
   // HS256 secret used to verify widget identity JWTs. 64 hex chars = 32 bytes.
@@ -282,6 +280,9 @@ export const items = pgTable("items", {
   aiUrgency:            doublePrecision("ai_urgency"),
   aiSuggestedAssigneeId: uuid("ai_suggested_assignee_id").references(() => workspaceUsers.id, { onDelete: "set null" }),
   aiTriageReason:       text("ai_triage_reason"),
+  // One-line vendor-facing summary for inbox scanning. Written by the same
+  // triage call; null on self-host (the inbox falls back to a body snippet).
+  aiSummary:            text("ai_summary"),
   aiTriagedAt:          timestamp("ai_triaged_at", { withTimezone: true }),
   aiTriageModel:        varchar("ai_triage_model", { length: 64 }),
 

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Avatar, Btn, Card, Dropdown, Ic, Pill, StatusPill, TrailDots, TypeChip, trailProgress } from "@crumb/ui";
 import type { Status, TypeKind } from "@crumb/ui";
 import { loopTurn, waitingDays, waitingSince, type LoopTurn, type ReplySide } from "@/lib/loop";
+import { gmailTime } from "@/lib/timefmt";
 import { bulkAssign, bulkUpdateStatus, acceptTriageAssignee, dismissTriage } from "./actions";
 import { bulkSetInitiative, clusterItems, acceptSuggestion, dismissSuggestion } from "../initiatives/actions";
 import { InitiativeChip } from "../initiatives/InitiativeChip";
@@ -26,6 +27,9 @@ export type InboxRow = {
   id: string;
   shortId: string;
   title: string;
+  // One-line preview under the title: AI summary when triage produced one,
+  // else a body snippet (or null for title-only submissions).
+  preview: string | null;
   type: string;
   status: string;
   assigneeId: string | null;
@@ -76,7 +80,7 @@ const STATUS_OPTIONS: Array<{ value: Status; label: string }> = [
   { value: "duplicate", label: "Duplicate" },
 ];
 
-const GRID = "28px 64px 86px 1.4fr 110px 140px 110px 56px 56px 22px";
+const GRID = "28px 64px 86px 1.4fr 110px 140px 110px 56px 72px 22px";
 const INITIATIVE_ANY = "__any";
 const INITIATIVE_NONE = "__none";
 
@@ -413,7 +417,7 @@ export function InboxTable({
             <span role="columnheader">Initiative</span>
             <span role="columnheader">Status</span>
             <span role="columnheader">Asg.</span>
-            <span role="columnheader">Age</span>
+            <span role="columnheader">Activity</span>
             <span role="columnheader"></span>
           </div>
 
@@ -455,18 +459,29 @@ export function InboxTable({
                 </Link>
                 <Link href={`/thread/${it.shortId}`} className="col gap-1 grow truncate" style={{ textDecoration: "none", color: "inherit" }}>
                   <span className="fw-med truncate" style={{ display: "block" }}>{it.title}</span>
-                  <span className="text-xs muted row gap-2 center" style={{ flexWrap: "wrap" }}>
-                    <TrailDots progress={trailProgress(it)} size={11} />
-                    {aiEntitled && it.aiSeverity && <SeverityBadge severity={it.aiSeverity} reason={it.aiTriageReason} />}
+                  {/* Preview shares the meta line and truncates first; nowrap so
+                      a long preview can't push the loop meta onto a third line. */}
+                  <span className="text-xs muted row gap-2 center" style={{ flexWrap: "nowrap", minWidth: 0 }}>
+                    {it.preview && (
+                      <span className="truncate" style={{ minWidth: 0, flex: "0 1 auto" }}>{it.preview}</span>
+                    )}
+                    <span style={{ flexShrink: 0, display: "inline-flex" }}>
+                      <TrailDots progress={trailProgress(it)} size={11} />
+                    </span>
+                    {aiEntitled && it.aiSeverity && (
+                      <span style={{ flexShrink: 0, display: "inline-flex" }}>
+                        <SeverityBadge severity={it.aiSeverity} reason={it.aiTriageReason} />
+                      </span>
+                    )}
                     {aiEntitled && it.aiSentiment !== null && <SentimentGlyph score={it.aiSentiment} />}
                     {it.replyCount > 0 && (
-                      <span className="row gap-1 center">
+                      <span className="row gap-1 center" style={{ flexShrink: 0 }}>
                         <Ic.chat style={{ width: 10, height: 10 }} />
                         {it.replyCount} {it.replyCount === 1 ? "reply" : "replies"}
                       </span>
                     )}
                     {it.mergedCount > 0 && (
-                      <span className="row gap-1 center" title={`${it.mergedCount} duplicate${it.mergedCount === 1 ? "" : "s"} merged in`}>
+                      <span className="row gap-1 center" style={{ flexShrink: 0 }} title={`${it.mergedCount} duplicate${it.mergedCount === 1 ? "" : "s"} merged in`}>
                         <Ic.copy style={{ width: 10, height: 10 }} />
                         {it.mergedCount} merged
                       </span>
@@ -557,7 +572,7 @@ export function InboxTable({
               {pending ? "Clustering…" : `Cluster selected${selected.size > 0 ? ` (${selected.size})` : ""}`}
             </Btn>
             {!clusterEnabled && (
-              <Pill ring>{initiatives.length === 0 ? "Add an initiative first" : "Set ANTHROPIC_API_KEY"}</Pill>
+              <Pill ring>{initiatives.length === 0 ? "Add an initiative first" : "Set AISTACK_API_KEY"}</Pill>
             )}
           </div>
         )}
@@ -566,14 +581,17 @@ export function InboxTable({
   );
 }
 
-// Age cell with loop semantics: on "your turn" rows it shows how long the
-// customer has been waiting (since their last message, not item creation) and
-// warms toward rust as the wait grows. Elsewhere it's the plain item age.
+// Activity cell with loop semantics: a Gmail-style timestamp of the last
+// external activity (latest non-internal reply, else creation). On "your turn"
+// rows the timestamp warms toward rust as the customer's wait grows — there
+// the last activity IS the moment the wait started, so the colored time and
+// the urgency basis agree.
 function LoopAge({ row, turn }: { row: InboxRow; turn: LoopTurn }) {
+  const stamp = gmailTime(row.lastExternalReplyAtIso ?? row.createdAtIso);
   if (turn !== "yours") {
     return (
-      <Link href={`/thread/${row.shortId}`} className="text-xs muted mono" style={{ textDecoration: "none" }}>
-        {ageFrom(row.createdAtIso)}
+      <Link href={`/thread/${row.shortId}`} className="text-xs muted mono" style={{ textDecoration: "none", whiteSpace: "nowrap" }}>
+        {stamp}
       </Link>
     );
   }
@@ -584,10 +602,10 @@ function LoopAge({ row, turn }: { row: InboxRow; turn: LoopTurn }) {
     <Link
       href={`/thread/${row.shortId}`}
       className="text-xs muted mono"
-      style={{ textDecoration: "none", ...(color ? { color, fontWeight: 600 } : {}) }}
+      style={{ textDecoration: "none", whiteSpace: "nowrap", ...(color ? { color, fontWeight: 600 } : {}) }}
       title={`Waiting ${ageFrom(since)} for a reply`}
     >
-      {ageFrom(since)}
+      {stamp}
     </Link>
   );
 }

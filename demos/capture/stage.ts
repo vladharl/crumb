@@ -93,7 +93,7 @@ const STATEMENTS: string[] = [
        'Lumen Health', 0.86, 'pending', now() - interval '2 hours')`,
   `INSERT INTO inbound_captures (workspace_id, source, from_name, body, status, created_at)
      VALUES (${WS}, 'slack', 'Dana, shared channel',
-       'Heads up from the shared Slack: a customer asked twice this week whether the widget launcher can sit bottom-left instead of bottom-right. Small ask, but it keeps coming up.',
+       'Heads up from the shared Slack: a customer asked twice this week whether the widget tab can dock to the left edge instead of the right. Small ask, but it keeps coming up.',
        'pending', now() - interval '38 minutes')`,
 ];
 

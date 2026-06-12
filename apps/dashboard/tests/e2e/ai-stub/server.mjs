@@ -59,6 +59,7 @@ function chatContent(prompt) {
       suggested_assignee_id: idm ? idm[1] : null,
       is_duplicate_likely: false,
       lang,
+      summary: "e2e one-line summary of what the customer asked for",
       reason: negative ? "frustrated customer" : "e2e triage stub",
       confidence: 0.9,
     });

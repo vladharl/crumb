@@ -1,23 +1,12 @@
 "use client";
 
 import { useState, useTransition, useEffect, useRef } from "react";
-import { animate } from "motion";
-import { Btn, Card, CardHead, Field, Pill, Switch } from "@crumb/ui";
-import { saveBranding } from "./actions";
+import { Btn, Card, CardHead, Field, Pill } from "@crumb/ui";
+import { saveBranding, fetchSitePreview } from "./actions";
 
-type Pos = "corner" | "pill" | "tab";
+type Edge = "right" | "left";
 type Visibility = "auto" | "always" | "hidden";
-
-function readableOn(hex: string): string {
-  const c = hex.replace("#", "");
-  if (c.length !== 3 && c.length !== 6) return "var(--bone)";
-  const full = c.length === 3 ? c.split("").map(x => x + x).join("") : c;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  const L = 0.299 * r + 0.587 * g + 0.114 * b;
-  return L > 150 ? "var(--ink)" : "var(--bone)";
-}
+type PreviewState = "rest" | "news" | "peek";
 
 // WCAG-style relative-luminance contrast ratio between two hex colors.
 // Returns 1.0 (identical) → 21.0 (black-on-white). We warn under 3.0.
@@ -45,10 +34,8 @@ const SkelTile = ({ h = 28 }: { h?: number }) => (
   }} />
 );
 
-// The same loop mark the widget mounts in its launcher. Sized for the
-// 44px preview circle so the dots breathe inside the chip without
-// crowding the edge.
-function LoopMark({ dotColor, size = 24 }: { dotColor: string; size?: number }) {
+// The same loop mark the widget mounts in its launcher tab.
+function LoopMark({ dotColor, size = 16 }: { dotColor: string; size?: number }) {
   return (
     <svg viewBox="-5 -5 42 42" aria-hidden="true" style={{ width: size, height: size, overflow: "visible" }}>
       <circle cx="16" cy="3"  r="2.6" opacity="0.30" fill={dotColor} />
@@ -61,56 +48,78 @@ function LoopMark({ dotColor, size = 24 }: { dotColor: string; size?: number }) 
 }
 
 function BrandingPreview({
-  name, dotColor, launcherBg, pos, glass,
+  dotColor, launcherBg, edge, offsetY, visibility, initialSite,
 }: {
-  name: string; dotColor: string; launcherBg: string; pos: Pos; glass: boolean;
+  dotColor: string; launcherBg: string; edge: Edge; offsetY: number; visibility: Visibility; initialSite: string;
 }) {
-  // Label text ("Feedback") sits on the launcher background, so its contrast
-  // is against launcherBg — not the dot color.
-  const fg = readableOn(launcherBg);
-  const glassCls = glass ? " glass" : "";
+  // Peek (the hover flag) can't be hovered in a static preview, so the three
+  // launcher states are a toggle instead.
+  const [state, setState] = useState<PreviewState>("news");
+  const showDot = state !== "rest";
+  const showFlag = state === "peek";
 
-  // Drive the preview loop mark with the same animation strategy as the
-  // live widget so vendors see exactly what their customers will:
-  //   - Motion rotates the <svg> root (single-element animation works)
-  //   - Native WAAPI animates per-circle opacity (Motion's array form
-  //     silently no-ops on SVGCircleElement collections)
-  // The preview launcher is in a normal DOM (not shadow root) so the
-  // failure mode is less severe than the widget side, but using the same
-  // code path keeps the two visually identical.
-  const previewRef = useRef<HTMLDivElement>(null);
+  // Live site preview: type a URL → the server fetches the real page and we
+  // render it in a fully-sandboxed iframe behind the tab, scaled down from a
+  // desktop viewport so it reads like a screenshot. Empty/unreachable → the
+  // skeleton mock.
+  const [siteInput, setSiteInput] = useState(initialSite);
+  const [siteHtml, setSiteHtml] = useState<string | null>(null);
+  const [siteState, setSiteState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [siteError, setSiteError] = useState<string | null>(null);
+  const [siteThin, setSiteThin] = useState(false);
+  const loadedFor = useRef<string | null>(null);
+
+  function loadSite(raw: string) {
+    const v = raw.trim();
+    if (!v) {
+      loadedFor.current = null;
+      setSiteHtml(null);
+      setSiteState("idle");
+      setSiteError(null);
+      return;
+    }
+    if (loadedFor.current === v && siteState === "loaded") return;
+    loadedFor.current = v;
+    setSiteState("loading");
+    setSiteError(null);
+    void fetchSitePreview(v).then(res => {
+      if (loadedFor.current !== v) return; // a newer request superseded this one
+      if (res.ok) {
+        setSiteHtml(res.html);
+        setSiteThin(res.thin);
+        setSiteState("loaded");
+      } else {
+        setSiteHtml(null);
+        setSiteState("error");
+        setSiteError(res.error);
+      }
+    });
+  }
+
+  // The workspace's Product URL is the obvious site to show — load it once on
+  // mount when set.
   useEffect(() => {
-    const root = previewRef.current;
-    if (!root) return;
-    const svg = root.querySelector("svg") as SVGSVGElement | null;
-    const circles = Array.from(root.querySelectorAll("svg circle")) as SVGCircleElement[];
-    if (!svg || circles.length === 0) return;
-    svg.style.transformOrigin = "center";
-    const spin = animate(
-      svg,
-      { rotate: [0, 360] },
-      { duration: 1.6, repeat: Infinity, ease: "linear" },
-    );
-    const dotAnims = circles.map((c, i) =>
-      c.animate(
-        [{ opacity: 0.3 }, { opacity: 1 }, { opacity: 0.55 }],
-        {
-          duration: 1100,
-          delay: i * 90,
-          iterations: Infinity,
-          easing: "cubic-bezier(0.32, 0.72, 0.36, 1)",
-        },
-      ),
-    );
-    return () => {
-      spin.stop();
-      for (const a of dotAnims) a.cancel();
-    };
-  }, [pos, dotColor, launcherBg]);
+    if (initialSite) loadSite(initialSite);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Scale a desktop-width render down to the pane.
+  const SITE_W = 1280;
+  const paneRef = useRef<HTMLDivElement>(null);
+  const [pane, setPane] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    const update = () => setPane({ w: el.clientWidth, h: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const scale = pane.w > 0 ? pane.w / SITE_W : 0.4;
 
   return (
     <div
-      ref={previewRef}
       style={{
         border: "var(--border)",
         borderRadius: "var(--r-sm)",
@@ -136,106 +145,161 @@ function BrandingPreview({
       }}>
         <span style={{ width: 4, height: 4, borderRadius: 999, background: "var(--ink)", opacity: 0.4 }} />
         Your product · live preview
+        <span style={{ flex: 1 }} />
+        <div className="seg" style={{ textTransform: "none", letterSpacing: 0 }}>
+          {([
+            { k: "rest", label: "Rest" },
+            { k: "news", label: "News" },
+            { k: "peek", label: "Peek" },
+          ] as const).map(({ k, label }) => (
+            <button key={k} aria-selected={state === k} onClick={() => setState(k)}>{label}</button>
+          ))}
+        </div>
       </div>
 
-      <div style={{ position: "relative", flex: 1, padding: 14, minHeight: 240 }}>
-        <div style={{
-          height: 22, display: "flex", alignItems: "center", gap: 10,
-          paddingBottom: 8, borderBottom: "var(--border)", marginBottom: 12,
+      {/* The frame's "address bar": editable; Enter or leaving the field pulls
+          the real site behind the tab. */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10,
+        padding: "8px 14px",
+        borderBottom: "var(--border)",
+      }}>
+        <span style={{
+          width: 6, height: 6, borderRadius: 999, flexShrink: 0,
+          background: siteState === "loaded" ? "var(--green, #4E9E6A)" : "var(--ink)",
+          opacity: siteState === "loaded" ? 0.9 : 0.55,
+        }} />
+        <input
+          className="text-2xs mono"
+          value={siteInput}
+          onChange={e => setSiteInput(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          onBlur={() => loadSite(siteInput)}
+          placeholder="yourproduct.com — type a URL to preview the tab on your real site"
+          spellCheck={false}
+          aria-label="Site to preview"
+          style={{
+            flex: 1, minWidth: 0,
+            background: "transparent", border: 0, outline: "none",
+            color: "var(--ink)", letterSpacing: "0.03em",
+            padding: 0,
+          }}
+        />
+        {siteState === "loading" && <span className="text-2xs" style={{ color: "var(--mute)", flexShrink: 0 }}>Fetching…</span>}
+        {siteState === "error" && <span className="text-2xs" style={{ color: "var(--rust, #B23A34)", flexShrink: 0 }}>{siteError}</span>}
+        {siteState === "loaded" && siteThin && (
+          <span className="text-2xs" style={{ color: "var(--mute)", flexShrink: 0 }}>
+            JS app — may stay blank without sign-in; try a public page
+          </span>
+        )}
+      </div>
+
+      <div ref={paneRef} style={{ position: "relative", flex: 1, padding: siteState === "loaded" ? 0 : 14, minHeight: 240, overflow: "hidden" }}>
+        {siteState === "loaded" && siteHtml !== null ? (
+          // allow-scripts (and nothing else): JS-rendered sites get to mount,
+          // but the document keeps an opaque origin with no parent access,
+          // and pointer-events keep it inert.
+          <iframe
+            title="Site preview"
+            sandbox="allow-scripts"
+            srcDoc={siteHtml}
+            style={{
+              position: "absolute", top: 0, left: 0,
+              width: SITE_W,
+              height: scale > 0 ? Math.ceil(pane.h / scale) : 0,
+              transform: `scale(${scale})`,
+              transformOrigin: "top left",
+              border: 0,
+              background: "#fff",
+              pointerEvents: "none",
+            }}
+          />
+        ) : (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <SkelTile />
+              <SkelTile />
+            </div>
+            <SkelTile h={56} />
+            <div style={{ height: 12 }} />
+            <SkelTile h={42} />
+          </>
+        )}
+
+        {/* The whisper tab, docked to the chosen edge of the preview frame —
+            floats above the site iframe like the real widget does. The
+            vertical nudge applies as on the live tab, clamped so an offset
+            sized for a full viewport can't push it out of this small pane. */}
+        {visibility !== "hidden" && (
+        <div className="preview-launcher" data-edge={edge} style={{
+          ["--lb" as string]: launcherBg,
+          position: "absolute",
+          zIndex: 1,
+          ...(edge === "right" ? { right: 0 } : { left: 0 }),
+          top: `clamp(56px, calc(50% + ${offsetY}px), calc(100% - 56px))`,
+          transform: "translateY(-50%)",
+          display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+          width: showDot ? 30 : 28,
+          padding: "12px 0",
+          fontFamily: "var(--font-body)", fontWeight: 500,
         }}>
-          <span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--ink)", opacity: 0.55 }} />
-          <span className="text-2xs" style={{ color: "var(--mute)", letterSpacing: "0.05em" }}>southbeam.io / cohorts</span>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-          <SkelTile />
-          <SkelTile />
-        </div>
-        <SkelTile h={56} />
-        <div style={{ height: 12 }} />
-        <SkelTile h={42} />
-
-        {pos === "pill" && (
-          <div className={`preview-launcher preview-launcher--pill${glassCls}`} style={{
-            ["--lb" as string]: launcherBg, color: fg,
-            position: "absolute", right: 14, bottom: 14,
-            height: 48, padding: "0 18px 0 15px", borderRadius: 999,
-            display: "flex", alignItems: "center", gap: 9,
-            fontFamily: "var(--font-body)", fontWeight: 500, whiteSpace: "nowrap",
-          }}>
-            <LoopMark dotColor={dotColor} size={20} />
-            <span style={{ fontSize: 14 }}>Feedback</span>
-          </div>
-        )}
-
-        {pos === "tab" && (
-          <div className={`preview-launcher preview-launcher--tab${glassCls}`} style={{
-            ["--lb" as string]: launcherBg, color: fg,
-            position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)",
-            padding: "15px 8px", borderRadius: "12px 0 0 12px",
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
-            fontFamily: "var(--font-body)", fontWeight: 500,
-          }}>
-            <LoopMark dotColor={dotColor} size={20} />
-            <span style={{ fontSize: 13, writingMode: "vertical-rl", letterSpacing: "0.02em" }}>Feedback</span>
-          </div>
-        )}
-
-        {pos === "corner" && (
-          <div style={{ position: "absolute", right: 14, bottom: 14, display: "flex", alignItems: "flex-end", gap: 10 }}>
-            <span style={{
-              background: "var(--ink)", color: "var(--bone-on-ink)",
-              padding: "4px 8px", borderRadius: "var(--r-sm)",
-              fontFamily: "var(--font-body)", fontSize: "var(--fs-2xs)",
-              fontWeight: 500, letterSpacing: "0.04em",
-              marginBottom: 6, whiteSpace: "nowrap",
+          <LoopMark dotColor={dotColor} size={16} />
+          {/* Label follows the dot color — same rule as the widget's .l-label,
+              so the contrast warning below covers it too. */}
+          <span style={{ fontSize: 11, writingMode: "vertical-rl", letterSpacing: "0.04em", color: dotColor }}>Feedback</span>
+          {showDot && <span style={{ width: 6, height: 6, borderRadius: 999, background: dotColor }} />}
+          {showFlag && (
+            <span className="preview-flag" style={{
+              position: "absolute",
+              ...(edge === "right" ? { right: "calc(100% + 8px)" } : { left: "calc(100% + 8px)" }),
+              top: "50%",
+              transform: "translateY(-50%)",
+              display: "flex", alignItems: "center", gap: 5,
+              whiteSpace: "nowrap",
             }}>
-              Feedback for {name}
+              Maya replied <span style={{ color: "var(--ember)", fontWeight: 600 }}>· 2</span>
             </span>
-            <span className={`preview-launcher preview-launcher--corner${glassCls}`} style={{
-              ["--lb" as string]: launcherBg,
-              width: 54, height: 54, borderRadius: "50%",
-              display: "grid", placeItems: "center",
-            }}>
-              <LoopMark dotColor={dotColor} size={24} />
-            </span>
-          </div>
+          )}
+        </div>
+        )}
+        {visibility === "hidden" && (
+          <span className="text-2xs" style={{
+            position: "absolute", zIndex: 1,
+            bottom: 10, left: "50%", transform: "translateX(-50%)",
+            background: "var(--surface, #FBF7F0)",
+            border: "var(--border)",
+            borderRadius: 999,
+            padding: "4px 10px",
+            color: "var(--mute)",
+            whiteSpace: "nowrap",
+          }}>
+            Launcher hidden — your product opens it via window.crumb.open()
+          </span>
         )}
       </div>
 
-      {/* Liquid-glass treatment — byte-for-byte the same recipe as the widget's
-          .launcher CSS (apps/widget/src/styles.ts), driven by --lb so what the
-          vendor picks here is what their customers see. Keep the two in sync.
-          dangerouslySetInnerHTML (not a text child) so React doesn't HTML-escape
-          the CSS — `content: ""` and `>` selectors would otherwise become
-          &quot;/&gt; in SSR, breaking the rules AND the hydration match. */}
+      {/* Flat whisper-tab treatment — the same recipe as the widget's .launcher
+          CSS (apps/widget/src/styles.ts), driven by --lb so what the vendor
+          picks here is what their customers see. Keep the two in sync.
+          dangerouslySetInnerHTML (not a text child) so React doesn't
+          HTML-escape the CSS in SSR. */}
       <style dangerouslySetInnerHTML={{ __html: `
         .preview-launcher {
-          position: relative;
-          background: color-mix(in srgb, var(--lb) 82%, transparent);
-          -webkit-backdrop-filter: blur(14px) saturate(0.95);
-          backdrop-filter: blur(14px) saturate(0.95);
-          border: 1px solid rgba(255, 255, 255, 0.10);
-          box-shadow:
-            0 1px 2px rgba(74, 46, 31, 0.12),
-            0 6px 18px rgba(74, 46, 31, 0.16),
-            inset 0 1px 0 rgba(255, 255, 255, 0.12);
+          background: var(--lb);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          box-shadow: 0 1px 2px rgba(74, 46, 31, 0.08);
         }
-        .preview-launcher::before {
-          content: "";
-          position: absolute;
-          inset: 0;
-          border-radius: inherit;
-          pointer-events: none;
-          z-index: 0;
-          background: linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0) 40%);
-        }
-        .preview-launcher > svg, .preview-launcher > span { position: relative; z-index: 1; }
-        .preview-launcher.glass {
-          background: color-mix(in srgb, var(--lb) 62%, transparent);
-          backdrop-filter: blur(18px) saturate(1.5);
-          -webkit-backdrop-filter: blur(18px) saturate(1.5);
-          border: 1px solid rgba(255, 255, 255, 0.22);
+        .preview-launcher[data-edge="right"] { border-right: 0; border-radius: 8px 0 0 8px; }
+        .preview-launcher[data-edge="left"]  { border-left: 0;  border-radius: 0 8px 8px 0; }
+        .preview-flag {
+          background: #FBF7F0;
+          color: #4A2E1F;
+          border: 1px solid rgba(74, 46, 31, 0.16);
+          border-radius: 6px;
+          padding: 6px 10px;
+          font-size: 12px;
+          font-weight: 500;
+          box-shadow: 0 1px 2px rgba(74, 46, 31, 0.08);
         }
       ` }} />
     </div>
@@ -273,30 +337,24 @@ export function BrandingCard({
   initialName,
   initialAccent,
   initialLauncherBg,
-  initialPosition,
-  initialGlass,
+  initialEdge,
   initialVisibility,
-  initialOffsetX,
   initialOffsetY,
   initialProductUrl,
 }: {
   initialName: string;
   initialAccent: string;
   initialLauncherBg: string;
-  initialPosition: Pos;
-  initialGlass: boolean;
+  initialEdge: Edge;
   initialVisibility: Visibility;
-  initialOffsetX: number;
   initialOffsetY: number;
   initialProductUrl: string | null;
 }) {
   const [name, setName] = useState(initialName);
   const [accent, setAccent] = useState(initialAccent);
   const [launcherBg, setLauncherBg] = useState(initialLauncherBg);
-  const [pos, setPos] = useState<Pos>(initialPosition);
-  const [glass, setGlass] = useState(initialGlass);
+  const [edge, setEdge] = useState<Edge>(initialEdge);
   const [visibility, setVisibility] = useState<Visibility>(initialVisibility);
-  const [offsetX, setOffsetX] = useState(initialOffsetX);
   const [offsetY, setOffsetY] = useState(initialOffsetY);
   const [productUrl, setProductUrl] = useState(initialProductUrl ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -322,13 +380,13 @@ export function BrandingCard({
     const ratio = contrastRatio(accent, launcherBg);
     if (ratio < 3.0) {
       setContrastWarning(
-        `Heads-up: your dot and launcher colors have a contrast ratio of ${ratio.toFixed(2)}. The dots may be hard to see. The preview on the right shows the live result.`,
+        `Heads-up: your dot and launcher colors have a contrast ratio of ${ratio.toFixed(2)}. The loop mark and label may be hard to read. The preview on the right shows the live result.`,
       );
     }
     startTransition(async () => {
       const res = await saveBranding({
-        name, accent, launcherBg, launcherGlass: glass, position: pos,
-        launcherVisibility: visibility, launcherOffsetX: offsetX, launcherOffsetY: offsetY,
+        name, accent, launcherBg, launcherEdge: edge,
+        launcherVisibility: visibility, launcherOffsetY: offsetY,
         productUrl,
       });
       if (res.ok) setSavedAt(Date.now());
@@ -353,41 +411,33 @@ export function BrandingCard({
             <input className="input" value={name} onChange={e => setName(e.target.value)} />
           </Field>
 
-          <Field label="Launcher color" help="The launcher the dots sit inside. Defaults to a deep ink.">
+          <Field label="Launcher color" help="The tab the loop mark sits inside. Defaults to a deep ink.">
             <ColorPicker value={launcherBg} onChange={setLauncherBg} />
           </Field>
 
-          <Field label="Dot color" help="The five-dot loop mark, both in the widget and on the dashboard.">
+          <Field label="Dot color" help="The five-dot loop mark and the loop-news dot, both in the widget and on the dashboard.">
             <ColorPicker value={accent} onChange={setAccent} />
           </Field>
 
-          <Field label="Launcher style" help="How customers open the widget in your product.">
+          <Field label="Edge" help="Which side of your product the whisper tab docks to.">
             <div className="seg" style={{ width: "100%" }}>
               {([
-                { k: "corner", label: "FAB" },
-                { k: "pill", label: "Pill" },
-                { k: "tab", label: "Side-tab" },
+                { k: "right", label: "Right" },
+                { k: "left", label: "Left" },
               ] as const).map(({ k, label }) => (
                 <button
                   key={k}
-                  aria-selected={pos === k}
-                  onClick={() => setPos(k)}
+                  aria-selected={edge === k}
+                  onClick={() => setEdge(k)}
                   style={{ flex: 1 }}
                 >{label}</button>
               ))}
             </div>
           </Field>
 
-          <Field label="Glass effect" help="Frosted, translucent launcher that blends into busy or dark host pages.">
-            <div className="row gap-2 center">
-              <Switch on={glass} onClick={() => setGlass(g => !g)} />
-              <span className="text-sm muted">{glass ? "On" : "Off"}</span>
-            </div>
-          </Field>
-
           <Field
             label="Launcher visibility"
-            help="Hide crumb's own bubble if you already run another chat widget. Open the panel from your existing widget or button via window.crumb.open(). See Install for the snippet."
+            help="Hide crumb's own tab if you already run another chat widget. Open the panel from your existing widget or button via window.crumb.open(). See Install for the snippet."
           >
             <div className="seg" style={{ width: "100%" }}>
               {([
@@ -405,27 +455,16 @@ export function BrandingCard({
             </div>
           </Field>
 
-          {visibility !== "hidden" && (
-            <Field
-              label="Launcher offset"
-              help="Nudge the launcher off the corner (px) so it stacks above another widget's bubble. Applies to the FAB and Pill styles."
-            >
-              <div className="row gap-2 center">
-                <input
-                  className="input mono" type="number" aria-label="Horizontal offset"
-                  value={offsetX} onChange={e => setOffsetX(parseInt(e.target.value, 10) || 0)}
-                  style={{ width: 90 }}
-                />
-                <span className="text-xs muted">x</span>
-                <input
-                  className="input mono" type="number" aria-label="Vertical offset"
-                  value={offsetY} onChange={e => setOffsetY(parseInt(e.target.value, 10) || 0)}
-                  style={{ width: 90 }}
-                />
-                <span className="text-xs muted">y</span>
-              </div>
-            </Field>
-          )}
+          <Field
+            label="Vertical nudge (px)"
+            help="Moves the tab along the edge (positive = down from center) so it clears anything your product renders mid-edge. Also anchors the panel when the launcher is hidden."
+          >
+            <input
+              className="input mono" type="number" aria-label="Vertical nudge"
+              value={offsetY} onChange={e => setOffsetY(parseInt(e.target.value, 10) || 0)}
+              style={{ width: 110 }}
+            />
+          </Field>
 
           <Field
             label="Product URL"
@@ -471,17 +510,15 @@ export function BrandingCard({
               setName(initialName);
               setAccent(initialAccent);
               setLauncherBg(initialLauncherBg);
-              setPos(initialPosition);
-              setGlass(initialGlass);
+              setEdge(initialEdge);
               setVisibility(initialVisibility);
-              setOffsetX(initialOffsetX);
               setOffsetY(initialOffsetY);
               setProductUrl(initialProductUrl ?? "");
             }} disabled={pending}>Reset</Btn>
           </div>
         </div>
 
-        <BrandingPreview name={name} dotColor={accent} launcherBg={launcherBg} pos={pos} glass={glass} />
+        <BrandingPreview dotColor={accent} launcherBg={launcherBg} edge={edge} offsetY={offsetY} visibility={visibility} initialSite={initialProductUrl ?? ""} />
       </div>
     </Card>
   );

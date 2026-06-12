@@ -106,10 +106,8 @@ export async function GET(req: Request) {
       name: workspace.name,
       accent: workspace.accent,
       launcher_bg: workspace.launcherBg,
-      launcher_glass: workspace.launcherGlass ?? false,
-      position: workspace.position,
+      launcher_edge: workspace.launcherEdge ?? "right",
       launcher_visibility: workspace.launcherVisibility ?? "auto",
-      launcher_offset_x: workspace.launcherOffsetX ?? 0,
       launcher_offset_y: workspace.launcherOffsetY ?? 0,
       // Only advertise recording to the widget when the workspace both
       // toggled it on AND its plan entitles it — otherwise the recorder
