@@ -3,9 +3,9 @@
 import { useMemo, useRef, useState, useTransition, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Avatar, Btn, Card, CardHead, Ic, PageHead, Pill, StatusDot, StatusPill } from "@crumb/ui";
+import { Avatar, Btn, Card, CardHead, Dropdown, Ic, PageHead, Pill, StatusDot, StatusPill, TrailDots, trailProgress } from "@crumb/ui";
 import type { Status } from "@crumb/ui";
-import { createReply, updateStatus, draftReplyAction, translateItem } from "./actions";
+import { createReply, updateStatus, draftReplyAction, translateItem, assignItem, updateType } from "./actions";
 import { InitiativePanel, type ThreadInitiativeOption } from "./InitiativePanel";
 import { ThreadSuggestionCard, type ThreadSuggestion } from "./ThreadSuggestionCard";
 import { ExternalTicketTile } from "./ExternalTicketTile";
@@ -104,6 +104,14 @@ export type ThreadStatusEvent = {
   at: string;
 };
 
+// A customer-notification ledger entry: the moment the customer heard back.
+export type ThreadNotice = {
+  id: string;
+  kind: "reply" | "status";
+  toStatus: string | null;
+  at: string;
+};
+
 export type ThreadData = {
   item: {
     shortId: string;
@@ -123,9 +131,10 @@ export type ThreadData = {
   };
   account: { id: string; name: string; arrCents: number };
   submitter: { name: string; initials: string };
-  assignee: { initials: string; name: string } | null;
+  assignee: { id: string; initials: string; name: string } | null;
   messages: ThreadMessage[];
   events: ThreadStatusEvent[];
+  notices: ThreadNotice[];
   teammates: { id: string; name: string; initials: string }[];
   initiative: ThreadInitiativeOption | null;
   initiativeOptions: ThreadInitiativeOption[];
@@ -178,11 +187,12 @@ const STATUS_LABEL_MAP: Record<string, string> = {
 
 type TrailEntry =
   | { kind: "message"; at: string; msg: ThreadMessage }
-  | { kind: "event";   at: string; event: ThreadStatusEvent };
+  | { kind: "event";   at: string; event: ThreadStatusEvent }
+  | { kind: "notice";  at: string; notice: ThreadNotice };
 
 export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boolean }) {
   const router = useRouter();
-  const { item, account, submitter, assignee, messages, events, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, aiReplyAvailable, replay, usageBreadcrumb, merge } = data;
+  const { item, account, submitter, assignee, messages, events, notices, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, aiReplyAvailable, replay, usageBreadcrumb, merge } = data;
   const teammateNames = useMemo(() => teammates.map(t => t.name), [teammates]);
 
   const customerMsgs = messages.filter(m => !m.internal);
@@ -192,10 +202,16 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
     const all: TrailEntry[] = [
       ...messages.filter(m => !m.internal).map(msg => ({ kind: "message" as const, at: msg.createdAt, msg })),
       ...events.map(event => ({ kind: "event" as const, at: event.at, event })),
+      ...notices.map(notice => ({ kind: "notice" as const, at: notice.at, notice })),
     ];
     all.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
     return all;
-  }, [messages, events]);
+  }, [messages, events, notices]);
+
+  const progress = useMemo(() => trailProgress({
+    status: item.status,
+    vendorReplied: messages.some(m => m.kind === "vendor" && !m.internal),
+  }), [item.status, messages]);
 
   const [tab, setTab] = useState<"customer" | "internal" | "trail">("customer");
   const [draft, setDraft] = useState("");
@@ -394,6 +410,21 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
     });
   };
 
+  // Details-card property edits (assignee / type) — single-item, in place.
+  function onAssign(value: string) {
+    startTransition(async () => {
+      const res = await assignItem(item.shortId, value === "__unassign" ? null : value);
+      if (res.ok) router.refresh();
+    });
+  }
+
+  function onType(value: string) {
+    startTransition(async () => {
+      const res = await updateType(item.shortId, value);
+      if (res.ok) router.refresh();
+    });
+  }
+
   const visible = tab === "customer" ? customerMsgs : internalMsgs;
 
   return (
@@ -403,6 +434,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
         title={item.title}
         actions={
           <>
+            <TrailDots progress={progress} size={14} />
             <StatusPill status={item.status as Status} />
             {item.externalTicketUrl && (
               <a href={item.externalTicketUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
@@ -461,7 +493,31 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                     left: 5, top: 6, bottom: 6, width: 1,
                     background: "var(--hair-strong)",
                   }} />
-                  {trail.map(entry => entry.kind === "event" ? (
+                  {trail.map(entry => entry.kind === "notice" ? (
+                    <div key={`n:${entry.notice.id}`} className="row gap-3" style={{ alignItems: "flex-start", position: "relative" }}>
+                      <span style={{
+                        width: 11, height: 11, borderRadius: 999,
+                        background: "var(--ember)",
+                        marginLeft: -18, marginRight: 7, flexShrink: 0,
+                        marginTop: 6,
+                        opacity: 0.85,
+                      }} />
+                      <div className="col grow gap-1">
+                        <span className="text-sm">
+                          <span className="fw-med">{submitter.name}</span>
+                          <span className="muted">
+                            {entry.notice.kind === "reply"
+                              ? " was notified of the reply"
+                              : ` was told it's ${(STATUS_LABEL_MAP[entry.notice.toStatus ?? ""] ?? entry.notice.toStatus ?? "updated").toLowerCase()}`}
+                          </span>
+                          {entry.notice.kind === "status" && (entry.notice.toStatus === "shipped" || entry.notice.toStatus === "declined") && (
+                            <strong style={{ fontWeight: 500, color: "var(--accent-deep)" }}> · loop closed</strong>
+                          )}
+                        </span>
+                      </div>
+                      <span className="text-xs muted mono">{relAge(entry.at)}</span>
+                    </div>
+                  ) : entry.kind === "event" ? (
                     <div key={`e:${entry.event.id}`} className="row gap-3" style={{ alignItems: "flex-start", position: "relative" }}>
                       <span style={{
                         width: 11, height: 11, borderRadius: 999,
@@ -674,6 +730,69 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
         </Card>
 
         <div className="col gap-4">
+          {/* Details first: who this loop belongs to, what they're worth, and
+              the item's editable properties (owner, type). */}
+          <Card>
+            <CardHead title="Details" />
+            <div className="card-body col gap-3">
+              <Link href={`/accounts/${account.id}`} className="row gap-3 center"
+                style={{ textDecoration: "none", color: "inherit" }}>
+                <Avatar kind="ink">{account.name[0]}</Avatar>
+                <div className="col grow">
+                  <span className="serif text-md">{account.name}</span>
+                  <span className="text-xs muted">{formatArr(account.arrCents)}</span>
+                </div>
+                <Ic.chevR style={{ width: 12, height: 12, color: "var(--mute-2)" }} />
+              </Link>
+              <span className="eyebrow">Submitter</span>
+              <div className="row gap-2 center">
+                <Avatar size="sm">{submitter.initials}</Avatar>
+                <span className="text-sm">{submitter.name}</span>
+              </div>
+              <span className="eyebrow">Assignee</span>
+              {canWrite ? (
+                <Dropdown
+                  size="sm"
+                  ariaLabel="Assignee"
+                  placeholder="Unassigned"
+                  value={assignee?.id ?? null}
+                  disabled={pending}
+                  searchable={teammates.length > 8}
+                  onChange={onAssign}
+                  options={[
+                    { value: "__unassign", label: "Unassigned" },
+                    ...teammates.map(t => ({ value: t.id, label: t.name })),
+                  ]}
+                />
+              ) : assignee ? (
+                <div className="row gap-2 center">
+                  <Avatar size="sm" kind="ink">{assignee.initials}</Avatar>
+                  <span className="text-sm">{assignee.name}</span>
+                </div>
+              ) : (
+                <span className="text-sm muted">Unassigned</span>
+              )}
+              <span className="eyebrow">Type</span>
+              {canWrite ? (
+                <Dropdown
+                  size="sm"
+                  ariaLabel="Type"
+                  placeholder={item.type}
+                  value={item.type}
+                  disabled={pending}
+                  onChange={onType}
+                  options={[
+                    { value: "bug", label: "Bug" },
+                    { value: "idea", label: "Idea" },
+                    { value: "question", label: "Question" },
+                  ]}
+                />
+              ) : (
+                <span className="text-sm" style={{ textTransform: "capitalize" }}>{item.type}</span>
+              )}
+            </div>
+          </Card>
+
           <Card>
             <CardHead title="Status" />
             <div className="card-body col gap-1">
@@ -770,34 +889,6 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
 
           {usageBreadcrumb && usageBreadcrumb.length > 0 && <UsageBreadcrumbCard entries={usageBreadcrumb} />}
 
-          <Card>
-            <CardHead title="Account" />
-            <div className="card-body col gap-3">
-              <Link href={`/accounts/${account.id}`} className="row gap-3 center"
-                style={{ textDecoration: "none", color: "inherit" }}>
-                <Avatar kind="ink">{account.name[0]}</Avatar>
-                <div className="col grow">
-                  <span className="serif text-md">{account.name}</span>
-                  <span className="text-xs muted">{formatArr(account.arrCents)}</span>
-                </div>
-                <Ic.chevR style={{ width: 12, height: 12, color: "var(--mute-2)" }} />
-              </Link>
-              <span className="eyebrow">Submitter</span>
-              <div className="row gap-2 center">
-                <Avatar size="sm">{submitter.initials}</Avatar>
-                <span className="text-sm">{submitter.name}</span>
-              </div>
-              {assignee && (
-                <>
-                  <span className="eyebrow">Assignee</span>
-                  <div className="row gap-2 center">
-                    <Avatar size="sm" kind="ink">{assignee.initials}</Avatar>
-                    <span className="text-sm">{assignee.name}</span>
-                  </div>
-                </>
-              )}
-            </div>
-          </Card>
         </div>
       </div>
     </>

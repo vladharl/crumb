@@ -10,9 +10,9 @@ export default async function SettingsLayout({ children }: { children: ReactNode
   return (
     <>
       <PageHead
-        crumb="Setup · vendor"
+        crumb="Settings"
         title="Workspace"
-        lede={`${workspace.name} · team, integrations, account mapping, branding.`}
+        lede={`${workspace.name} · set up the widget, connect your tools, run the workspace.`}
       />
       <div className="cols-aside">
         <SettingsNav />

@@ -162,7 +162,9 @@ export type ReplyNotification = {
   unsubscribeUrl?: string | null;
 };
 
-export async function sendReplyNotification(m: ReplyNotification): Promise<void> {
+// Returns whether the provider accepted the send, so callers can record the
+// delivery in the customer_notifications loop ledger.
+export async function sendReplyNotification(m: ReplyNotification): Promise<boolean> {
   const { provider, from } = selectProvider();
   const subject = `${m.vendorName} replied · ${m.itemShortId} ${m.itemTitle}`;
   const threadUrl = buildThreadUrl(m.productUrl, m.itemShortId);
@@ -203,6 +205,7 @@ export async function sendReplyNotification(m: ReplyNotification): Promise<void>
   if (!result.ok) {
     log.error("reply-notification send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
+  return result.ok;
 }
 
 export type StatusChangeNotification = {
@@ -219,7 +222,8 @@ export type StatusChangeNotification = {
   unsubscribeUrl?: string | null;
 };
 
-export async function sendStatusChangeNotification(m: StatusChangeNotification): Promise<void> {
+// Returns whether the provider accepted the send (see sendReplyNotification).
+export async function sendStatusChangeNotification(m: StatusChangeNotification): Promise<boolean> {
   const { provider, from } = selectProvider();
   const subject = `Status update · ${m.itemShortId} ${m.itemTitle}`;
   const threadUrl = buildThreadUrl(m.productUrl, m.itemShortId);
@@ -240,6 +244,7 @@ export async function sendStatusChangeNotification(m: StatusChangeNotification):
   if (!result.ok) {
     log.error("status-change send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
+  return result.ok;
 }
 
 // ─── Customer-reply notification (to vendor) ─────────────────

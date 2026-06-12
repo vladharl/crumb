@@ -45,6 +45,12 @@ export default async function globalSetup(): Promise<void> {
   const userId = psql("SELECT id FROM workspace_users WHERE email='lina@southbeam.io' AND workspace_id='" + wsId + "' LIMIT 1");
   if (!wsId || !userId) throw new Error("[e2e setup] seeded admin row not found");
 
+  // The seeded users are fresh (guide_completed_at IS NULL), so the
+  // first-sign-in tour would auto-open and its modal overlay intercepts every
+  // click. E2e tests aren't first-run users — mark the tour done. (The tour
+  // itself is covered by its own relaunch affordance, not blocked by this.)
+  psql(`UPDATE workspace_users SET guide_completed_at = now() WHERE workspace_id='${wsId}'`);
+
   // Mint a 24h session token. The dashboard verifies sha256(cookieValue)
   // against sessions.token_hash, so we hash + insert here.
   const token = randomBytes(32).toString("base64url");

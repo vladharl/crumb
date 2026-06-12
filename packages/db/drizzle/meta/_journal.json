@@ -92,6 +92,13 @@
       "when": 1781000011000,
       "tag": "0012_boring_shocker",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1781232567929,
+      "tag": "0013_illegal_sphinx",
+      "breakpoints": true
     }
   ]
 }

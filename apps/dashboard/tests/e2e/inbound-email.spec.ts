@@ -29,19 +29,21 @@ test("forwarded email creates a pending capture you can confirm", async ({ page,
   expect(resp.ok()).toBeTruthy();
   expect((await resp.json()).ok).toBe(true);
 
-  // The capture shows on /captures with the quoted tail stripped. (The body
-  // appears in both the preview and the editable textarea, hence .first().)
-  await page.goto("/captures");
-  await expect(page.getByText(body).first()).toBeVisible({ timeout: 15_000 });
+  // Captures now surface in the Inbox's "Needs triage" section (the standalone
+  // /captures page was retired), with the quoted tail stripped.
+  await page.goto("/inbox");
+  const card = page.locator(".card", { hasText: "Needs triage" });
+  await expect(card.getByText(body).first()).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(`quoted history ${tag}`)).toHaveCount(0);
 
-  // Confirm → map to a seeded account and create the item.
-  const card = page.locator(".card", { hasText: body });
-  await card.getByPlaceholder(/Map to a customer account/i).fill("Acme Co");
+  // Map to a seeded account via the inline picker and create the item.
+  await card.getByRole("button", { name: "Assign account" }).click();
+  await page.getByPlaceholder("Search…").fill("Acme Co");
+  await page.getByRole("option", { name: "Acme Co" }).click();
   await card.getByRole("button", { name: /Create item/i }).click();
 
-  // The capture leaves the pending list once accepted.
-  await expect(page.getByText(body)).toHaveCount(0, { timeout: 15_000 });
+  // The capture leaves the triage list once accepted.
+  await expect(card.getByText(body)).toHaveCount(0, { timeout: 15_000 });
 });
 
 test("inbound email with a bad token is rejected", async ({ request }) => {

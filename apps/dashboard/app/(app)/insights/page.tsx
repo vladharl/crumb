@@ -88,7 +88,7 @@ export default async function InsightsPage() {
   const ws = workspace.id;
   const aiEntitled = hasFeature(workspace, "ai");
 
-  const [byStatus, byType, volume, respRows, awaitingRows, trendRows, closeRows, tierRows, themeRows, signals] = await Promise.all([
+  const [byStatus, byType, volume, respRows, awaitingRows, trendRows, loopRows, openLoopRows, tierRows, themeRows, signals] = await Promise.all([
     db.select({ status: items.status, n: sql<number>`count(*)::int` })
       .from(items).where(eq(items.workspaceId, ws)).groupBy(items.status),
     db.select({ type: items.type, n: sql<number>`count(*)::int` })
@@ -98,9 +98,11 @@ export default async function InsightsPage() {
       last30: sql<number>`count(*) filter (where ${items.createdAt} >= now() - interval '30 days')::int`,
       prev30: sql<number>`count(*) filter (where ${items.createdAt} >= now() - interval '60 days' and ${items.createdAt} < now() - interval '30 days')::int`,
     }).from(items).where(eq(items.workspaceId, ws)),
-    // Avg time from submission to first vendor reply, over items that got one.
+    // Median time from submission to first vendor reply, over items that got one.
     db.execute(sql`
-      select coalesce(avg(extract(epoch from (fr.first_reply - i.created_at))), 0)::float as avg_seconds,
+      select coalesce(percentile_cont(0.5) within group (
+               order by extract(epoch from (fr.first_reply - i.created_at))
+             ), 0)::float as median_seconds,
              count(*)::int as responded
       from items i
       join (
@@ -129,16 +131,40 @@ export default async function InsightsPage() {
       ) c on c.w = wk
       order by wk
     `),
-    // Time-to-close: submission → first shipped/declined status event.
+    // Loop time: submission → the customer hearing the outcome. Prefer the
+    // moment we actually told them (customer_notifications ledger, kind=status
+    // for a terminal status); fall back to the terminal status event itself for
+    // items closed before the ledger existed (or when email isn't wired).
     db.execute(sql`
-      select coalesce(avg(extract(epoch from (se.at - i.created_at))), 0)::float as avg_seconds,
+      select coalesce(percentile_cont(0.5) within group (
+               order by extract(epoch from (coalesce(cn.first_told, se.at) - i.created_at))
+             ), 0)::float as median_seconds,
              count(*)::int as closed
       from items i
       join (
         select item_id, min(at) as at from status_events
         where to_status in ('shipped','declined') group by item_id
       ) se on se.item_id = i.id
+      left join (
+        select item_id, min(sent_at) as first_told from customer_notifications
+        where kind = 'status' and to_status in ('shipped','declined') group by item_id
+      ) cn on cn.item_id = i.id
       where i.workspace_id = ${ws}::uuid
+    `),
+    // Open loops: items where the customer hasn't heard an outcome yet, plus
+    // the combined ARR of the accounts those loops belong to.
+    db.execute(sql`
+      with open_loops as (
+        select i.id, i.account_id from items i
+        where i.workspace_id = ${ws}::uuid
+          and i.merged_into_id is null
+          and i.status not in ('shipped','declined','duplicate')
+      )
+      select (select count(*)::int from open_loops) as n,
+             coalesce((
+               select sum(a.arr_cents)::bigint from accounts a
+               where a.id in (select distinct account_id from open_loops)
+             ), 0) as arr_cents
     `),
     // Volume by account ARR tier.
     db.execute(sql`
@@ -167,10 +193,12 @@ export default async function InsightsPage() {
   const last30 = volume[0]?.last30 ?? 0;
   const prev30 = volume[0]?.prev30 ?? 0;
   const delta = last30 - prev30;
-  const resp = (respRows as unknown as Array<{ avg_seconds: number; responded: number }>)[0] ?? { avg_seconds: 0, responded: 0 };
+  const resp = (respRows as unknown as Array<{ median_seconds: number; responded: number }>)[0] ?? { median_seconds: 0, responded: 0 };
   const awaiting = (awaitingRows as unknown as Array<{ n: number }>)[0]?.n ?? 0;
   const trend = (trendRows as unknown as Array<{ label: string; n: number }>).map(r => ({ label: r.label, value: r.n }));
-  const close = (closeRows as unknown as Array<{ avg_seconds: number; closed: number }>)[0] ?? { avg_seconds: 0, closed: 0 };
+  const loop = (loopRows as unknown as Array<{ median_seconds: number; closed: number }>)[0] ?? { median_seconds: 0, closed: 0 };
+  const openLoops = (openLoopRows as unknown as Array<{ n: number; arr_cents: number | string }>)[0] ?? { n: 0, arr_cents: 0 };
+  const openLoopArr = Number(openLoops.arr_cents); // bigint sums arrive as strings from the driver
   const tierMap = new Map((tierRows as unknown as Array<{ tier: string; n: number }>).map(r => [r.tier, r.n]));
   const tierBars = TIER_ORDER.filter(t => (tierMap.get(t) ?? 0) > 0).map(t => ({ label: TIER_LABEL[t], n: tierMap.get(t) ?? 0 }));
   const themes = (themeRows as unknown as Array<{ name: string; n: number }>).map(r => ({ label: r.name, n: r.n }));
@@ -186,7 +214,7 @@ export default async function InsightsPage() {
       <PageHead
         crumb="Insights"
         title="Insights"
-        lede="Feedback volume, triage health, responsiveness, and revenue at risk."
+        lede="How fast you close loops — from a customer speaking up to hearing the outcome."
         actions={
           <>
             {/* Anchors styled as buttons — a <button> inside <a> is invalid HTML
@@ -202,10 +230,11 @@ export default async function InsightsPage() {
       />
 
       <div className="kpi-strip" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, marginBottom: 16 }}>
-        <Kpi label="Total feedback" value={String(total)} sub={`${last30} in the last 30 days`} />
+        <Kpi label="Median loop time" value={humanDuration(loop.median_seconds)} sub={`across ${loop.closed} closed loops`} />
+        <Kpi label="Open loops" value={String(openLoops.n)} sub={`${awaiting} still waiting on a first reply`} />
+        <Kpi label="ARR in open loops" value={arr(openLoopArr)} sub="accounts waiting on an answer" />
+        <Kpi label="Median first response" value={humanDuration(resp.median_seconds)} sub={`across ${resp.responded} answered`} />
         <Kpi label="New (30 days)" value={String(last30)} sub={delta === 0 ? "flat vs prior 30d" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)} vs prior 30d`} />
-        <Kpi label="Median first response" value={humanDuration(resp.avg_seconds)} sub={`across ${resp.responded} answered`} />
-        <Kpi label="Avg time to close" value={humanDuration(close.avg_seconds)} sub={`across ${close.closed} closed`} />
         {aiEntitled && <Kpi label="ARR at risk" value={arr(sentimentRiskArr)} sub="accounts trending negative" />}
       </div>
 

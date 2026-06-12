@@ -37,16 +37,16 @@ const ASK_LINK: NavLink = {
   match: p => p === "/ask",
 };
 
-// Settings sub-pages surfaced in the ⌘K palette.
+// Settings sub-pages surfaced in the ⌘K palette (journey order, matching SettingsNav).
 const SETTINGS_ITEMS: CommandItem[] = [
-  { label: "Settings", href: "/settings", keywords: "workspace" },
-  { label: "Settings → Team & roles", href: "/settings/team", keywords: "members invite roles" },
-  { label: "Settings → Integrations", href: "/settings/integrations", keywords: "slack github jira linear salesforce hubspot" },
-  { label: "Settings → Notifications", href: "/settings/notifications", keywords: "preferences digest email slack" },
-  { label: "Settings → Webhooks", href: "/settings/webhooks", keywords: "api events" },
-  { label: "Settings → Account mapping", href: "/settings/account-mapping", keywords: "crm" },
+  { label: "Settings → Overview", href: "/settings", keywords: "workspace setup checklist status" },
+  { label: "Settings → Install widget", href: "/settings/install", keywords: "embed snippet" },
   { label: "Settings → Branding", href: "/settings/branding", keywords: "widget theme" },
-  { label: "Settings → Install", href: "/settings/install", keywords: "embed snippet" },
+  { label: "Settings → Integrations", href: "/settings/integrations", keywords: "slack github jira linear salesforce hubspot" },
+  { label: "Settings → Webhooks", href: "/settings/webhooks", keywords: "api events" },
+  { label: "Settings → Team & roles", href: "/settings/team", keywords: "members invite roles" },
+  { label: "Settings → Account mapping", href: "/settings/account-mapping", keywords: "crm" },
+  { label: "Settings → Notifications", href: "/settings/notifications", keywords: "preferences digest email slack" },
 ];
 
 export type ShellUser = {

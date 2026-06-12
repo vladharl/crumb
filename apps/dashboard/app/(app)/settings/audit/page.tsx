@@ -4,9 +4,7 @@ import {
   db, items, replies, statusEvents, workspaceUsers, accountUsers,
 } from "@crumb/db";
 import { desc, eq } from "drizzle-orm";
-import { activeEmailProvider } from "@/lib/email";
 import { ageFrom, getActiveSession } from "@/lib/server";
-import { isCloud } from "@/lib/tier";
 
 export const dynamic = "force-dynamic";
 
@@ -99,54 +97,11 @@ async function loadFeed(workspaceId: string): Promise<FeedEntry[]> {
 export default async function AuditPage() {
   const { workspace, user } = await getActiveSession();
   const isAdmin = user.role === "admin";
-  const email = activeEmailProvider();
-  const cloud = isCloud();
 
   const feed = isAdmin ? await loadFeed(workspace.id) : [];
 
   return (
     <>
-      <Card>
-        <CardHead title="Email delivery" after={
-          !cloud
-            ? <Pill ring ringFill>Cloud</Pill>
-            : email.name === "stdout"
-              ? <Pill>stdout (dev)</Pill>
-              : <Pill ring ringFill>{email.name}</Pill>
-        } />
-        <div className="card-body col gap-3">
-          {!isAdmin ? (
-            <p className="text-sm muted" style={{ margin: 0 }}>
-              Only workspace admins can see email configuration.
-            </p>
-          ) : !cloud ? (
-            <>
-              <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-                Magic-link and notification emails are being printed to the dashboard's stdout. <strong style={{ fontWeight: 500 }}>Managed email delivery is a Crumb Cloud feature</strong>. Sign up at <a href="https://crumb.localhostlabs.net" style={{ color: "var(--ink)" }}>crumb.localhostlabs.net</a> to get it without running a mail server yourself.
-              </p>
-              <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-                Or stay on self-host and read magic links from <span className="mono">docker compose logs dashboard</span>. A bring-your-own-SMTP option for self-hosters is on the roadmap.
-              </p>
-            </>
-          ) : email.name === "stdout" ? (
-            <>
-              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-                You're on Crumb Cloud, but no email provider is configured. Set <span className="mono">CRUMB_EMAIL_PROVIDER=resend</span>, <span className="mono">RESEND_API_KEY</span>, and <span className="mono">CRUMB_EMAIL_FROM</span> to enable delivery.
-              </p>
-            </>
-          ) : (
-            <>
-              <div className="row gap-3 center" style={{ flexWrap: "wrap" }}>
-                <Ic.check style={{ width: 14, height: 14, color: "var(--accent-deep)" }} />
-                <span className="text-sm">
-                  Sending via <strong style={{ fontWeight: 500 }}>{email.name}</strong> as <span className="mono">{email.from}</span>.
-                </span>
-              </div>
-            </>
-          )}
-        </div>
-      </Card>
-
       <Card>
         <CardHead title={`Audit log · last ${feed.length}`} after={<Pill>workspace-wide</Pill>} />
         <div className="card-body col gap-3" style={{ padding: 0 }}>

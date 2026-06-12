@@ -20,6 +20,33 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     WHERE replies.item_id = items.id AND replies.internal = false
   )`.as("reply_count");
 
+  // Whose turn is it: the side of the most recent non-internal reply. Vendor
+  // replied last -> the loop is waiting on the customer; customer replied last
+  // (or nobody has) -> the loop is on you. Derivation lives in lib/loop.ts.
+  const lastReplySide = sql<"vendor" | "customer" | null>`(
+    SELECT CASE WHEN r.workspace_user_id IS NOT NULL THEN 'vendor' ELSE 'customer' END
+    FROM replies r
+    WHERE r.item_id = items.id AND r.internal = false
+    ORDER BY r.created_at DESC
+    LIMIT 1
+  )`.as("last_reply_side");
+
+  // Epoch ms (double precision -> JS number) of the latest non-internal reply,
+  // so "waiting since" doesn't depend on driver timestamp parsing inside a raw
+  // subquery.
+  const lastExternalReplyMs = sql<number | null>`(
+    SELECT (EXTRACT(EPOCH FROM MAX(r.created_at)) * 1000)::double precision
+    FROM replies r
+    WHERE r.item_id = items.id AND r.internal = false
+  )`.as("last_external_reply_ms");
+
+  // Whether a vendor has ever answered (lights the trail's "Answered" crumb —
+  // lastReplySide alone can't tell, since a later customer reply masks it).
+  const vendorReplied = sql<boolean>`EXISTS (
+    SELECT 1 FROM replies r
+    WHERE r.item_id = items.id AND r.internal = false AND r.workspace_user_id IS NOT NULL
+  )`.as("vendor_replied");
+
   // Suggested-initiative join: aliasing initiatives a second time so the
   // primary join (current assignment) and the secondary join (AI guess)
   // don't collide.
@@ -47,6 +74,9 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
       submitterName: accountUsers.name,
       assigneeInitials: workspaceUsers.initials,
       replyCount,
+      lastReplySide,
+      lastExternalReplyMs,
+      vendorReplied,
       initiativeId: items.initiativeId,
       initiativeName: initiatives.name,
       initiativeColor: initiatives.color,
@@ -93,6 +123,9 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     submitterName: r.submitterName,
     assigneeInitials: r.assigneeInitials,
     replyCount: r.replyCount,
+    lastReplySide: r.lastReplySide,
+    lastExternalReplyAtIso: r.lastExternalReplyMs === null ? null : new Date(r.lastExternalReplyMs).toISOString(),
+    vendorReplied: r.vendorReplied,
     initiativeId: r.initiativeId,
     initiativeName: r.initiativeName,
     initiativeColor: r.initiativeColor,

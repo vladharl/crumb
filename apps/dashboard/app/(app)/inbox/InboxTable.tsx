@@ -3,11 +3,13 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Avatar, Btn, Card, Dropdown, Ic, Pill, StatusPill, TypeChip } from "@crumb/ui";
+import { Avatar, Btn, Card, Dropdown, Ic, Pill, StatusPill, TrailDots, TypeChip, trailProgress } from "@crumb/ui";
 import type { Status, TypeKind } from "@crumb/ui";
+import { loopTurn, waitingDays, waitingSince, type LoopTurn, type ReplySide } from "@/lib/loop";
 import { bulkAssign, bulkUpdateStatus, acceptTriageAssignee, dismissTriage } from "./actions";
 import { bulkSetInitiative, clusterItems, acceptSuggestion, dismissSuggestion } from "../initiatives/actions";
 import { InitiativeChip } from "../initiatives/InitiativeChip";
+import { RowActionMenu } from "./RowActionMenu";
 
 export type TriageAssignee = { id: string; initials: string; name: string };
 
@@ -32,6 +34,10 @@ export type InboxRow = {
   submitterName: string;
   assigneeInitials: string | null;
   replyCount: number;
+  // Loop turn inputs: side of the last non-internal reply + when it landed.
+  lastReplySide: ReplySide | null;
+  lastExternalReplyAtIso: string | null;
+  vendorReplied: boolean;
   initiativeId: string | null;
   initiativeName: string | null;
   initiativeColor: string | null;
@@ -87,7 +93,9 @@ function ageFrom(iso: string): string {
   return "now";
 }
 
-type Tab = "all" | "open" | "mine";
+// The inbox is an obligation queue first: it lands on the loops that are
+// waiting on you, with the rest one tab away.
+type Tab = LoopTurn | "mine" | "all";
 
 export function InboxTable({
   rows, assignees, meId, canWrite, aiEntitled, initiatives, canManageInitiatives, clusterEnabled,
@@ -104,25 +112,26 @@ export function InboxTable({
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, startTransition] = useTransition();
-  const [tab, setTab] = useState<Tab>("all");
+  const [tab, setTab] = useState<Tab>("yours");
   const [query, setQuery] = useState("");
   const [initiativeFilter, setInitiativeFilter] = useState<string>(INITIATIVE_ANY);
   // Merged duplicates (feature 4) are hidden from the default view — they live
   // under their canonical item. Toggle to audit them.
   const [showMerged, setShowMerged] = useState(false);
 
-  const openCount = useMemo(() => rows.filter(r => r.status === "open").length, [rows]);
-  const mineCount = useMemo(() => rows.filter(r => r.assigneeId === meId).length, [rows, meId]);
-  const mergedTotal = useMemo(() => rows.filter(r => r.mergedIntoId !== null).length, [rows]);
+  // Tab counts respect the merged toggle so numbers match what each tab shows
+  // (otherwise every merged duplicate would inflate "Closed").
+  const baseRows = useMemo(
+    () => (showMerged ? rows : rows.filter(r => r.mergedIntoId === null)),
+    [rows, showMerged],
+  );
 
-  // Combined tab + search filter. Client-side so the UI is instant; bulk
-  // ops below operate on the filtered visible set.
-  const visibleRows = useMemo(() => {
+  // Initiative + search narrow the whole table BEFORE the tabs bucket it, so
+  // the tab counts answer "of what I'm looking at, whose turn is it?" instead
+  // of quietly reporting the unfiltered workspace.
+  const scopedRows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return rows.filter(r => {
-      if (!showMerged && r.mergedIntoId !== null) return false;
-      if (tab === "open" && r.status !== "open") return false;
-      if (tab === "mine" && r.assigneeId !== meId) return false;
+    return baseRows.filter(r => {
       if (initiativeFilter === INITIATIVE_NONE && r.initiativeId !== null) return false;
       if (initiativeFilter !== INITIATIVE_ANY && initiativeFilter !== INITIATIVE_NONE && r.initiativeId !== initiativeFilter) return false;
       if (!q) return true;
@@ -134,7 +143,31 @@ export function InboxTable({
         (r.initiativeName?.toLowerCase().includes(q) ?? false)
       );
     });
-  }, [rows, tab, query, meId, initiativeFilter, showMerged]);
+  }, [baseRows, query, initiativeFilter]);
+
+  const turnCounts = useMemo(() => {
+    const counts = { yours: 0, waiting: 0, closed: 0 };
+    for (const r of scopedRows) counts[loopTurn(r)] += 1;
+    return counts;
+  }, [scopedRows]);
+  const mineCount = useMemo(() => scopedRows.filter(r => r.assigneeId === meId).length, [scopedRows, meId]);
+  const mergedTotal = useMemo(() => rows.filter(r => r.mergedIntoId !== null).length, [rows]);
+
+  // Tab bucketing on top of the scoped set. Client-side so the UI is instant;
+  // bulk ops below operate on the filtered visible set.
+  const visibleRows = useMemo(() => {
+    const filtered = scopedRows.filter(r => {
+      if (tab === "mine") return r.assigneeId === meId;
+      if (tab === "yours" || tab === "waiting" || tab === "closed") return loopTurn(r) === tab;
+      return true;
+    });
+    // "Your turn" is a queue: longest-waiting loop first. Other tabs keep the
+    // newest-first order from the server.
+    if (tab === "yours") {
+      return [...filtered].sort((a, b) => waitingSince(a).localeCompare(waitingSince(b)));
+    }
+    return filtered;
+  }, [scopedRows, tab, meId]);
 
   const allSelected = visibleRows.length > 0 && selected.size === visibleRows.length;
   const someSelected = selected.size > 0 && !allSelected;
@@ -253,9 +286,23 @@ export function InboxTable({
             />
           </div>
           <div className="seg">
-            <button aria-selected={tab === "all"}  onClick={() => setTab("all")}>All · {rows.length}</button>
-            <button aria-selected={tab === "open"} onClick={() => setTab("open")}>Open · {openCount}</button>
+            <button
+              aria-selected={tab === "yours"}
+              onClick={() => setTab("yours")}
+              title="Open loops waiting on you — no reply yet, or the customer spoke last"
+            >Your turn · {turnCounts.yours}</button>
+            <button
+              aria-selected={tab === "waiting"}
+              onClick={() => setTab("waiting")}
+              title="You replied last — waiting on the customer or the fix to ship"
+            >Waiting · {turnCounts.waiting}</button>
+            <button
+              aria-selected={tab === "closed"}
+              onClick={() => setTab("closed")}
+              title="The customer heard the outcome — shipped, won't ship, or merged"
+            >Closed · {turnCounts.closed}</button>
             <button aria-selected={tab === "mine"} onClick={() => setTab("mine")}>Mine · {mineCount}</button>
+            <button aria-selected={tab === "all"}  onClick={() => setTab("all")}>All · {scopedRows.length}</button>
           </div>
           {initiatives.length > 0 && (
             <Dropdown
@@ -374,13 +421,16 @@ export function InboxTable({
             <div className="card-body" role="row">
               <p className="text-sm muted" role="cell" style={{ margin: 0 }}>
                 {rows.length === 0
-                  ? "No feedback yet. Share your widget snippet with customers to see things flow in here."
-                  : "Nothing matches that filter."}
+                  ? "No open loops yet. Install the widget and customer feedback lands here with account and session attached."
+                  : tab === "yours" && !query && initiativeFilter === INITIATIVE_ANY
+                    ? "All caught up — no loops waiting on you."
+                    : "Nothing matches that filter."}
               </p>
             </div>
           )}
           {visibleRows.map(it => {
             const isSel = selected.has(it.id);
+            const turn = loopTurn(it);
             return (
               <div
                 key={it.id}
@@ -406,6 +456,7 @@ export function InboxTable({
                 <Link href={`/thread/${it.shortId}`} className="col gap-1 grow truncate" style={{ textDecoration: "none", color: "inherit" }}>
                   <span className="fw-med truncate" style={{ display: "block" }}>{it.title}</span>
                   <span className="text-xs muted row gap-2 center" style={{ flexWrap: "wrap" }}>
+                    <TrailDots progress={trailProgress(it)} size={11} />
                     {aiEntitled && it.aiSeverity && <SeverityBadge severity={it.aiSeverity} reason={it.aiTriageReason} />}
                     {aiEntitled && it.aiSentiment !== null && <SentimentGlyph score={it.aiSentiment} />}
                     {it.replyCount > 0 && (
@@ -472,10 +523,18 @@ export function InboxTable({
                     <span className="text-xs muted-2">—</span>
                   </Link>
                 )}
-                <Link href={`/thread/${it.shortId}`} className="text-xs muted mono" style={{ textDecoration: "none" }}>
-                  {ageFrom(it.createdAtIso)}
-                </Link>
-                <Ic.more style={{ width: 14, height: 14, color: "var(--mute-2)" }} />
+                <LoopAge row={it} turn={turn} />
+                <RowActionMenu
+                  itemId={it.id}
+                  shortId={it.shortId}
+                  assigneeId={it.assigneeId}
+                  status={it.status}
+                  initiativeId={it.initiativeId}
+                  assignees={assignees}
+                  initiatives={initiatives}
+                  canWrite={canWrite}
+                  canManageInitiatives={canManageInitiatives}
+                />
               </div>
             );
           })}
@@ -483,7 +542,7 @@ export function InboxTable({
       </Card>
 
       <div className="row between" style={{ flexWrap: "wrap", gap: 12 }}>
-        <span className="text-sm muted">Showing {visibleRows.length} of {rows.length}</span>
+        <span className="text-sm muted">Showing {visibleRows.length} of {scopedRows.length}</span>
         {/* Cluster these: AI-only feature. Hidden entirely on self-host;
             on Cloud, enabled when a key is set + at least one initiative
             exists, otherwise the disabled hint nudges setup. */}
@@ -504,6 +563,32 @@ export function InboxTable({
         )}
       </div>
     </>
+  );
+}
+
+// Age cell with loop semantics: on "your turn" rows it shows how long the
+// customer has been waiting (since their last message, not item creation) and
+// warms toward rust as the wait grows. Elsewhere it's the plain item age.
+function LoopAge({ row, turn }: { row: InboxRow; turn: LoopTurn }) {
+  if (turn !== "yours") {
+    return (
+      <Link href={`/thread/${row.shortId}`} className="text-xs muted mono" style={{ textDecoration: "none" }}>
+        {ageFrom(row.createdAtIso)}
+      </Link>
+    );
+  }
+  const since = waitingSince(row);
+  const days = waitingDays(since, Date.now());
+  const color = days >= 7 ? "var(--rust)" : days >= 3 ? "var(--amber)" : undefined;
+  return (
+    <Link
+      href={`/thread/${row.shortId}`}
+      className="text-xs muted mono"
+      style={{ textDecoration: "none", ...(color ? { color, fontWeight: 600 } : {}) }}
+      title={`Waiting ${ageFrom(since)} for a reply`}
+    >
+      {ageFrom(since)}
+    </Link>
   );
 }
 

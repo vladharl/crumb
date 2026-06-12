@@ -1,6 +1,6 @@
 "use server";
 
-import { db, items, replies, replyMentions, accountUsers, workspaceUsers, statusEvents, attachments, workspaces, ticketSuggestions, dedupeSuggestions, replaySessions } from "@crumb/db";
+import { db, items, replies, replyMentions, accountUsers, workspaceUsers, statusEvents, attachments, workspaces, ticketSuggestions, dedupeSuggestions, replaySessions, customerNotifications } from "@crumb/db";
 import { and, desc, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { findDuplicateCandidates } from "@/lib/ai/dedup";
 import { replyConfigured, draftReply, translate } from "@/lib/ai/reply";
@@ -151,7 +151,7 @@ export async function createReply(input: {
   if (!input.internal && !row.submitterUnsub && row.submitterNotifyReplies) {
     try {
       const origin = originFromHeaders(headers());
-      await sendReplyNotification({
+      const delivered = await sendReplyNotification({
         to: row.submitterEmail,
         workspaceName: workspace.name,
         vendorName: user.name,
@@ -163,6 +163,15 @@ export async function createReply(input: {
         inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
         unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=replies` : null,
       });
+      // Loop ledger: record that the customer actually heard back. Best-effort —
+      // the reply is already saved, so a failed insert only costs the metric.
+      if (delivered) {
+        await db.insert(customerNotifications).values({
+          itemId: row.id,
+          accountUserId: row.submitterId,
+          kind: "reply",
+        });
+      }
     } catch (err) {
       log.error("reply notification failed", { scope: "crumb/reply", err });
     }
@@ -277,7 +286,7 @@ export async function updateStatus(input: {
   if (!row.submitterUnsub && row.submitterNotifyStatus) {
     try {
       const origin = originFromHeaders(headers());
-      await sendStatusChangeNotification({
+      const delivered = await sendStatusChangeNotification({
         to: row.submitterEmail,
         workspaceName: workspace.name,
         vendorName: user.name,
@@ -290,12 +299,77 @@ export async function updateStatus(input: {
         inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
         unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=status` : null,
       });
+      // Loop ledger: a status notification for a terminal status is the loop
+      // actually closing — the customer heard the outcome (see Insights).
+      if (delivered) {
+        await db.insert(customerNotifications).values({
+          itemId: row.id,
+          accountUserId: row.submitterId,
+          kind: "status",
+          toStatus: input.status,
+        });
+      }
     } catch (err) {
       log.error("status notification failed", { scope: "crumb/status", err });
     }
   }
 
   return { ok: true as const };
+}
+
+// ─── single-item properties (assignee / type) ────────────────
+// The thread's Details card edits one item in place — the per-item
+// counterpart of the inbox bulk bar.
+
+export async function assignItem(
+  itemShortId: string,
+  assigneeId: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+
+  // The assignee must be a member of this workspace.
+  if (assigneeId) {
+    const [member] = await db
+      .select({ id: workspaceUsers.id })
+      .from(workspaceUsers)
+      .where(and(eq(workspaceUsers.id, assigneeId), eq(workspaceUsers.workspaceId, workspace.id)))
+      .limit(1);
+    if (!member) return { ok: false, error: "not_a_member" };
+  }
+
+  const r = await db
+    .update(items)
+    .set({ assigneeId, updatedAt: new Date() })
+    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
+    .returning({ id: items.id });
+  if (r.length === 0) return { ok: false, error: "not_found" };
+
+  revalidatePath(`/thread/${itemShortId}`);
+  revalidatePath("/inbox");
+  return { ok: true };
+}
+
+const ALLOWED_TYPES = new Set(["bug", "idea", "question"]);
+
+export async function updateType(
+  itemShortId: string,
+  type: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!ALLOWED_TYPES.has(type)) return { ok: false, error: "bad_type" };
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+
+  const r = await db
+    .update(items)
+    .set({ type, updatedAt: new Date() })
+    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
+    .returning({ id: items.id });
+  if (r.length === 0) return { ok: false, error: "not_found" };
+
+  revalidatePath(`/thread/${itemShortId}`);
+  revalidatePath("/inbox");
+  return { ok: true };
 }
 
 // ─── external ticket linking ─────────────────────────────────

@@ -37,7 +37,10 @@ test("vendor Teams webhook delivers an Adaptive Card", async ({ page }) => {
     .toContain("AdaptiveCard");
 });
 
-test("customer account Slack webhook delivers Block Kit", async ({ page }) => {
+// Skipped: the "Customer notifications" card (AccountChannelsTile) is dormant —
+// intentionally removed from accounts/[id]/page.tsx until a customer self-serve
+// surface exists. Re-enable when that tile is rendered again.
+test.skip("customer account Slack webhook delivers Block Kit", async ({ page }) => {
   await page.goto("/accounts");
   await page.getByText("Acme Co").click();
   await page.getByPlaceholder(/hooks\.slack\.com/i).fill(`http://localhost:${PORT}/slack-acct`);

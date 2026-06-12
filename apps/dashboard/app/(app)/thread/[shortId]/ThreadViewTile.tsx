@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { db, items, accounts, accountUsers, workspaceUsers, replies, statusEvents, attachments, initiatives, initiativeSuggestions, dedupeSuggestions, replaySummaries } from "@crumb/db";
+import { db, items, accounts, accountUsers, workspaceUsers, replies, statusEvents, attachments, initiatives, initiativeSuggestions, dedupeSuggestions, replaySummaries, customerNotifications } from "@crumb/db";
 import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getActiveSession } from "@/lib/server";
@@ -63,6 +63,7 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       submitterId: items.submitterId,
       submitterName: accountUsers.name,
       submitterInitials: accountUsers.initials,
+      assigneeId: items.assigneeId,
       assigneeInitials: workspaceUsers.initials,
       assigneeName: workspaceUsers.name,
       externalProvider: items.externalProvider,
@@ -201,6 +202,26 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
     at: e.at.toISOString(),
   }));
 
+  // Loop ledger entries — every time the customer was actually notified.
+  // Rendered as crumbs in the Trail; a terminal-status notice is the loop
+  // visibly closing ("Maya was told it shipped").
+  const noticeRows = await db
+    .select({
+      id: customerNotifications.id,
+      kind: customerNotifications.kind,
+      toStatus: customerNotifications.toStatus,
+      sentAt: customerNotifications.sentAt,
+    })
+    .from(customerNotifications)
+    .where(eq(customerNotifications.itemId, head.id))
+    .orderBy(asc(customerNotifications.sentAt));
+  const notices = noticeRows.map(n => ({
+    id: n.id,
+    kind: n.kind as "reply" | "status",
+    toStatus: n.toStatus,
+    at: n.sentAt.toISOString(),
+  }));
+
   const initiativeOptions = await db
     .select({ id: initiatives.id, name: initiatives.name, color: initiatives.color })
     .from(initiatives)
@@ -306,9 +327,12 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       name: head.submitterName,
       initials: head.submitterInitials,
     },
-    assignee: head.assigneeInitials ? { initials: head.assigneeInitials, name: head.assigneeName ?? "" } : null,
+    assignee: head.assigneeId && head.assigneeInitials
+      ? { id: head.assigneeId, initials: head.assigneeInitials, name: head.assigneeName ?? "" }
+      : null,
     messages,
     events,
+    notices,
     teammates: wsAuthor, // for @-mention autocomplete + highlight (internal notes)
     initiative: head.initiativeId
       ? { id: head.initiativeId, name: head.initiativeName ?? "", color: head.initiativeColor }

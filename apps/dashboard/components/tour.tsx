@@ -40,26 +40,26 @@ const STEPS: TourStep[] = [
   {
     target: "inbox",
     icon: "inbox",
-    title: "Your Inbox",
-    body: "Everything customers have sent, newest first, plus feedback forwarded from email, Slack, or the extension, ready to map to a customer right at the top.",
+    title: "Every item is an open loop",
+    body: "Customers drop feedback here from your widget, email, or Slack — account and session attached. Each one is a loop that stays open until they hear back.",
   },
   {
     target: "accounts",
     icon: "building",
-    title: "Accounts",
-    body: "Everyone who's sent feedback, sorted by ARR. The view to open before every QBR.",
+    title: "Weigh loops by revenue",
+    body: "Everyone who's sent feedback, sorted by ARR — so you answer the loops that matter most first. The view to open before every QBR.",
   },
   {
     target: "initiatives",
     icon: "road",
-    title: "Initiatives",
-    body: "Group feedback into themes on a Now / Next / Later board, and mark them public to share your roadmap.",
+    title: "Decide in the open",
+    body: "Group loops into themes on a Now / Next / Later board, and mark it public so customers can watch their feedback move toward shipped.",
   },
   {
     target: "insights",
     icon: "chart",
-    title: "Insights",
-    body: "Trends and metrics across all your feedback so you can spot what matters.",
+    title: "Watch the loop shrink",
+    body: "One number to beat: how long customers wait to hear back. Loop time, open loops, and the ARR sitting on an answer all live here.",
   },
   {
     target: "cmdk",
@@ -70,14 +70,14 @@ const STEPS: TourStep[] = [
   {
     target: "notifs",
     icon: "bell",
-    title: "Notifications",
-    body: "New submissions, replies, and mentions land in this bell. Tune what reaches you in Settings → Notifications.",
+    title: "When the ball comes back",
+    body: "Replies, new submissions, and mentions land in this bell — each one means it's your turn again. Tune what reaches you in Settings → Notifications.",
   },
   {
     target: "settings",
     icon: "settings",
-    title: "Get set up",
-    body: "Open this menu for Settings: install the widget, connect Slack or your CRM, and invite teammates. That's it, follow the trail.",
+    title: "Close your first loop",
+    body: "Open this menu to install the widget, connect Slack or your CRM, and invite teammates. When something ships, Crumb tells the customer — the loop closes itself. Follow the trail.",
   },
 ];
 

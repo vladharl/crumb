@@ -355,6 +355,28 @@ export const statusEvents = pgTable("status_events", {
   byItem: index("status_events_item_idx").on(t.itemId, t.at),
 }));
 
+// ─── customer notifications (the loop-close ledger) ──────────
+// One row per notification actually delivered to a customer about their item —
+// a vendor reply or a status change. This is what makes "the loop closed when
+// the customer heard the outcome" measurable (Insights loop time) instead of
+// inferred from internal status alone. Written best-effort after the provider
+// accepts the send; never blocks the action that triggered it.
+export const customerNotifications = pgTable("customer_notifications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  itemId: uuid("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  accountUserId: uuid("account_user_id").notNull().references(() => accountUsers.id, { onDelete: "cascade" }),
+  // What the customer was told: 'reply' (vendor answered) or 'status' (state moved).
+  kind: varchar("kind", { length: 16 }).notNull(),
+  // Delivery channel — 'email' today; account Slack/Teams channels later.
+  channel: varchar("channel", { length: 16 }).notNull().default("email"),
+  // For kind='status': the status the customer was told about. Lets the loop-time
+  // query find "informed of shipped/declined" without re-joining status_events.
+  toStatus: varchar("to_status", { length: 16 }),
+  sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  byItem: index("customer_notifications_item_idx").on(t.itemId, t.sentAt),
+}));
+
 // ─── initiatives (vendor-only grouping for items) ────────────
 // Manual buckets the vendor uses to roll up themed asks ("User Management",
 // "Reporting"). Items belong to 0 or 1 initiative. Vendor-internal — not

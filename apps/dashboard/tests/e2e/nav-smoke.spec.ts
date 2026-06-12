@@ -10,6 +10,7 @@ const PAGES = [
   "/initiatives",
   "/insights",
   "/notifications",
+  "/settings",
   "/settings/team",
   "/settings/integrations",
   "/settings/webhooks",
@@ -29,8 +30,9 @@ for (const path of PAGES) {
 
     // Not bounced to login (auth/session intact).
     await expect(page).not.toHaveURL(/\/login/);
-    // App shell present — the Settings nav link is in the sidebar on every page.
-    await expect(page.getByRole("link", { name: /Settings/i }).first()).toBeVisible({ timeout: 10_000 });
+    // App shell present — the top-bar nav renders its Inbox link on every page
+    // (Settings moved into the avatar menu with the top-bar redesign).
+    await expect(page.getByRole("navigation").getByRole("link", { name: /Inbox/i })).toBeVisible({ timeout: 10_000 });
     // No uncaught client exceptions.
     expect(pageErrors, `uncaught errors on ${path}: ${pageErrors.join(" | ")}`).toEqual([]);
   });

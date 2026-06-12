@@ -6,7 +6,9 @@ test("insights renders KPIs and the status funnel from seeded data", async ({ pa
   await expect(page.getByRole("heading", { name: /^Insights$/ })).toBeVisible();
 
   // KPI labels are static chrome; values come from SQL over the seed.
-  await expect(page.getByText("Total feedback")).toBeVisible();
+  await expect(page.getByText("Median loop time")).toBeVisible();
+  await expect(page.getByText("Open loops", { exact: true })).toBeVisible();
+  await expect(page.getByText("ARR in open loops")).toBeVisible();
   await expect(page.getByText("Median first response")).toBeVisible();
 
   // The trend card + status funnel + a known seeded status row.
