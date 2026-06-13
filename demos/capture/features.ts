@@ -6,7 +6,7 @@ import {
 } from "./config";
 import { createAuthState } from "./auth";
 import { installCursor } from "./cursor";
-import { shot, demoClick, pause } from "./lib";
+import { shot, demoClick, demoType, moveTo, pause, smoothScrollTo } from "./lib";
 
 // NEW-VISION FEATURE SHOTS.
 // Stills of the UX/IA refresh that the three story acts don't naturally pass
@@ -83,6 +83,67 @@ async function main(): Promise<void> {
     await page.locator(".bell-row, .bell-empty").first().waitFor({ timeout: 10_000 }).catch(() => {});
     await pause(page, 1000);
     await shot(page, "feat-bell");
+    await page.keyboard.press("Escape");
+    await pause(page, 400);
+
+    // 5 — Compose modal, filled out as the "customer called instead" story.
+    // We never click "Create item", so the shot leaves no item behind (Escape
+    // keeps the draft client-side only).
+    console.log("[demos] feat-compose …");
+    await demoClick(page, page.getByRole("button", { name: "Compose" }));
+    const modal = page.locator('[role="dialog"][aria-label="Compose on behalf"]');
+    await modal.waitFor({ timeout: 10_000 });
+    await demoType(page, modal.locator('input[list="known-accounts"]'), "Lumen Health");
+    await demoType(page, modal.locator('input[type="email"]'), "priya@lumenhealth.com");
+    await demoClick(page, modal.locator(".seg button", { hasText: "Bug" }));
+    await demoType(page, modal.locator('input[placeholder*="gist"]'), "CSV export times out on large cohorts");
+    await demoType(
+      page,
+      modal.locator("textarea"),
+      "Priya called: the export spinner runs for about two minutes and then fails on their biggest cohort. Happens every Friday when they prep the board pack.",
+    );
+    await page.mouse.move(180, 720); // park clear of the modal
+    await pause(page, 900);
+    await shot(page, "feat-compose");
+    await page.keyboard.press("Escape");
+    await pause(page, 500);
+
+    // 6 — Per-row "⋯" quick actions, root pane open on the first inbox row.
+    // Center the row first: the staged Needs-triage card pushes the table down,
+    // and a menu opened at the viewport's bottom edge gets clipped.
+    console.log("[demos] feat-row-actions …");
+    const rowMenuBtn = page.locator('button[aria-label^="Actions for"]').first();
+    await smoothScrollTo(page, rowMenuBtn, "center");
+    await demoClick(page, rowMenuBtn);
+    await page.locator(".dd-menu").waitFor({ timeout: 10_000 });
+    await page.locator(".dd-opt", { hasText: "Open thread" }).waitFor({ timeout: 5_000 });
+    await pause(page, 900);
+    await shot(page, "feat-row-actions");
+    await page.keyboard.press("Escape");
+    await pause(page, 400);
+
+    // 7 — Settings overview: the 5-step setup checklist.
+    console.log("[demos] feat-setup …");
+    await page.goto("/settings", { waitUntil: "networkidle" });
+    await page.locator("text=/\\d of 5 done/").waitFor({ timeout: 15_000 });
+    await page.mouse.move(1180, 740);
+    await pause(page, 1200);
+    await shot(page, "feat-setup");
+
+    // 8 — Edge-whisper launcher on the mock host page, hovered so the flag
+    // with the latest loop event slides out. Fresh context = empty
+    // localStorage, so the seeded replies/status moves read as news for the
+    // widget's default identity (maya@acme.co).
+    console.log("[demos] feat-whisper …");
+    await page.goto("/widget-demo.html", { waitUntil: "networkidle" });
+    const launcher = page.locator(".launcher");
+    await launcher.waitFor({ state: "visible", timeout: 15_000 });
+    await page.locator('.launcher[data-state="news"]').waitFor({ timeout: 10_000 }).catch(() => {
+      console.warn("[demos] launcher has no loop news; flag will show the rest-state text");
+    });
+    await moveTo(page, launcher); // hover slides the flag out
+    await pause(page, 1300);
+    await shot(page, "feat-whisper");
   } finally {
     await browser.close();
   }
