@@ -127,7 +127,7 @@ export function InitiativePanel({
               }}
               buttonStyle={{ minWidth: 200 }}
               options={[
-                { value: "__none", label: "— No initiative —" },
+                { value: "__none", label: "No initiative" },
                 ...options.map(o => ({ value: o.id, label: o.name })),
                 { value: "__create", label: "+ Create new…" },
               ]}

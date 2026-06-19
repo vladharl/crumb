@@ -25,6 +25,25 @@ export async function InitiativesBoardTile() {
       followers: sql<number>`(
         SELECT COUNT(*)::int FROM roadmap_follows WHERE roadmap_follows.initiative_id = initiatives.id
       )`,
+      // Revenue at stake: ARR over the DISTINCT accounts with OPEN feedback in
+      // this initiative — the same unit the inbox ranks on, rolled up. Open
+      // statuses only (shipped work is done); merged dupes excluded. Same
+      // fully-qualified-ref caveat as `followers` above. ::bigint → mapper
+      // Number()s it (a portfolio sum can exceed int4).
+      arrAtStake: sql<string>`(
+        SELECT COALESCE(SUM(a.arr_cents), 0)::bigint FROM (
+          SELECT DISTINCT it.account_id FROM items it
+          WHERE it.initiative_id = initiatives.id
+            AND it.merged_into_id IS NULL
+            AND it.status IN ('open','review','planned','progress')
+        ) g JOIN accounts a ON a.id = g.account_id
+      )`,
+      accountCount: sql<number>`(
+        SELECT COUNT(DISTINCT it.account_id)::int FROM items it
+        WHERE it.initiative_id = initiatives.id
+          AND it.merged_into_id IS NULL
+          AND it.status IN ('open','review','planned','progress')
+      )`,
     })
     .from(initiatives)
     .leftJoin(workspaceUsers, eq(workspaceUsers.id, initiatives.ownerWorkspaceUserId))
@@ -41,6 +60,8 @@ export async function InitiativesBoardTile() {
     order: r.roadmapOrder ?? 0,
     isPublic: r.isPublic,
     followers: r.followers,
+    arrAtStakeCents: Number(r.arrAtStake),
+    accountCount: r.accountCount,
     ownerName: r.ownerName ?? null,
     createdAt: r.createdAt.toISOString(),
   }));

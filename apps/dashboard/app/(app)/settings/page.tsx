@@ -45,7 +45,7 @@ export default async function SettingsOverview() {
     {
       title: "Install the widget",
       detail: (itemCount?.n ?? 0) > 0
-        ? "Feedback is flowing — loops are arriving in your Inbox."
+        ? "Feedback is flowing. Loops are arriving in your Inbox."
         : "Drop the snippet into your product so customers can open loops.",
       href: "/settings/install",
       done: (itemCount?.n ?? 0) > 0,
@@ -62,14 +62,14 @@ export default async function SettingsOverview() {
       title: "Wire email delivery",
       detail: emailConfigured()
         ? `Customers hear back via ${email.name} (from ${email.from}).`
-        : "Without a provider, customers never hear back by email — loops stay open on their side.",
+        : "Without a provider, customers never hear back by email, so loops stay open on their side.",
       href: "/settings/install",
       done: emailConfigured(),
     },
     {
       title: "Connect a tool",
       detail: anyIntegration
-        ? "Connected — tickets and notifications reach where work happens."
+        ? "Connected. Tickets and notifications reach where work happens."
         : "Push loops to Linear, Jira, or GitHub; notify Slack or Teams.",
       href: "/settings/integrations",
       done: anyIntegration,

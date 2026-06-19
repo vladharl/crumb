@@ -8,10 +8,9 @@ import { accountRiskSignals, atRiskArrCents } from "@/lib/insights/churn";
 import { accountUsageSignals } from "@/lib/usage/signals";
 
 // Account · ARR (bar + value) · Open · Shipped · Total · [Active] · Since
-// The "Active" column only appears when usage analytics is enabled — the grid
-// gains a column so the other cells stay aligned.
-const GRID = "1.5fr 220px 64px 70px 56px 76px";
-const GRID_USAGE = "1.5fr 220px 64px 70px 56px 72px 76px";
+// The column tracks live in globals.css (`.accounts-row`) so a phone media
+// query can reflow the row into a card without fighting an inline grid. The
+// `--usage` variant adds the "Active" column when usage analytics is enabled.
 
 // Compact "time since" for the Last active column — "3d", "2w", or "—".
 function fmtActive(d: Date | null): string {
@@ -113,7 +112,7 @@ export async function AccountsTableTile() {
   // Only show the column if the workspace is entitled AND at least one account
   // has activity — otherwise it's a column of dashes.
   const hasUsage = showUsage && usageByAccount.size > 0;
-  const grid = hasUsage ? GRID_USAGE : GRID;
+  const usageClass = hasUsage ? " accounts-row--usage" : "";
 
   const totalArr = rows.reduce((n, r) => n + r.arrCents, 0);
   const openArr = rows.reduce((n, r) => n + (r.openCount > 0 ? r.arrCents : 0), 0);
@@ -138,7 +137,7 @@ export async function AccountsTableTile() {
 
       <Card style={{ padding: 0 }}>
         <div className="list">
-          <div className="list-row head" style={{ gridTemplateColumns: grid }}>
+          <div className={`list-row head accounts-row${usageClass}`}>
             <span>Account</span>
             <span>ARR</span>
             <span>Open</span>
@@ -156,10 +155,9 @@ export async function AccountsTableTile() {
               <Link
                 key={r.id}
                 href={`/accounts/${r.id}`}
-                className="list-row"
-                style={{ gridTemplateColumns: grid }}
+                className={`list-row accounts-row${usageClass}`}
               >
-                <div className="row gap-3 center" style={{ minWidth: 0 }}>
+                <div className="acct-name row gap-3 center" style={{ minWidth: 0 }}>
                   <Avatar kind="ink">{r.name[0]}</Avatar>
                   <div className="col" style={{ minWidth: 0 }}>
                     <span className="row gap-2 center" style={{ minWidth: 0 }}>
@@ -180,21 +178,21 @@ export async function AccountsTableTile() {
                     </span>
                   </div>
                 </div>
-                <div className="row gap-2 center" style={{ minWidth: 0 }}>
+                <div className="acct-arr row gap-2 center" style={{ minWidth: 0 }}>
                   <div style={{ flex: 1, height: 6, background: "var(--surface-2)", borderRadius: 999, overflow: "hidden", minWidth: 40 }}>
                     <div style={{ width: `${r.arrCents > 0 ? pct : 0}%`, height: "100%", background: "var(--accent)", borderRadius: 999 }} />
                   </div>
                   <span className="mono text-sm" style={{ width: 48, textAlign: "right", flexShrink: 0 }}>{arr(r.arrCents)}</span>
                 </div>
-                <span className="text-sm">{r.openCount > 0 ? <Pill ring ringFill>{r.openCount}</Pill> : <span className="muted-2">—</span>}</span>
-                <span className="text-sm muted">{r.shippedCount}</span>
-                <span className="text-xs muted">{r.totalCount}</span>
+                <span className="acct-open text-sm">{r.openCount > 0 ? <Pill ring ringFill>{r.openCount}</Pill> : <span className="muted-2">—</span>}</span>
+                <span className="acct-shipped text-sm muted">{r.shippedCount}</span>
+                <span className="acct-total text-xs muted">{r.totalCount}</span>
                 {hasUsage && (
-                  <span className="text-xs muted" title="Last product activity">
+                  <span className="acct-active text-xs muted" title="Last product activity">
                     {fmtActive(usageByAccount.get(r.id)?.lastActiveAt ?? null)}
                   </span>
                 )}
-                <span className="text-xs muted">
+                <span className="acct-since text-xs muted">
                   {r.since ? new Date(r.since).toLocaleDateString("en-US", { month: "short", year: "2-digit" }) : "—"}
                 </span>
               </Link>

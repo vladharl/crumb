@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "usage_events_account_user_ts_idx" ON "usage_events" USING btree ("account_user_id","ts");

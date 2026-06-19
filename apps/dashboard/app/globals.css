@@ -47,7 +47,10 @@
   --surface-2:    var(--cream-2);
   --text:         var(--brown);
   --text-2:       var(--brown-2);
-  --mute:         var(--brown-65);
+  /* Body-grade muted: toasted brown at 74% clears 4.5:1 on cream (AA), so the
+     preview line, ledes and "Showing X of Y" stay readable. --mute-2 (warm
+     gray) is decorative/tertiary only — never load-bearing or placeholder text. */
+  --mute:         rgba(74, 46, 31, 0.74);
   --mute-2:       var(--warm-gray);
   --hair:         var(--brown-10);
   --hair-strong:  var(--brown-15);
@@ -58,9 +61,12 @@
   --accent-deep:  var(--ember-deep);
 
   /* —— Type —— */
-  --font-display: 'General Sans', 'GT Walsheim', 'Söhne', system-ui, sans-serif;
-  --font-body:    'Inter', system-ui, sans-serif;
-  --font-mono:    'JetBrains Mono', ui-monospace, monospace;
+  /* Self-hosted via next/font (app/layout.tsx) — the *-loaded vars hold the
+     generated family (real face + metric-matched fallback). Prefer it, then the
+     installed family by name, then system, so a missing var never breaks text. */
+  --font-display: var(--font-display-loaded, 'General Sans'), 'GT Walsheim', 'Söhne', system-ui, sans-serif;
+  --font-body:    var(--font-body-loaded, 'Inter'), system-ui, sans-serif;
+  --font-mono:    var(--font-mono-loaded, 'JetBrains Mono'), ui-monospace, monospace;
 
   --fs-2xs: 10px;
   --fs-xs:  11px;
@@ -90,6 +96,16 @@
   /* —— Shadows — warm-tinted, very subtle —— */
   --sh-near: 0 1px 0 rgba(74, 46, 31, 0.04);
   --sh-soft: 0 2px 8px -3px rgba(74, 46, 31, 0.08), 0 1px 2px rgba(74, 46, 31, 0.04);
+
+  /* —— Easing — natural deceleration, no bounce —— */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);   /* smooth */
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);  /* a touch snappier */
+  --ease-out-expo:  cubic-bezier(0.16, 1, 0.3, 1);   /* confident, decisive */
+
+  /* —— Motion durations — feedback (<80ms felt) → state → overlay/layout —— */
+  --dur-fast: 120ms;   /* press, toggle, color shift */
+  --dur-base: 180ms;   /* hover, menu open, tooltip */
+  --dur-slow: 320ms;   /* drawer, overlay, layout change */
 
   /* —— Spacing —— */
   --gap-1: 4px;
@@ -122,7 +138,8 @@ body {
   font-size: var(--fs-body);
   line-height: var(--lh-body);
   -webkit-font-smoothing: antialiased;
-  font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-kerning: normal;
   text-rendering: optimizeLegibility;
 }
 
@@ -131,6 +148,9 @@ button { font: inherit; color: inherit; }
 h1, h2, h3, h4 {
   margin: 0;
   font-family: var(--font-display);
+  /* General Sans ships 600 only; pin it so a classless heading never requests
+     the browser-default 700 (unshipped → synthesized faux-bold). */
+  font-weight: 600;
   letter-spacing: var(--ls-display);
 }
 
@@ -172,7 +192,9 @@ h1, h2, h3, h4 {
   color: var(--text);
 }
 .topbar-ws {
-  font-family: var(--font-display);
+  /* Inter, not the display face: General Sans has no italic master, so a true
+     italic only exists in the body family. Reads as a warm margin-note tag. */
+  font-family: var(--font-body);
   font-size: var(--fs-xs);
   font-style: italic;
   color: var(--mute-2);
@@ -314,7 +336,7 @@ h1, h2, h3, h4 {
   font-size: var(--fs-md);
   color: var(--text);
 }
-.cmdk-input::placeholder { color: var(--mute-2); }
+.cmdk-input::placeholder { color: var(--mute); }
 .cmdk-esc {
   font-size: 10px;
   color: var(--mute-2);
@@ -378,7 +400,8 @@ h1, h2, h3, h4 {
   color: var(--mute);
 }
 .nav-brand .tag {
-  font-family: var(--font-display);
+  /* True italic lives in Inter, not General Sans (no italic master) */
+  font-family: var(--font-body);
   font-size: var(--fs-xs);
   font-style: italic;
   color: var(--mute);
@@ -684,7 +707,7 @@ h1, h2, h3, h4 {
 }
 .dd-trigger:disabled { opacity: .55; cursor: default; }
 .dd-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dd-value.dd-ph { color: var(--mute-2); }
+.dd-value.dd-ph { color: var(--mute); }
 .dd-chev { width: 12px; height: 12px; flex-shrink: 0; opacity: .55; }
 
 .dd-menu {
@@ -881,6 +904,58 @@ h1, h2, h3, h4 {
 .pill .ring.fill { background: currentColor; }
 
 /* ═══════════════════════════════════════════════════════════
+   INITIATIVE COLOR — the one sanctioned arbitrary hue (identity,
+   not status). A soft tinted tag for wayfinding: the wash + hairline
+   carry the initiative's own --init hue, while the label stays ink so
+   contrast holds for any user-picked color. color-mix toward --surface
+   keeps the tint pale and warm (never a saturated block on the paper).
+   ═══════════════════════════════════════════════════════════ */
+.init-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 9px 2px 8px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text);
+  background: color-mix(in srgb, var(--init, var(--brown)) 11%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--init, var(--brown)) 34%, transparent);
+  white-space: nowrap;
+}
+.init-tag .init-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  /* Nudge pale user hues toward the ink so the dot never washes out on the
+     tint, while keeping the chosen color recognisably itself. */
+  background: color-mix(in srgb, var(--init, var(--text)) 82%, var(--brown));
+  flex-shrink: 0;
+}
+.init-tag .init-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Uncategorised / colourless initiative: stay neutral, reserve color for real
+   identity (a tinted tag everywhere would just be noise). */
+.init-tag.is-neutral {
+  background: transparent;
+  border-color: var(--hair);
+  color: var(--mute);
+}
+.init-tag.is-neutral .init-dot { background: var(--mute-2); }
+
+/* Roadmap card tinted by its initiative's hue, so a column scans by initiative
+   at a glance. Lighter than the tag (the whole card is a larger surface); the
+   fallback resolves to plain --surface when no --init is set. */
+.init-card {
+  background: color-mix(in srgb, var(--init, var(--surface)) 8%, var(--surface));
+}
+
+/* ═══════════════════════════════════════════════════════════
    AVATARS
    ═══════════════════════════════════════════════════════════ */
 .avatar {
@@ -921,7 +996,7 @@ h1, h2, h3, h4 {
   line-height: 1.4;
   transition: border-color .15s ease;
 }
-.input::placeholder { color: var(--mute-2); }
+.input::placeholder { color: var(--mute); }
 .input:focus {
   outline: 0;
   border-color: var(--accent);
@@ -950,6 +1025,10 @@ textarea.input { resize: vertical; min-height: 80px; }
   border: 1px solid var(--text);
   background: transparent;
   flex-shrink: 0;
+  /* A status change crossfades the dot's tone instead of snapping. */
+  transition: background var(--dur-base) var(--ease-out-quart),
+              border-color var(--dur-base) var(--ease-out-quart),
+              opacity var(--dur-base) var(--ease-out-quart);
 }
 .status-dot.open      { background: transparent; }
 .status-dot.review    { background: var(--text); opacity: 0.4; border-color: transparent; }
@@ -1330,6 +1409,175 @@ details > summary::-webkit-details-marker { display: none; }
 .trail-loader span:nth-child(4) { animation-delay: 0.45s; }
 
 /* ═══════════════════════════════════════════════════════════
+   TRAIL DOTS — the loop made visible, in motion.
+   As a stage lights, its fill grows in from a seed while the ring
+   crossfades out; advancing a loop is felt, not just re-rendered.
+   When the loop closes, .rippling runs a one-shot L→R pulse along
+   the trail — the "the customer heard back" beat. transform-box:
+   fill-box pins each circle's scale to its own centre, so cx is
+   irrelevant to the origin. (Component: @crumb/ui TrailDots.)
+   ═══════════════════════════════════════════════════════════ */
+.trail-dots .trail-ring {
+  transition: opacity var(--dur-slow) var(--ease-out-quart);
+}
+.trail-dots .trail-fill {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity var(--dur-slow) var(--ease-out-quart),
+              transform 360ms var(--ease-out-quint);
+}
+@keyframes trail-ripple {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.6); }
+  100% { transform: scale(1); }
+}
+.trail-dots.rippling .trail-fill {
+  animation: trail-ripple 480ms var(--ease-out-quint) calc(var(--i, 0) * 90ms) both;
+}
+
+/* The comet: a bright crumb that travels the full trail as the loop closes —
+   the signal going out to the customer. It rides just ahead of the ripple wave
+   (4.5 → 31.5 in the 36-wide viewBox = 27 units), fading in then out so only
+   the motion registers, not a dot parked at either end. Hidden at rest. */
+.trail-comet {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.trail-dots.rippling .trail-comet {
+  animation: trail-comet 620ms var(--ease-out-quint) both;
+}
+@keyframes trail-comet {
+  0%   { opacity: 0; transform: translateX(0)    scale(0.5); }
+  18%  { opacity: 0.95; }
+  82%  { opacity: 0.95; }
+  100% { opacity: 0; transform: translateX(27px) scale(1.15); }
+}
+
+/* The terminus bloom: the last crumb glows once as the comet lands on it —
+   the "heard back" beat. drop-shadow (not box-shadow) so the glow hugs the
+   circle, layered over the ripple's scale on the same dot. */
+.trail-dots.rippling g:last-of-type .trail-fill {
+  animation:
+    trail-ripple 480ms var(--ease-out-quint) calc(var(--i, 0) * 90ms) both,
+    trail-terminus 520ms var(--ease-out-quart) 300ms both;
+}
+@keyframes trail-terminus {
+  0%   { filter: drop-shadow(0 0 0 rgba(226, 125, 58, 0)); }
+  45%  { filter: drop-shadow(0 0 2.4px rgba(226, 125, 58, 0.9)); }
+  100% { filter: drop-shadow(0 0 0 rgba(226, 125, 58, 0)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trail-dots .trail-ring,
+  .trail-dots .trail-fill { transition: none; }
+  .trail-dots.rippling .trail-fill,
+  .trail-dots.rippling g:last-of-type .trail-fill,
+  .trail-dots.rippling .trail-comet { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TRAIL TIMELINE — the loop made spatial (thread → Trail tab).
+   An ember spine draws itself top→bottom (oldest → newest) and
+   each crumb lands as the line reaches it: the trail is *seen*
+   being followed. The closing crumb blooms once — "heard back".
+   Reveal-only: the resting state is fully visible, so reduced
+   motion (and any non-animating renderer) shows the whole trail
+   static. (Component: ThreadView Trail tab.)
+   ═══════════════════════════════════════════════════════════ */
+.trail-timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-left: 22px;
+}
+/* The spine: an ember line that draws downward. Tapered from a pale head to a
+   solid ember foot (the live, most-recent end). The literal trail — ember here
+   is the One-Trail Rule's sanctioned use, not decoration. */
+.trail-spine {
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--ember) 32%, transparent),
+    var(--ember)
+  );
+  transform-origin: top center;
+  animation: trail-draw calc(var(--n, 3) * 130ms + 220ms) var(--ease-out-quart);
+}
+@keyframes trail-draw {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
+}
+
+.trail-node {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.trail-node-age { flex-shrink: 0; }
+
+/* Crumbs sit on the spine and land in sequence, each timed to when the drawing
+   line reaches it (delay = index · 130ms, matching the spine's pace). */
+.trail-crumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  margin-left: -22px;
+  margin-top: 5px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  animation: trail-land 420ms var(--ease-out-quint) calc(var(--i, 0) * 130ms) backwards;
+}
+.trail-crumb.notice  { background: var(--ember); opacity: 0.9; }
+.trail-crumb.event   { background: var(--accent); }
+.trail-crumb.message { background: var(--cream-2); border: var(--border-strong); }
+@keyframes trail-land {
+  0%   { transform: scale(0); }
+  60%  { transform: scale(1.25); }
+  100% { transform: scale(1); }
+}
+
+/* The closing notice ("loop closed") blooms once after it lands — the trail's
+   terminus, the moment the customer heard the outcome. */
+.trail-node:last-child .trail-crumb.notice {
+  animation:
+    trail-land 420ms var(--ease-out-quint) calc(var(--i, 0) * 130ms) backwards,
+    trail-terminus-bloom 1200ms var(--ease-out-quart) calc(var(--i, 0) * 130ms + 320ms) both;
+}
+@keyframes trail-terminus-bloom {
+  0%   { box-shadow: 0 0 0 0 rgba(226, 125, 58, 0); }
+  35%  { box-shadow: 0 0 0 4px rgba(226, 125, 58, 0.18), 0 0 9px 2px rgba(226, 125, 58, 0.55); }
+  100% { box-shadow: 0 0 0 0 rgba(226, 125, 58, 0); }
+}
+
+/* The node's text rises in just behind its crumb. */
+.trail-node-body,
+.trail-node-age {
+  animation: trail-node-in 400ms var(--ease-out-quint) calc(var(--i, 0) * 130ms + 70ms) backwards;
+}
+@keyframes trail-node-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trail-spine,
+  .trail-crumb,
+  .trail-node:last-child .trail-crumb.notice,
+  .trail-node-body,
+  .trail-node-age { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════
    Skeleton shimmer — used by @crumb/ui's Skeleton* primitives
    for tile-level loading states.
    ═══════════════════════════════════════════════════════════ */
@@ -1352,4 +1600,962 @@ details > summary::-webkit-details-marker { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .skel { animation: none; background: var(--surface-2); }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   INBOX EMPTY — the cleared queue, and the milestone of reaching it.
+   Reaching zero on "Your turn" is the product's emotional payoff, so
+   it earns a brand moment: the crumb trail (BrandMark) lands dot by
+   dot, then rests. Every other empty (filter miss, empty tab) stays
+   quiet — .quiet — because celebrating a blank screen is just noise.
+   (Component: InboxTable → InboxEmpty.)
+   ═══════════════════════════════════════════════════════════ */
+.list-empty-row { display: block; }
+.inbox-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--gap-2);
+  padding: 58px 24px 62px;
+}
+.inbox-empty.quiet {
+  gap: var(--gap-3);
+  padding: 40px 24px 42px;
+}
+.inbox-empty-mark {
+  line-height: 0;
+  margin-bottom: 6px;
+}
+.inbox-empty-head {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-lg);          /* 16px — display-for-moments, not a data label */
+  letter-spacing: var(--ls-tight);
+  color: var(--text);
+  text-wrap: balance;
+}
+.inbox-empty-sub {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  color: var(--mute);               /* muted is fine here: supporting, not load-bearing */
+  max-width: 42ch;
+  text-wrap: pretty;
+}
+.inbox-empty-link {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--accent-deep);        /* ember-deep: the accessible accent for text on cream */
+  text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-out-quart),
+              gap var(--dur-base) var(--ease-out-quart);
+}
+.inbox-empty-link:hover { color: var(--ember); gap: 8px; }
+.inbox-empty-link svg { transition: transform var(--dur-base) var(--ease-out-quart); }
+
+/* The trail lands: each crumb scales up from a seed, left to right, settling
+   into the resting BrandMark. transform-box pins the scale to each dot's own
+   centre so the authored per-dot opacities are preserved (we animate scale,
+   not opacity). One-shot on mount — a milestone, not a loop. */
+@keyframes crumb-land {
+  from { transform: scale(0.2); }
+  60%  { transform: scale(1.12); }
+  to   { transform: scale(1); }
+}
+.inbox-empty-mark.land svg circle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: crumb-land 460ms var(--ease-out-quint) backwards;
+}
+.inbox-empty-mark.land svg circle:nth-child(1) { animation-delay: 40ms; }
+.inbox-empty-mark.land svg circle:nth-child(2) { animation-delay: 110ms; }
+.inbox-empty-mark.land svg circle:nth-child(3) { animation-delay: 180ms; }
+.inbox-empty-mark.land svg circle:nth-child(4) { animation-delay: 250ms; }
+.inbox-empty-mark.land svg circle:nth-child(5) { animation-delay: 320ms; }
+@media (prefers-reduced-motion: reduce) {
+  .inbox-empty-mark.land svg circle { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   INBOX TABLE — responsive grid + accessible whole-row link
+   ═══════════════════════════════════════════════════════════ */
+/* ── Board: filter controls + table + summary as one surface ──────
+   The toolbar, the table, and the "showing N of M" summary sit at a tight
+   12px rhythm so the inbox reads as a single filter → results → summary
+   unit — set apart from the looser 22px page-level rhythm (.content) that
+   separates it from the page head above. Grouping by proximity, no box. */
+.inbox-board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Toolbar: two governed groups ─────────────────────────────────
+   The loop-turn tabs lead (the primary scope); search sits beside them and
+   flex-grows to push the secondary tools (sort + filters) to the right edge.
+   When the row can't hold all three, the tools wrap as one block to a second
+   line rather than scattering control-by-control — the wrap stays legible.
+   The sort-basis caption gets its own quiet line beneath (.inbox-sort-note). */
+.inbox-toolbar { display: flex; flex-direction: column; gap: 8px; }
+.inbox-toolbar-main {
+  display: flex;
+  align-items: center;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+}
+.inbox-toolbar-main .seg { flex: 0 0 auto; }
+.inbox-search {
+  flex: 1 1 240px;
+  min-width: 200px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: var(--border);
+  border-radius: var(--r-sm);
+  padding: 6px 10px;
+}
+/* The whole field lights as one input on focus — the inner input's own ring
+   is suppressed so the box carries the single ember focus signature. */
+.inbox-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.inbox-search .input:focus { box-shadow: none; }
+.inbox-tools {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.inbox-sort { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.inbox-sort-note { margin: 0; font-size: var(--fs-xs); color: var(--mute); }
+
+/* Horizontal scroll is the floor: columns drop first (below); only the
+   narrowest viewports fall back to scrolling the remaining columns. */
+.inbox-scroll { overflow-x: auto; }
+
+.inbox-grid {
+  grid-template-columns: 28px 64px 86px minmax(160px, 1.4fr) 150px 140px 110px 56px 72px 92px;
+}
+
+/* The row's one navigational link stretches an invisible overlay across the
+   whole row, so the mouse can click anywhere while keyboard / screen-reader
+   users get a single tab stop with a clear name. Interactive cells (checkbox,
+   chips, action menu) sit above the overlay so they stay independently usable. */
+.inbox-row { position: relative; }
+/* Scale without windowing: the browser skips layout + paint for rows scrolled
+   out of view and recalls each one's real height once measured, so a queue of
+   thousands stays at 60fps with zero change to the markup, the ARIA table, or
+   the inline reply drawer. Where unsupported (Firefox today) it's inert — every
+   row renders exactly as before. The intrinsic height is just the first-paint
+   estimate; `auto` remembers the true size after that. */
+.inbox-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}
+.inbox-row .row-link { outline: none; }
+.inbox-row .row-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: var(--r-sm);
+}
+.inbox-row .row-link:focus-visible::after {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.inbox-row .row-interactive { position: relative; z-index: 2; }
+
+/* Column drop priority: initiative first, then id / type / assignee. Each tier
+   re-declares the track list so the remaining cells stay aligned, and the
+   narrowest tier keeps a min-width so the row scrolls rather than crushing. */
+@media (max-width: 1024px) {
+  .inbox-grid {
+    grid-template-columns: 28px 64px 86px minmax(150px, 1.4fr) 150px 110px 56px 72px 56px;
+  }
+  .inbox-col-initiative { display: none; }
+  /* Tighten the action column: the Reply control goes icon-only here. */
+  .reply-btn-label { display: none; }
+}
+@media (max-width: 860px) {
+  .inbox-grid {
+    grid-template-columns: 28px minmax(150px, 1.4fr) 150px 110px 72px 56px;
+    min-width: 604px;
+  }
+  .inbox-col-id,
+  .inbox-col-type,
+  .inbox-col-asg { display: none; }
+}
+
+/* ── Revenue signal (ARR at stake) ──────────────────────────
+   The dollar figure is the unit; the meter is a scannable tonal
+   magnitude bar. Deliberately toasted-brown, NOT ember: ember is
+   already the inbox's loop ring + selection marker, and a second
+   ember would break the One-Trail Rule. Track is a faint hairline,
+   fill a mid-tone brown — pure two-tone, no status hue. */
+.arr-value { color: var(--text); font-variant-numeric: tabular-nums; }
+.arr-set {
+  color: var(--accent-deep);
+  text-decoration: none;
+  font-weight: 500;
+}
+.arr-set:hover { text-decoration: underline; }
+.arr-meter {
+  display: block;
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--hair);
+  overflow: hidden;
+}
+.arr-meter-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brown-65);
+  transform-origin: left center;
+  /* Scale, not width — the bar's length carries no interaction, so this is just
+     a mount grow-in; transform stays off the layout/paint path (no thrash). */
+  transition: transform .28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .arr-meter-fill { transition: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   REPLY IN PLACE — row Reply affordance + inline drawer
+   ═══════════════════════════════════════════════════════════ */
+/* Per-row Reply control, in the actions cell above the row-link overlay.
+   Ghost by default; ember ("prominent") on "your turn" rows, where answering
+   IS the active path — the One-Trail Rule's sanctioned use of the accent. */
+.reply-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--mute);
+  font: 500 var(--fs-xs)/1 var(--font-body);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.reply-btn:hover { background: var(--hover); color: var(--text); }
+.reply-btn.prominent { color: var(--accent-deep); background: var(--accent-soft); }
+.reply-btn.prominent:hover { background: var(--ember-soft); filter: brightness(0.98); }
+.reply-btn.open { border-color: var(--hair-strong); background: var(--surface); color: var(--text); }
+.reply-btn:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* The animated wrapper slides both ways via grid-template-rows (0fr ↔ 1fr):
+   the `1fr` track equals the content height *continuously*, so as the
+   conversation streams in the drawer grows smoothly with no clip-and-reveal
+   flicker — and the rows below ease down on open / up on collapse. The parent
+   keeps the row mounted through the collapse (see ReplyDrawerMount) so the
+   slide-up actually plays instead of snapping. Flat on paper — a hairline-
+   topped band, never a shadow. */
+.reply-drawer {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  border-bottom: var(--border);
+  background: var(--surface);
+  transition: grid-template-rows .26s var(--ease-out-quart), opacity .2s ease;
+}
+.reply-drawer.open { grid-template-rows: 1fr; opacity: 1; }
+.reply-drawer-inner { overflow: hidden; min-height: 0; }
+.inbox-row.expanded { background: var(--hover); }
+@media (prefers-reduced-motion: reduce) {
+  .reply-drawer { transition: none; }
+}
+
+/* Drawer body */
+.rd { display: flex; flex-direction: column; gap: 12px; padding: 14px 18px 16px; }
+.rd-head { display: flex; align-items: center; gap: 10px; justify-content: space-between; flex-wrap: wrap; }
+.rd-openthread {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: var(--fs-xs); color: var(--accent-deep); text-decoration: none;
+  padding: 3px 6px; border-radius: var(--r-sm); white-space: nowrap;
+}
+.rd-openthread:hover { background: var(--hover); }
+.rd-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border: 0; background: transparent; color: var(--mute-2);
+  border-radius: var(--r-sm); cursor: pointer;
+}
+.rd-close:hover { background: var(--hover); color: var(--text); }
+.rd-openthread:focus-visible, .rd-close:focus-visible, .rd-link:focus-visible {
+  outline: 0; box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.rd-translate, .rd-translation {
+  padding: 8px 10px; border: var(--border); border-radius: var(--r-sm); background: var(--surface-2);
+}
+.rd-translate { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rd-link {
+  appearance: none; border: 0; background: none; padding: 0; font: inherit;
+  font-size: var(--fs-xs); color: var(--accent-deep); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.rd-link:disabled { color: var(--mute-2); cursor: default; text-decoration: none; }
+
+/* Conversation — recent messages, capped height with its own scroll so the
+   composer below always stays reachable. */
+.rd-convo { display: flex; flex-direction: column; gap: 14px; max-height: 248px; overflow-y: auto; padding-right: 4px; }
+.rd-msg { display: flex; gap: 10px; align-items: flex-start; }
+.rd-body {
+  margin: 0; line-height: 1.55; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden;
+}
+.rd-att {
+  display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--text);
+  border: var(--border); border-radius: var(--r-sm); padding: 4px 8px; background: var(--surface);
+  font-size: var(--fs-xs); max-width: 100%;
+}
+.rd-att:hover { border-color: var(--hair-strong); }
+
+/* Composer inside the drawer — borderless inset (the drawer pads it); a top
+   hairline separates it from the conversation, matching the thread's card-foot. */
+.reply-composer-bare { border-top: var(--border); padding-top: 12px; }
+
+/* Close-the-loop footer — fenced from the composer's Send by its own hairline,
+   so answering and closing never blur into one control. */
+.rd-foot { padding-top: 12px; border-top: var(--border); }
+.rd-foot-closed { display: flex; align-items: center; gap: 8px; }
+
+/* ═══════════════════════════════════════════════════════════
+   TOAST — confirming / undo / error surface (bottom-center).
+   Inverted oat-deep surface so transient feedback reads clearly
+   against the cream page; ember carries the Undo action.
+   ═══════════════════════════════════════════════════════════ */
+.toast-region {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 90;            /* above modal (60) and ⌘K (80) */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(440px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 10px 10px 14px;
+  background: var(--oat-deep);
+  color: var(--cream);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 28px -8px rgba(26, 24, 21, 0.45), 0 2px 6px rgba(26, 24, 21, 0.25);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  animation: toast-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.toast.err { background: var(--rust-deep); }
+.toast-msg { flex: 1; min-width: 0; }
+.toast-action {
+  appearance: none;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ember);
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+}
+.toast.err .toast-action { color: var(--cream); text-decoration: underline; }
+.toast-action:hover { background: rgba(251, 247, 240, 0.10); }
+/* Keyboard focus uses the app's ember-soft ring (PRODUCT.md a11y) — it reads
+   clearly on the dark toast surface where the browser default would not. */
+.toast-action:focus-visible,
+.toast-close:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.toast-close {
+  appearance: none;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: rgba(251, 247, 240, 0.6);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.toast-close:hover { color: var(--cream); background: rgba(251, 247, 240, 0.10); }
+
+/* ═══════════════════════════════════════════════════════════
+   MOBILE ADAPTATION — phone (≤640px)
+   The dashboard is a desk tool first, but PMs triage on a phone.
+   The work here is rethinking each surface for touch + narrow,
+   not scaling the desktop down: dense tables become stacked
+   cards, the kanban stacks into lanes, modals dock as sheets,
+   and every control clears a 44px touch target.
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── 1 · Safe areas ──────────────────────────────────────────
+   env() resolves to 0 wherever there's no inset, so these are
+   inert on desktop and only act on notched / home-indicator
+   devices. The cream surface bleeds under the notch (viewport-
+   fit=cover); these keep the controls clear of it. */
+.topbar {
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+  padding-top: env(safe-area-inset-top);
+  height: calc(52px + env(safe-area-inset-top));
+}
+.mobile-nav {
+  padding-top: max(18px, env(safe-area-inset-top));
+  padding-bottom: max(18px, env(safe-area-inset-bottom));
+  padding-left: max(14px, env(safe-area-inset-left));
+}
+.toast-region {
+  bottom: max(24px, calc(env(safe-area-inset-bottom) + 12px));
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+@media (max-width: 767px) {
+  .content {
+    padding-left: max(18px, env(safe-area-inset-left));
+    padding-right: max(18px, env(safe-area-inset-right));
+    padding-bottom: calc(40px + env(safe-area-inset-bottom));
+  }
+}
+/* The top bar's 20px padding + 18px gaps crowd the narrowest phones
+   (the cmdk + bell + avatar cluster spilling a few px past 320). Tighten
+   both at phone width so the brand and the actions always fit. */
+@media (max-width: 640px) {
+  .topbar {
+    gap: 10px;
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+  }
+  .topbar-right { gap: 4px; }
+}
+
+/* ── 2 · Touch targets ───────────────────────────────────────
+   On a coarse pointer the primary controls grow to a ~44px hit
+   area (Apple's floor). Scoped to the controls a thumb actually
+   drives; dense in-row AI chips stay compact (the row itself is
+   the tap target, and those columns are hidden on the phone).
+   The `max-width` arm is a fallback for environments that report
+   a fine pointer at phone width (some emulators / hybrid devices). */
+@media (pointer: coarse), (max-width: 640px) {
+  .btn,
+  .dd-trigger,
+  .cmdk-btn,
+  .seg button,
+  .seg a {
+    min-height: 44px;
+  }
+  .btn.sm,
+  .dd-trigger.sm { min-height: 40px; }
+  .btn.icon-only,
+  .topbar-icon-btn,
+  .topbar-burger {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .nav-item,
+  .topnav-item,
+  .usermenu-item,
+  .cmdk-opt,
+  .dd-opt,
+  .bell-row { min-height: 44px; }
+  .reply-btn { min-height: 40px; padding: 8px 12px; }
+  .rd-close,
+  .rd-openthread,
+  .toast-action,
+  .toast-close { min-height: 40px; min-width: 40px; }
+  /* A finger-sized checkbox + a padded label hit area. */
+  input[type="checkbox"] { width: 18px; height: 18px; }
+}
+
+/* ── 3 · iOS focus-zoom guard ────────────────────────────────
+   Safari zooms the page when a focused field is < 16px. The app
+   sets working text at 13px; bumping the *controls* to 16px on
+   the phone keeps focus from yanking the viewport, without
+   touching the desktop density. */
+@media (max-width: 640px) {
+  .input,
+  textarea.input,
+  .cmdk-input,
+  .dd-trigger,
+  .dd-search .input,
+  select { font-size: 16px; }
+}
+
+/* ── 4 · Bottom-sheet primitive ──────────────────────────────
+   Centered dialog on desktop; on the phone it docks to the
+   bottom edge as a sheet — thumb-reachable, full-width, with a
+   slide-up entrance. Flat on paper, hairline only. Used by the
+   compose + external-ticket modals. */
+.sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(28, 24, 21, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.sheet {
+  background: var(--surface);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-md);
+  box-shadow: var(--sh-soft);
+  width: min(560px, 100%);
+  max-height: min(90vh, 720px);
+  overflow: auto;
+  position: relative;
+}
+/* Wider variant for form-heavy modals (external ticket). On the phone
+   min(640px, 100%) resolves to 100%, so it docks full-width like the rest. */
+.sheet.wide { width: min(640px, 100%); }
+@media (max-width: 640px) {
+  .sheet-scrim {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .sheet {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92vh;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    animation: sheet-up 0.3s var(--ease-out-quart);
+  }
+  /* Grab handle — the affordance that says "drag / dismiss". */
+  .sheet-handle {
+    display: block;
+    position: sticky;
+    top: 0;
+    height: 22px;
+    background: var(--surface);
+    z-index: 2;
+  }
+  .sheet-handle::before {
+    content: "";
+    position: absolute;
+    top: 9px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--hair-strong);
+  }
+}
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet { animation: none; }
+}
+
+/* ── 5 · Inbox — dense table → stacked cards ──────────────────
+   The 10-column grid scrolls sideways below 860px (a desk
+   fallback). On the phone that's wrong: each loop becomes a
+   self-labeling card. The leading type chip reads like an email
+   client's sender mark; the title sits beside it, and revenue
+   (the unit of priority) + status + wait stack underneath.
+   ID / initiative / assignee and their AI chips drop here —
+   they're a tap away in the thread — keeping triage scannable. */
+@media (max-width: 640px) {
+  /* No sideways scroll — the card owns the width. */
+  .inbox-scroll { overflow-x: visible; }
+  .inbox-grid { min-width: 0 !important; }
+
+  /* Column headers are meaningless once rows are cards. */
+  .list-row.head.inbox-grid { display: none; }
+
+  .list-row.inbox-grid.inbox-row {
+    grid-template-columns: 22px auto 1fr auto;
+    grid-template-areas:
+      "check type   title    actions"
+      "check acct   acct     acct"
+      "check status status   activity";
+    align-items: start;
+    column-gap: 10px;
+    row-gap: 9px;
+    padding: 14px 16px;
+  }
+
+  .inbox-col-check    { grid-area: check; padding-top: 1px; }
+  .inbox-col-type     { grid-area: type; }
+  .inbox-col-title    { grid-area: title; }
+  .inbox-col-account  { grid-area: acct; }
+  .inbox-col-status   { grid-area: status; align-self: center; }
+  .inbox-col-activity { grid-area: activity; justify-self: end; align-self: center; }
+  .inbox-col-actions  { grid-area: actions; justify-self: end; }
+
+  /* Dropped on the phone — recoverable one tap into the thread. */
+  .inbox-col-id,
+  .inbox-col-initiative,
+  .inbox-col-asg { display: none; }
+
+  /* Title can use the full line now that columns aren't fighting
+     for width; the preview meta sits below it instead of beside. */
+  .inbox-col-title .row-link { white-space: normal; }
+
+  /* The actions cluster gets a touch of air from the title. */
+  .inbox-col-actions .reply-btn { padding: 7px 9px; }
+}
+
+/* ── 6 · Inbox toolbar — search / tabs / sort reflow ──────────
+   Search takes its own full-width line; the loop-turn tabs scroll
+   horizontally rather than wrapping into a ragged block; sort and
+   filters wrap underneath. */
+@media (max-width: 640px) {
+  .inbox-toolbar-main { gap: 10px; }
+  .inbox-search { flex: 1 1 100% !important; min-width: 0 !important; }
+  /* Tabs take their own full-width line and scroll sideways; search and the
+     tools cluster each take a full line beneath — a clean three-row stack. */
+  .inbox-toolbar-main .seg {
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .inbox-toolbar-main .seg::-webkit-scrollbar { display: none; }
+  .inbox-toolbar-main .seg button { flex: 0 0 auto; white-space: nowrap; }
+  .inbox-tools { width: 100%; }
+  .inbox-bulkbar { gap: 10px 12px; }
+}
+
+/* ── 7 · Accounts — column tracks (was inline) ────────────────
+   Lives in CSS so the phone can reflow the row without an inline
+   grid winning the cascade. */
+.accounts-row { grid-template-columns: 1.5fr 220px 64px 70px 56px 76px; }
+.accounts-row.accounts-row--usage { grid-template-columns: 1.5fr 220px 64px 70px 56px 72px 76px; }
+
+/* Accounts list → cards. Revenue (name + ARR meter) leads; the
+   per-status counts drop (they're a column of bare numbers without
+   their header, and the full breakdown is on the account page). */
+@media (max-width: 640px) {
+  .list-row.head.accounts-row { display: none; }
+  .accounts-row {
+    grid-template-columns: 1fr auto !important;
+    grid-template-areas:
+      "name name"
+      "arr  since";
+    align-items: center;
+    row-gap: 10px;
+    column-gap: 12px;
+    padding: 14px 16px;
+  }
+  .acct-name  { grid-area: name; }
+  .acct-arr   { grid-area: arr; }
+  .acct-since { grid-area: since; justify-self: end; }
+  .acct-open,
+  .acct-shipped,
+  .acct-total,
+  .acct-active { display: none; }
+}
+
+/* ── 8 · Initiatives board — kanban → stacked lanes ───────────
+   Four equal columns crush to ~80px at phone width. They reflow
+   to two columns on a small tablet and stack to full-width lanes
+   on the phone, each lane a labeled section you scroll through.
+   Drag-to-reorder is a pointer affordance, so its hint hides on
+   touch — cards stay tappable to open. */
+.board-cols {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 768px) and (min-width: 641px) {
+  .board-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+}
+@media (max-width: 640px) {
+  .board-cols { grid-template-columns: 1fr; gap: 18px; }
+}
+@media (pointer: coarse), (max-width: 640px) {
+  .board-drag-hint { display: none; }
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+}
+
+/* ── 9 · Settings nav — sidebar → top tab strip ───────────────
+   `cols-aside` collapses the 200px rail above the content at
+   ≤768px, where an 11-item vertical stack pushes the page down.
+   Instead the nav becomes a horizontally-scrolling tab strip:
+   groups flatten, journey eyebrows drop, the active item trades
+   its ember bar for an ember-soft chip. */
+@media (max-width: 768px) {
+  .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 6px;
+    padding-bottom: 8px;
+    border-bottom: var(--border);
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .settings-nav::-webkit-scrollbar { display: none; }
+  .settings-nav > .col { flex-direction: row; gap: 6px; flex: 0 0 auto; }
+  .settings-nav .eyebrow { display: none; }
+  .settings-nav .nav-item {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    gap: 8px;
+    border: var(--border);
+    padding: 8px 12px;
+  }
+  .settings-nav .nav-item[aria-selected="true"] {
+    background: var(--accent-soft);
+    border-color: transparent;
+  }
+  .settings-nav .nav-item[aria-selected="true"]::before { display: none; }
+  /* Neutralize the Documentation link's inline top-divider + margin. */
+  .settings-nav > a.nav-item {
+    margin-top: 0 !important;
+    padding-top: 8px !important;
+    border-top: 0 !important;
+  }
+}
+
+/* ── 10 · Settings sub-panels — relax desktop min-widths ──────
+   A handful of inline panels/inputs carry fixed min-widths that
+   force a horizontal scroll on the phone; cap them to the
+   available width so they wrap instead of overflow. */
+@media (max-width: 640px) {
+  .invite-panel { min-width: 0 !important; }
+  .minw-relax { min-width: 0 !important; }
+}
+
+/* ── 11 · Embedded fixed-grid tables → wrapping rows ──────────
+   The detail-page feedback lists and the team table use a
+   `.list-row` grid with fixed pixel columns that sum well past a
+   phone's width, so they'd push the whole page sideways. Here the
+   rows become a wrapping flow: the title takes its own line, the
+   rest (id, type, status, who, when) read as a meta row beneath.
+   Column-agnostic — switching `display` to flex makes the inline
+   `grid-template-columns` inert, so it works on every variant. */
+@media (max-width: 640px) {
+  .embed-stack .list-row.head { display: none; }
+  .embed-stack .list-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 12px 14px;
+  }
+  .embed-stack .list-row > * { min-width: 0; }
+  /* Titles wrap to full lines instead of truncating to a sliver. */
+  .embed-stack .list-row .truncate { white-space: normal; overflow: visible; }
+  /* The feedback title (a direct-child .fw-med) gets its own line. */
+  .embed-stack .list-row > .fw-med { flex: 1 1 100%; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MOTION — interaction feedback, overlay entrances, transitions.
+   Product register: 120–320ms, motion conveys state (feedback,
+   reveal, transition) — never decoration. Every effect below has
+   a prefers-reduced-motion fallback (and the global net at the
+   very end of this file is the backstop).
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Press feedback ───────────────────────────────────────────
+   A click should register inside ~80ms. Transform is folded into
+   each shared control's transition so the press AND the release
+   ease (a transition only on :active wouldn't animate the spring
+   back). Scale is the whole tell — no color flash, no ripple. */
+.btn,
+.reply-btn,
+.cmdk-btn,
+.topbar-icon-btn,
+.topnav-item,
+.dd-trigger,
+.seg button,
+.seg a {
+  transition: background var(--dur-fast) var(--ease-out-quart),
+              color var(--dur-fast) var(--ease-out-quart),
+              border-color var(--dur-fast) var(--ease-out-quart),
+              box-shadow var(--dur-base) var(--ease-out-quart),
+              transform var(--dur-fast) var(--ease-out-quart);
+}
+.btn:not(:disabled):active,
+.reply-btn:not(:disabled):active,
+.cmdk-btn:active,
+.topbar-icon-btn:active,
+.dd-trigger:not(:disabled):active,
+.seg button:active,
+.seg a:active {
+  transform: scale(0.97);
+}
+
+/* ── Overlay entrances ────────────────────────────────────────
+   Menus/popovers mount on open, so a one-shot fade + rise plays
+   exactly once. Origin points back at the trigger edge; upward
+   menus rise from below so motion always reads from the anchor. */
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes pop-in-up {
+  from { opacity: 0; transform: translateY(4px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+.dd-menu,
+.usermenu-pop,
+.bell-pop {
+  animation: pop-in var(--dur-base) var(--ease-out-quint);
+  transform-origin: top center;
+}
+.dd-menu.up {
+  animation-name: pop-in-up;
+  transform-origin: bottom center;
+}
+.mention-menu {
+  animation: pop-in-up var(--dur-base) var(--ease-out-quint);
+  transform-origin: bottom center;
+}
+
+/* ── Modal / command-palette entrance ─────────────────────────
+   Scrim fades; the panel rises with a confident expo ease. The
+   .modal-* classes carry only animation — confirm.tsx keeps its
+   inline layout styles, these just add the motion. */
+@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+.cmdk-scrim,
+.modal-scrim { animation: scrim-in var(--dur-base) ease; }
+.cmdk,
+.modal-card { animation: modal-pop var(--dur-slow) var(--ease-out-expo); }
+
+/* ── Inbox loop badge — open (ember ring) ⇄ closed (filled) ────
+   Replaces the inline-styled dot in InboxTable so the state flip
+   crossfades rather than snaps. */
+.loop-badge {
+  width: 7px; height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  background: transparent;
+  border: 1.5px solid var(--accent);
+  transition: background var(--dur-base) var(--ease-out-quart),
+              border-color var(--dur-base) var(--ease-out-quart);
+}
+.loop-badge[data-closed="true"] {
+  background: var(--mute);
+  border-color: transparent;
+}
+
+/* ── Reply drawer — conversation stagger ──────────────────────
+   Messages ease in on mount with a short per-item delay (capped
+   by the 5-message convo cap). Keyed by id, so existing messages
+   stay put on refresh and only a newly-sent reply slides in. */
+@keyframes rd-msg-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.rd-msg {
+  animation: rd-msg-in var(--dur-slow) var(--ease-out-quint) backwards;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+/* ── Route transition ─────────────────────────────────────────
+   A quiet content settle on navigation (see (app)/template.tsx).
+   It mirrors .content's flex column + gap so wrapping the page
+   doesn't collapse the section rhythm. A transition between views,
+   not page-load choreography — fast, once, reduced-motion off. */
+@keyframes route-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+.route-fade {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  min-width: 0;
+  /* Quick settle, not a wait — a task tool shouldn't make power users watch
+     each page load. Snappy (180ms) so it reads as responsiveness, not delay. */
+  animation: route-in var(--dur-base) var(--ease-out-quint);
+}
+@media (max-width: 767px) { .route-fade { gap: 18px; } }
+
+/* ═══════════════════════════════════════════════════════════
+   VIEW TRANSITIONS — "follow the trail" across a navigation.
+   Opening an inbox row lifts it into the thread: the row title
+   morphs into the page heading and the loop dot blooms into the
+   full four-stage trail (shared names set in lib/view-transition).
+   Same-document only; unsupported browsers fall back to the
+   route-fade above, reduced motion skips the transition entirely.
+   ═══════════════════════════════════════════════════════════ */
+/* While a morph owns the navigation, the per-route settle stands down so the
+   two don't stack (set by lib/view-transition on <html>). */
+:root[data-vt-active] .route-fade { animation: none; }
+
+/* The page beneath the morph: a brief, even cross-fade — no slide, so the eye
+   stays on the two elements that travel. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 260ms;
+  animation-timing-function: var(--ease-out-quart);
+}
+
+/* The travelling pair — title and trail. The confident expo ease carries them
+   from the dense row up into the header; a touch longer than the cross-fade so
+   the morph reads as the lead, the page as its backdrop. */
+::view-transition-group(vt-thread-title),
+::view-transition-group(vt-thread-trail) {
+  animation-duration: 460ms;
+  animation-timing-function: var(--ease-out-expo);
+}
+/* The row's title and loop dot are small; let the heading/trail they become
+   fade in over the morph rather than the old image lingering at full strength. */
+::view-transition-old(vt-thread-title),
+::view-transition-old(vt-thread-trail) {
+  animation-timing-function: var(--ease-out-quart);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) { animation: none !important; }
+}
+
+/* ── Reduced-motion backstop ──────────────────────────────────
+   Per-effect fallbacks exist above; this is the catch-all so any
+   future animation degrades safely by default. State (e.g. an
+   :active scale) still applies — it just stops being animated. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .route-fade { animation: none; }
 }

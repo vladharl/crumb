@@ -113,25 +113,13 @@ function ComposeModal({
       role="dialog"
       aria-modal="true"
       aria-label="Compose on behalf"
-      style={{
-        position: "fixed", inset: 0, background: "rgba(28, 24, 21, 0.45)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        zIndex: 50, padding: 24,
-      }}
+      className="sheet-scrim"
       onClick={onClose}
     >
       <div
+        className="sheet"
         onClick={e => e.stopPropagation()}
-        style={{
-          background: "var(--paper, var(--surface))",
-          border: "1px solid var(--line, var(--hair))",
-          borderRadius: "var(--r-md)",
-          padding: 20,
-          width: "min(560px, 100%)",
-          maxHeight: "90vh",
-          overflow: "auto",
-          boxShadow: "var(--sh-soft)",
-        }}
+        style={{ padding: 20 }}
       >
         <div className="row between center" style={{ marginBottom: 8 }}>
           <h3 className="serif" style={{ margin: 0, fontSize: 18 }}>Compose on behalf</h3>

@@ -37,7 +37,7 @@ function detail(e: ChatEvent): string {
     case "new_submission": return `From ${e.submitterName} at ${e.accountName} · ${e.shortId}`;
     case "vendor_reply":   return `${e.vendorName}: ${clip(e.body)}`;
     case "customer_reply": return `${e.accountName}: ${clip(e.body)}`;
-    case "status_change":  return e.reason ? `${e.title} — ${clip(e.reason)}` : e.title;
+    case "status_change":  return e.reason ? `${e.title}: ${clip(e.reason)}` : e.title;
     case "roadmap_update": return e.change;
   }
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark, Ic } from "@crumb/ui";
 import { ConfirmProvider } from "@/components/confirm";
+import { ToastProvider } from "@/components/toast";
 import { TourProvider, TourLauncher, useTour } from "@/components/tour";
 import { CommandProvider, CommandButton, type CommandItem } from "@/components/CommandPalette";
 import { NotificationBell } from "@/components/NotificationBell";
@@ -56,9 +57,31 @@ export type ShellUser = {
   workspaceName: string;
 };
 
+// A quiet hello for anyone who opens devtools. Crumb is open source and
+// self-hostable, so the curious developer poking around the console is exactly
+// the person worth greeting — in the brand's own voice, tied to its thesis
+// (follow-through), with no fabricated CTA. Once per load, client-only.
+let consoleGreeted = false;
+function greetTheConsole() {
+  if (consoleGreeted || typeof window === "undefined") return;
+  consoleGreeted = true;
+  const ember = "color:#E27D3A;font:600 14px/1.5 ui-sans-serif,system-ui";
+  const mute = "color:#8A8278;font:400 12px/1.6 ui-sans-serif,system-ui";
+  const ink = "color:#6A4528;font:400 12px/1.6 ui-sans-serif,system-ui";
+  console.log(
+    "%cCrumb%c  ·  follow the trail.\n" +
+      "%cReading the console? That's the kind of follow-through Crumb runs on.\n" +
+      "It's open source. Self-host it, read the source, make it yours.",
+    ember, mute, ink,
+  );
+}
+
 export function AppShell({ user, aiEnabled = false, tourDone = true, children }: { user: ShellUser; aiEnabled?: boolean; tourDone?: boolean; children: ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+
+  // Greet anyone who opens the console — once, on first mount.
+  useEffect(() => { greetTheConsole(); }, []);
 
   // Close the mobile sheet when we grow back to desktop.
   useEffect(() => {
@@ -80,6 +103,7 @@ export function AppShell({ user, aiEnabled = false, tourDone = true, children }:
 
   return (
     <ConfirmProvider>
+    <ToastProvider>
     <TourProvider autoStart={!tourDone}>
     <CommandProvider items={paletteItems}>
     <div className="app">
@@ -149,6 +173,7 @@ export function AppShell({ user, aiEnabled = false, tourDone = true, children }:
     </div>
     </CommandProvider>
     </TourProvider>
+    </ToastProvider>
     </ConfirmProvider>
   );
 }

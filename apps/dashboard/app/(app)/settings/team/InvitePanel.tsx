@@ -30,7 +30,7 @@ export function InvitePanel({ canInvite }: { canInvite: boolean }) {
   }
 
   return (
-    <div style={{
+    <div className="invite-panel" style={{
       border: "var(--border)",
       borderRadius: "var(--r-md)",
       padding: 14,

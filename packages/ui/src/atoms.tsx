@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, ReactNode } from "react";
 
 type CardProps = HTMLAttributes<HTMLDivElement> & { className?: string };
 export const Card = ({ children, className = "", ...rest }: CardProps) => (
@@ -66,17 +66,20 @@ export const Field = ({ label, help, htmlFor, children }: { label?: ReactNode; h
   </div>
 );
 
-export const PageHead = ({ crumb, title, lede, actions }: {
+export const PageHead = ({ crumb, title, lede, actions, titleStyle }: {
   crumb?: ReactNode;
   title: ReactNode;
   lede?: ReactNode;
   actions?: ReactNode;
+  // Lets a page tag its heading as a View Transition shared element — e.g. the
+  // thread title that an inbox row morphs into. Inert everywhere else.
+  titleStyle?: CSSProperties;
 }) => (
   <div className="content-head">
     <div className="top-row">
       <div className="col gap-2 grow">
         {crumb && <span className="crumb">{crumb}</span>}
-        <h1>{title}</h1>
+        <h1 style={titleStyle}>{title}</h1>
       </div>
       {actions && <div className="row gap-2" style={{ flexWrap: "wrap" }}>{actions}</div>}
     </div>

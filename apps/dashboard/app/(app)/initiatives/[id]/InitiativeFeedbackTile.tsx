@@ -35,7 +35,7 @@ export async function InitiativeFeedbackTile({ id }: { id: string }) {
   return (
     <Card style={{ padding: 0 }}>
       <CardHead title={`Feedback · ${total}`} after={canManage ? <AddItemsButton initiativeId={id} /> : null} />
-      <div className="list">
+      <div className="list embed-stack">
         {feedback.length === 0 && (
           <div className="card-body">
             <p className="text-sm muted" style={{ margin: 0 }}>

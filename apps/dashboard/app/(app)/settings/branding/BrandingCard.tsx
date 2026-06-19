@@ -175,7 +175,7 @@ function BrandingPreview({
           onChange={e => setSiteInput(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
           onBlur={() => loadSite(siteInput)}
-          placeholder="yourproduct.com — type a URL to preview the tab on your real site"
+          placeholder="Type a URL like yourproduct.com to preview the tab on your real site"
           spellCheck={false}
           aria-label="Site to preview"
           style={{
@@ -189,7 +189,7 @@ function BrandingPreview({
         {siteState === "error" && <span className="text-2xs" style={{ color: "var(--rust, #B23A34)", flexShrink: 0 }}>{siteError}</span>}
         {siteState === "loaded" && siteThin && (
           <span className="text-2xs" style={{ color: "var(--mute)", flexShrink: 0 }}>
-            JS app — may stay blank without sign-in; try a public page
+            JS apps may stay blank without sign-in; try a public page
           </span>
         )}
       </div>
@@ -273,7 +273,7 @@ function BrandingPreview({
             color: "var(--mute)",
             whiteSpace: "nowrap",
           }}>
-            Launcher hidden — your product opens it via window.crumb.open()
+            Launcher hidden. Your product opens it via window.crumb.open()
           </span>
         )}
       </div>

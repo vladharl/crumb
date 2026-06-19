@@ -65,6 +65,7 @@ export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; i
       {isAdmin && (
         <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
           <input
+            className="minw-relax"
             value={url}
             onChange={e => setUrl(e.target.value)}
             placeholder="https://your-app.example.com/crumb/webhook"

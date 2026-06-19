@@ -28,7 +28,7 @@ export function AccountMappingPanel({ initial, isManager }: { initial: AccountVi
     setError(null);
     startTransition(async () => {
       const r = (await fn()) as { ok: boolean; error?: string };
-      if (r && r.ok === false) setError(r.error ?? "Something went wrong.");
+      if (r && r.ok === false) setError(r.error ?? "Something went wrong. Try again.");
       else { after?.(); router.refresh(); }
     });
   };
@@ -59,6 +59,7 @@ export function AccountMappingPanel({ initial, isManager }: { initial: AccountVi
       {isManager && (
         <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
           <input
+            className="minw-relax"
             value={newName}
             onChange={e => setNewName(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") add(); }}
@@ -109,9 +110,9 @@ export function AccountMappingPanel({ initial, isManager }: { initial: AccountVi
                         <Btn sm variant="ghost" onClick={() => setEditing({ id: acc.id, name: acc.name })}>Rename</Btn>
                         {confirmDelete === acc.id ? (
                           <>
-                            <span className="text-xs" style={{ color: "var(--err-text)" }}>Delete?</span>
-                            <Btn sm variant="primary" onClick={() => run(() => deleteAccount(acc.id), () => setConfirmDelete(null))} disabled={pending}>Yes</Btn>
-                            <Btn sm variant="ghost" onClick={() => setConfirmDelete(null)}>No</Btn>
+                            <span className="text-xs" style={{ color: "var(--err-text)" }}>Delete account?</span>
+                            <Btn sm variant="danger" onClick={() => run(() => deleteAccount(acc.id), () => setConfirmDelete(null))} disabled={pending}>Delete</Btn>
+                            <Btn sm variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Btn>
                           </>
                         ) : (
                           <Btn sm variant="ghost" onClick={() => { setConfirmDelete(acc.id); setError(null); }}>Delete</Btn>

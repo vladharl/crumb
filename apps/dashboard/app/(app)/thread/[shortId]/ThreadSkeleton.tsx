@@ -10,7 +10,13 @@ export function ThreadSkeleton({ shortId }: { shortId?: string }) {
       <PageHead
         crumb={<><span>Inbox</span><Ic.chevR style={{ width: 10, height: 10 }} />{shortId ? <span className="mono">{shortId}</span> : <SkeletonLine width={48} height={10} />}</>}
         title={<SkeletonLine width="55%" height={22} />}
-        actions={<SkeletonPill width={84} />}
+        // Carry the morph names on the skeleton too, so an opening row has a
+        // target on the very first frame (before content streams) — the title
+        // lifts into this heading slot and the loop dot into the trail slot,
+        // then the real header takes their place in situ. Keeps the morph
+        // robust regardless of how long the thread data takes to load.
+        titleStyle={{ viewTransitionName: "vt-thread-title" }}
+        actions={<span style={{ viewTransitionName: "vt-thread-trail", display: "inline-flex", lineHeight: 0 }}><SkeletonPill width={84} /></span>}
       />
 
       <div className="seg" aria-hidden>

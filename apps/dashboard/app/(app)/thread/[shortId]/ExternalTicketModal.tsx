@@ -96,25 +96,13 @@ export function ExternalTicketModal({
       role="dialog"
       aria-modal="true"
       aria-label={`Create ${providerLabel} ticket`}
-      style={{
-        position: "fixed", inset: 0, background: "rgba(28, 24, 21, 0.45)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        zIndex: 50, padding: 24,
-      }}
+      className="sheet-scrim"
       onClick={onClose}
     >
       <div
+        className="sheet wide"
         onClick={e => e.stopPropagation()}
-        style={{
-          background: "var(--paper, var(--surface))",
-          border: "1px solid var(--line, var(--hair))",
-          borderRadius: "var(--r-md)",
-          padding: 20,
-          width: "min(640px, 100%)",
-          maxHeight: "90vh",
-          overflow: "auto",
-          boxShadow: "var(--sh-soft)",
-        }}
+        style={{ padding: 20 }}
       >
         <div className="row between center" style={{ marginBottom: 12 }}>
           <h3 className="serif" style={{ margin: 0, fontSize: 18 }}>Create {providerLabel} ticket</h3>

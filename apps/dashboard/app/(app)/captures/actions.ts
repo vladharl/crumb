@@ -69,3 +69,27 @@ export async function dismissCapture(captureId: string): Promise<CaptureActionRe
   revalidatePath("/inbox");
   return { ok: true };
 }
+
+// Undo a dismiss: dismissal is a soft status flip, so restoring is just moving
+// it back to "pending" (only if it's still dismissed — never resurrect a
+// capture that was meanwhile accepted into a real item).
+export async function restoreCapture(captureId: string): Promise<CaptureActionResult> {
+  const { workspace, user } = await getActiveSession();
+  if (!canManage(user.role)) return { ok: false, error: "forbidden" };
+
+  const [cap] = await db
+    .select({ status: inboundCaptures.status })
+    .from(inboundCaptures)
+    .where(and(eq(inboundCaptures.workspaceId, workspace.id), eq(inboundCaptures.id, captureId)))
+    .limit(1);
+  if (!cap) return { ok: false, error: "not_found" };
+  if (cap.status !== "dismissed") return { ok: false, error: "already_decided" };
+
+  await db
+    .update(inboundCaptures)
+    .set({ status: "pending", decidedAt: null, decidedByWorkspaceUserId: null })
+    .where(and(eq(inboundCaptures.workspaceId, workspace.id), eq(inboundCaptures.id, captureId)));
+
+  revalidatePath("/inbox");
+  return { ok: true };
+}

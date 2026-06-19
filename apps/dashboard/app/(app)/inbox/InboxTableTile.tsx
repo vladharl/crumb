@@ -69,6 +69,27 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     WHERE dups.merged_into_id = items.id
   )`.as("merged_count");
 
+  // ARR at stake (revenue priority): summed ARR of the DISTINCT accounts asking
+  // for this item — itself plus any duplicates merged into it. Mirrors the
+  // thread's merge-group ARR (loadMergeGroup) so the inbox and thread agree;
+  // DISTINCT so two dupes from one account don't double-count. ::bigint because
+  // a portfolio sum can exceed int4 (~$21M); the mapper Number()s it.
+  const arrAtStake = sql<string>`(
+    SELECT COALESCE(SUM(a.arr_cents), 0)::bigint
+    FROM (
+      SELECT DISTINCT g.account_id FROM items g
+      WHERE g.id = items.id OR g.merged_into_id = items.id
+    ) grp
+    JOIN accounts a ON a.id = grp.account_id
+  )`.as("arr_at_stake");
+
+  // Reach: how many distinct accounts are asking (the merge group's account
+  // count). Drives the "N accounts" signal and the reach multiplier.
+  const reachAccounts = sql<number>`(
+    SELECT COUNT(DISTINCT g.account_id)::int FROM items g
+    WHERE g.id = items.id OR g.merged_into_id = items.id
+  )`.as("reach_accounts");
+
   const rows = await db
     .select({
       id: items.id,
@@ -79,7 +100,10 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
       status: items.status,
       assigneeId: items.assigneeId,
       createdAt: items.createdAt,
+      accountId: items.accountId,
       accountName: accounts.name,
+      arrAtStake,
+      reachAccounts,
       submitterName: accountUsers.name,
       assigneeInitials: workspaceUsers.initials,
       replyCount,
@@ -129,7 +153,10 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     status: r.status,
     assigneeId: r.assigneeId,
     createdAtIso: r.createdAt.toISOString(),
+    accountId: r.accountId,
     accountName: r.accountName,
+    arrAtStakeCents: Number(r.arrAtStake),
+    reachAccounts: r.reachAccounts,
     submitterName: r.submitterName,
     assigneeInitials: r.assigneeInitials,
     replyCount: r.replyCount,

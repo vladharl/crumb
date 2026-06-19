@@ -11,9 +11,9 @@ test("insights renders KPIs and the status funnel from seeded data", async ({ pa
   await expect(page.getByText("ARR in open loops")).toBeVisible();
   await expect(page.getByText("Median first response")).toBeVisible();
 
-  // The trend card + status funnel + a known seeded status row.
+  // The trend card + status breakdown + a known seeded status row.
   await expect(page.getByText("Feedback over time")).toBeVisible();
-  await expect(page.getByText("Status funnel")).toBeVisible();
+  await expect(page.getByText("Status breakdown")).toBeVisible();
   await expect(page.getByText(/Open|In review/).first()).toBeVisible({ timeout: 10_000 });
 
   // QBR + CSV export controls are present.

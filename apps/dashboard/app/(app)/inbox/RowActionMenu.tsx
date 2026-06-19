@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Ic } from "@crumb/ui";
 import type { Status } from "@crumb/ui";
@@ -33,7 +34,7 @@ const STATUS_OPTIONS: Array<{ value: Status; label: string }> = [
 
 export function RowActionMenu({
   itemId, shortId, assigneeId, status, initiativeId,
-  assignees, initiatives, canWrite, canManageInitiatives,
+  assignees, initiatives, canWrite, canManageInitiatives, onStatusOptimistic,
 }: {
   itemId: string;
   shortId: string;
@@ -44,6 +45,9 @@ export function RowActionMenu({
   initiatives: InitiativeOption[];
   canWrite: boolean;
   canManageInitiatives: boolean;
+  // Lets the inbox paint a single-row status change on the same frame it's
+  // chosen (optimistic overlay), reverting with `null` if the write fails.
+  onStatusOptimistic?: (status: string | null) => void;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -52,6 +56,11 @@ export function RowActionMenu({
   const [pending, startTransition] = useTransition();
   const rootRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // The menu is portaled to <body> (see render) so it escapes the row's
+  // `row-interactive` stacking context and the inbox's overflow clip — hence it
+  // needs viewport coords. null until first placed, to avoid a flash at 0,0.
+  const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
 
   function close() {
     setOpen(false);
@@ -59,22 +68,50 @@ export function RowActionMenu({
     setCopied(false);
   }
 
+  // Anchor the fixed menu to the trigger, right-aligned, flipping above when it
+  // would overflow the viewport bottom. Recomputed on open, pane change, and
+  // scroll/resize so it stays glued to the row.
+  const place = useCallback(() => {
+    const b = btnRef.current?.getBoundingClientRect();
+    if (!b) return;
+    const menuH = menuRef.current?.offsetHeight ?? 0;
+    const below = b.bottom + 4;
+    const flipUp = menuH > 0 && below + menuH > window.innerHeight - 8 && b.top - menuH - 4 > 8;
+    setCoords({
+      top: flipUp ? b.top - menuH - 4 : below,
+      right: Math.max(8, window.innerWidth - b.right),
+    });
+  }, []);
+
   // Close on outside click + Escape (same idiom as Dropdown).
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) close();
+      const t = e.target as Node;
+      // The menu is portaled outside rootRef, so check it too before closing —
+      // otherwise a click on any menu option would dismiss before it fires.
+      if (!rootRef.current?.contains(t) && !menuRef.current?.contains(t)) close();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopPropagation(); close(); btnRef.current?.focus(); }
     };
+    const onReflow = () => place();
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onReflow, true);
+    window.addEventListener("resize", onReflow);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onReflow, true);
+      window.removeEventListener("resize", onReflow);
     };
-  }, [open]);
+  }, [open, place]);
+
+  // Position before the browser paints, so the menu never flashes mis-placed.
+  useLayoutEffect(() => {
+    if (open) place();
+  }, [open, pane, place]);
 
   function run(fn: () => Promise<{ ok: boolean }>) {
     startTransition(async () => {
@@ -83,6 +120,20 @@ export function RowActionMenu({
         close();
         router.refresh();
       }
+    });
+  }
+
+  // Status gets the optimistic path: the inbox repaints the row on this frame
+  // (re-bucketing it, sliding it via FLIP), the menu closes, and the write
+  // reconciles in the background — reverting the paint if it fails.
+  function setStatus(next: Status) {
+    if (next === status) { close(); return; }
+    onStatusOptimistic?.(next);
+    close();
+    startTransition(async () => {
+      const r = await bulkUpdateStatus([itemId], next);
+      if (r.ok) router.refresh();
+      else onStatusOptimistic?.(null);
     });
   }
 
@@ -138,12 +189,22 @@ export function RowActionMenu({
         <Ic.more style={{ width: 14, height: 14 }} />
       </button>
 
-      {open && (
+      {open && typeof document !== "undefined" && createPortal(
         <div
+          ref={menuRef}
           className="dd-menu"
           role="menu"
           aria-label={`Actions for ${shortId}`}
-          style={{ right: 0, left: "auto", minWidth: 190, zIndex: 30 }}
+          style={{
+            position: "fixed",
+            top: coords?.top ?? -9999,
+            right: coords?.right ?? 8,
+            left: "auto",
+            bottom: "auto",
+            minWidth: 190,
+            zIndex: 80,
+            visibility: coords ? "visible" : "hidden",
+          }}
         >
           {pane === "root" && (
             <>
@@ -170,7 +231,7 @@ export function RowActionMenu({
             <>
               {backRow}
               {STATUS_OPTIONS.map(s =>
-                opt({ key: s.value, label: s.label, selected: s.value === status, onClick: () => run(() => bulkUpdateStatus([itemId], s.value)) }),
+                opt({ key: s.value, label: s.label, selected: s.value === status, onClick: () => setStatus(s.value) }),
               )}
             </>
           )}
@@ -184,7 +245,8 @@ export function RowActionMenu({
               )}
             </>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

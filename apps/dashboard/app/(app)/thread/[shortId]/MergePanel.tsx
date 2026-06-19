@@ -18,6 +18,9 @@ export type ThreadMergeData = {
   // Duplicates folded into this (canonical) item.
   mergedCount: number;
   combinedArrCents: number;
+  // Distinct accounts across the merge group — the inbox's "reach" / the unit
+  // of revenue priority. followerCount (distinct people) is secondary.
+  accountCount: number;
   followerCount: number;
   // Pending capture-time dedupe suggestion (this item ~ candidate).
   pendingSuggestion: { candidateShortId: string; candidateTitle: string; similarity: number } | null;
@@ -118,8 +121,12 @@ export function MergePanel({
         {merge.mergedCount > 0 && (
           <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
             <Pill solid><Ic.copy style={{ width: 10, height: 10 }} />{merge.mergedCount} merged</Pill>
+            {/* Same vocabulary as the inbox: revenue at stake across the
+                distinct accounts asking (followers — people — kept as the
+                secondary count). */}
             <span className="text-xs muted">
-              Combined {formatArr(merge.combinedArrCents)} ARR · {merge.followerCount} {merge.followerCount === 1 ? "follower" : "followers"}
+              {formatArr(merge.combinedArrCents)} at stake · {merge.accountCount} {merge.accountCount === 1 ? "account" : "accounts"}
+              {merge.followerCount > merge.accountCount && ` · ${merge.followerCount} ${merge.followerCount === 1 ? "follower" : "followers"}`}
             </span>
           </div>
         )}

@@ -62,6 +62,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           role="dialog"
           aria-modal="true"
           aria-label={pending.title}
+          className="modal-scrim"
           onClick={() => close(false)}
           style={{
             position: "fixed", inset: 0, background: "rgba(28, 24, 21, 0.45)",
@@ -70,6 +71,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           }}
         >
           <div
+            className="modal-card"
             onClick={e => e.stopPropagation()}
             style={{
               background: "var(--paper, var(--surface))",

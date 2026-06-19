@@ -47,7 +47,7 @@ export default async function SettingsTeamPage() {
         title={`Team & roles · ${team.length}`}
         after={<InvitePanel canInvite={canInvite} />}
       />
-      <div className="list">
+      <div className="list embed-stack">
         <div className="list-row head" style={{ gridTemplateColumns: "1.4fr 1fr 130px 120px 1.2fr" }}>
           <span>Member</span><span>Email</span><span>Role</span><span>Status</span><span></span>
         </div>

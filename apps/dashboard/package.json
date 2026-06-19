@@ -7,6 +7,8 @@
     "ee:strip": "node scripts/apply-ee.mjs strip",
     "predev": "node scripts/apply-ee.mjs apply",
     "dev": "CRUMB_EDITION=cloud next dev",
+    "predev:turbo": "node scripts/apply-ee.mjs apply",
+    "dev:turbo": "CRUMB_EDITION=cloud next dev --turbo",
     "build": "pnpm build:community",
     "build:community": "node scripts/apply-ee.mjs strip && CRUMB_EDITION=community next build",
     "build:cloud": "node scripts/apply-ee.mjs apply && CRUMB_EDITION=cloud next build",

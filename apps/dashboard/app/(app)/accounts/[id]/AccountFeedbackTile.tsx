@@ -36,7 +36,7 @@ export async function AccountFeedbackTile({ accountId }: { accountId: string }) 
   return (
     <Card>
       <CardHead title={`All feedback · ${feedback.length}`} />
-      <div className="list">
+      <div className="list embed-stack">
         {feedback.length === 0 && (
           <div className="card-body">
             <p className="text-sm muted" style={{ margin: 0 }}>No submissions yet.</p>

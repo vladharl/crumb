@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition, useEffect } from "react";
+import { useMemo, useState, useTransition, type CSSProperties } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Avatar, Btn, Card, CardHead, Dropdown, Ic, PageHead, Pill, StatusDot, StatusPill, TrailDots, trailProgress } from "@crumb/ui";
 import type { Status } from "@crumb/ui";
-import { createReply, updateStatus, draftReplyAction, translateItem, assignItem, updateType } from "./actions";
+import { updateStatus, translateItem, assignItem, updateType } from "./actions";
+import { ReplyComposer } from "@/components/ReplyComposer";
 import { InitiativePanel, type ThreadInitiativeOption } from "./InitiativePanel";
 import { ThreadSuggestionCard, type ThreadSuggestion } from "./ThreadSuggestionCard";
 import { ExternalTicketTile } from "./ExternalTicketTile";
@@ -214,163 +215,16 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
   }), [item.status, messages]);
 
   const [tab, setTab] = useState<"customer" | "internal" | "trail">("customer");
-  const [draft, setDraft] = useState("");
   const [pending, startTransition] = useTransition();
   const [reasonForm, setReasonForm] = useState<{ status: Status; label: string } | null>(null);
   const [reasonText, setReasonText] = useState("");
   const [reasonError, setReasonError] = useState<string | null>(null);
-  const [sentAt, setSentAt] = useState<number | null>(null);
-  const [pendingAttachments, setPendingAttachments] = useState<ThreadAttachment[]>([]);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [drafting, setDrafting] = useState(false);
-  const [draftError, setDraftError] = useState<string | null>(null);
   const [showTranslation, setShowTranslation] = useState(false);
-
-  // ── @-mention autocomplete (internal notes only) ──
-  const taRef = useRef<HTMLTextAreaElement>(null);
-  const caretAfter = useRef<number | null>(null);
-  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
-  const [mentionIdx, setMentionIdx] = useState(0);
-
-  const mentionMatches = useMemo(() => {
-    if (!mention) return [];
-    const q = mention.query.toLowerCase();
-    return teammates.filter(t => t.name.toLowerCase().startsWith(q)).slice(0, 6);
-  }, [mention, teammates]);
-
-  // Detect an in-progress "@query" at the caret: an @ at line/word start, where
-  // the text after it is a prefix of at least one teammate name.
-  function detectMention(value: string, caret: number) {
-    if (tab !== "internal") { setMention(null); return; }
-    const upto = value.slice(0, caret);
-    const at = upto.lastIndexOf("@");
-    if (at < 0) { setMention(null); return; }
-    if (at > 0 && !/\s/.test(value[at - 1]!)) { setMention(null); return; }
-    const query = upto.slice(at + 1);
-    if (query.includes("\n")) { setMention(null); return; }
-    const ql = query.toLowerCase();
-    const isPrefix = teammates.some(t => t.name.toLowerCase().startsWith(ql));
-    if (!isPrefix) { setMention(null); return; }
-    setMention({ start: at, query });
-    setMentionIdx(0);
-  }
-
-  function onDraftChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setDraft(e.target.value);
-    detectMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
-  }
-
-  function pickMention(t: { id: string; name: string }) {
-    if (!mention) return;
-    const caret = taRef.current?.selectionStart ?? draft.length;
-    const next = draft.slice(0, mention.start) + `@${t.name} ` + draft.slice(caret);
-    caretAfter.current = mention.start + t.name.length + 2; // after "@Name "
-    setDraft(next);
-    setMention(null);
-  }
-
-  function onComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (!mention || mentionMatches.length === 0) return;
-    if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx(i => (i + 1) % mentionMatches.length); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx(i => (i - 1 + mentionMatches.length) % mentionMatches.length); }
-    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(mentionMatches[Math.min(mentionIdx, mentionMatches.length - 1)]!); }
-    else if (e.key === "Escape") { e.preventDefault(); setMention(null); }
-  }
-
-  // Restore the caret after a programmatic mention insertion.
-  useEffect(() => {
-    if (caretAfter.current != null && taRef.current) {
-      const pos = caretAfter.current;
-      caretAfter.current = null;
-      taRef.current.focus();
-      taRef.current.setSelectionRange(pos, pos);
-    }
-  }, [draft]);
-
-  async function pickAndUpload() {
-    setUploadError(null);
-    // Spin up a hidden <input type="file"> on-demand so we don't clutter
-    // the DOM with a permanently-mounted picker.
-    const input = document.createElement("input");
-    input.type = "file";
-    // Single file per reply for v1 — keep the UX simple.
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      setUploading(true);
-      try {
-        const form = new FormData();
-        form.append("file", file);
-        const res = await fetch("/api/v1/uploads", { method: "POST", body: form });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setUploadError(data?.error || `Upload failed (${res.status})`);
-        } else {
-          setPendingAttachments(prev => [...prev, {
-            id: data.id,
-            filename: data.filename,
-            contentType: data.content_type,
-            sizeBytes: data.size_bytes,
-          }]);
-        }
-      } catch (err) {
-        setUploadError(err instanceof Error ? err.message : "Upload failed");
-      } finally {
-        setUploading(false);
-      }
-    };
-    input.click();
-  }
-
-  function removePendingAttachment(id: string) {
-    setPendingAttachments(prev => prev.filter(a => a.id !== id));
-  }
-
-  // Auto-clear the "Sent" confirmation after a moment so it doesn't
-  // linger past the next interaction.
-  useEffect(() => {
-    if (!sentAt) return;
-    const t = setTimeout(() => setSentAt(null), 2200);
-    return () => clearTimeout(t);
-  }, [sentAt]);
-
-  const onSend = () => {
-    const body = draft.trim();
-    if (!body && pendingAttachments.length === 0) return;
-    const attachmentIds = pendingAttachments.map(a => a.id);
-    startTransition(async () => {
-      const res = await createReply({
-        itemShortId: item.shortId,
-        body,
-        internal: tab === "internal",
-        attachmentIds,
-      });
-      if (res.ok) {
-        setDraft("");
-        setPendingAttachments([]);
-        setSentAt(Date.now());
-        router.refresh();
-      }
-    });
-  };
 
   const onStatus = (next: Status) => {
     startTransition(async () => {
       const res = await updateStatus({ itemShortId: item.shortId, status: next });
       if (res.ok) router.refresh();
-    });
-  };
-
-  // AI reply draft (feature 7) — fills the composer; the vendor edits + sends.
-  const onDraft = () => {
-    setDraftError(null);
-    setDrafting(true);
-    startTransition(async () => {
-      const res = await draftReplyAction(item.shortId);
-      setDrafting(false);
-      if (res.ok) setDraft(res.draft);
-      else setDraftError(res.error === "ai_cap_reached" ? "Monthly AI limit reached." : "Couldn't draft a reply. Try again.");
     });
   };
 
@@ -432,9 +286,14 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
       <PageHead
         crumb={<><span>Inbox</span><Ic.chevR style={{ width: 10, height: 10 }} /><span className="mono">{item.shortId}</span></>}
         title={item.title}
+        // Shared elements for the inbox→thread View Transition: the row's title
+        // lifts into this heading and its loop dot blooms into the full trail.
+        titleStyle={{ viewTransitionName: "vt-thread-title" }}
         actions={
           <>
-            <TrailDots progress={progress} size={14} />
+            <span style={{ viewTransitionName: "vt-thread-trail", display: "inline-flex", lineHeight: 0 }}>
+              <TrailDots progress={progress} size={14} />
+            </span>
             <StatusPill status={item.status as Status} />
             {item.externalTicketUrl && (
               <a href={item.externalTicketUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
@@ -487,22 +346,18 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                   Nothing here yet. Replies and status changes will land in this trail.
                 </p>
               ) : (
-                <div className="col gap-4" style={{ position: "relative", paddingLeft: 18 }}>
-                  <div style={{
-                    position: "absolute",
-                    left: 5, top: 6, bottom: 6, width: 1,
-                    background: "var(--hair-strong)",
-                  }} />
-                  {trail.map(entry => entry.kind === "notice" ? (
-                    <div key={`n:${entry.notice.id}`} className="row gap-3" style={{ alignItems: "flex-start", position: "relative" }}>
-                      <span style={{
-                        width: 11, height: 11, borderRadius: 999,
-                        background: "var(--ember)",
-                        marginLeft: -18, marginRight: 7, flexShrink: 0,
-                        marginTop: 6,
-                        opacity: 0.85,
-                      }} />
-                      <div className="col grow gap-1">
+                // The loop made spatial: an ember spine draws itself top→bottom
+                // (oldest → newest) and each crumb lands as the line reaches it,
+                // so the trail is *seen* being followed. The closing crumb blooms
+                // once at the end — "the customer heard back". All reveal-only:
+                // the resting state is fully visible, and reduced motion shows
+                // the whole trail static (see globals.css .trail-timeline).
+                <div className="trail-timeline" style={{ "--n": trail.length } as CSSProperties}>
+                  <span className="trail-spine" aria-hidden />
+                  {trail.map((entry, i) => entry.kind === "notice" ? (
+                    <div key={`n:${entry.notice.id}`} className="trail-node" style={{ "--i": i } as CSSProperties}>
+                      <span className="trail-crumb notice" aria-hidden />
+                      <div className="trail-node-body col grow gap-1">
                         <span className="text-sm">
                           <span className="fw-med">{submitter.name}</span>
                           <span className="muted">
@@ -515,17 +370,12 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                           )}
                         </span>
                       </div>
-                      <span className="text-xs muted mono">{relAge(entry.at)}</span>
+                      <span className="trail-node-age text-xs muted mono">{relAge(entry.at)}</span>
                     </div>
                   ) : entry.kind === "event" ? (
-                    <div key={`e:${entry.event.id}`} className="row gap-3" style={{ alignItems: "flex-start", position: "relative" }}>
-                      <span style={{
-                        width: 11, height: 11, borderRadius: 999,
-                        background: "var(--accent)",
-                        marginLeft: -18, marginRight: 7, flexShrink: 0,
-                        marginTop: 6,
-                      }} />
-                      <div className="col grow gap-1">
+                    <div key={`e:${entry.event.id}`} className="trail-node" style={{ "--i": i } as CSSProperties}>
+                      <span className="trail-crumb event" aria-hidden />
+                      <div className="trail-node-body col grow gap-1">
                         <span className="text-sm">
                           <span className="fw-med">{entry.event.byName ?? "System"}</span>
                           <span className="muted">
@@ -544,18 +394,12 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                           </p>
                         )}
                       </div>
-                      <span className="text-xs muted mono">{relAge(entry.at)}</span>
+                      <span className="trail-node-age text-xs muted mono">{relAge(entry.at)}</span>
                     </div>
                   ) : (
-                    <div key={`m:${entry.msg.id}`} className="row gap-3" style={{ alignItems: "flex-start", position: "relative" }}>
-                      <span style={{
-                        width: 11, height: 11, borderRadius: 999,
-                        background: "var(--cream-2)",
-                        border: "var(--border-strong)",
-                        marginLeft: -18, marginRight: 7, flexShrink: 0,
-                        marginTop: 6,
-                      }} />
-                      <div className="col grow gap-1">
+                    <div key={`m:${entry.msg.id}`} className="trail-node" style={{ "--i": i } as CSSProperties}>
+                      <span className="trail-crumb message" aria-hidden />
+                      <div className="trail-node-body col grow gap-1">
                         <span className="text-sm">
                           <span className="fw-med">{entry.msg.authorName}</span>
                           <span className="muted"> replied</span>
@@ -564,7 +408,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                           {entry.msg.body.length > 160 ? entry.msg.body.slice(0, 159) + "…" : entry.msg.body}
                         </p>
                       </div>
-                      <span className="text-xs muted mono">{relAge(entry.at)}</span>
+                      <span className="trail-node-age text-xs muted mono">{relAge(entry.at)}</span>
                     </div>
                   ))}
                 </div>
@@ -625,108 +469,16 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
             )}
           </div>
 
-          <div className="card-foot col gap-3" style={{ alignItems: "stretch" }}>
-            <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
-              <Pill ring ringFill={tab !== "internal"}>
-                {tab === "internal" ? "Internal only" : `Replying to ${submitter.name}. ${account.name} can see this`}
-              </Pill>
-              {!canWrite && tab !== "internal" && (
-                <span className="text-xs muted">Viewers can only post internal notes. Switch to the Internal tab.</span>
-              )}
-              {sentAt && (
-                <Pill solid>
-                  <Ic.check style={{ width: 10, height: 10 }} />
-                  Sent
-                </Pill>
-              )}
-            </div>
-            <div style={{ position: "relative" }}>
-              <textarea
-                ref={taRef}
-                className="input"
-                rows={3}
-                placeholder={tab === "internal" ? "Internal note. Type @ to mention a teammate. (Acme can't see this.)" : "Write a reply."}
-                value={draft}
-                onChange={onDraftChange}
-                onKeyDown={onComposerKeyDown}
-                onBlur={() => setTimeout(() => setMention(null), 120)}
-                disabled={pending}
-              />
-              {mention && mentionMatches.length > 0 && (
-                <div className="mention-menu">
-                  {mentionMatches.map((t, i) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      className={`mention-opt${i === mentionIdx ? " active" : ""}`}
-                      onMouseDown={e => { e.preventDefault(); pickMention(t); }}
-                      onMouseEnter={() => setMentionIdx(i)}
-                    >
-                      <Avatar size="sm" kind="ink">{t.initials}</Avatar>
-                      <span className="truncate">{t.name}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            {pendingAttachments.length > 0 && (
-              <div className="row gap-2" style={{ flexWrap: "wrap" }}>
-                {pendingAttachments.map(a => (
-                  <span key={a.id} className="row gap-2 center" style={{
-                    border: "var(--border)",
-                    borderRadius: "var(--r-sm)",
-                    padding: "4px 6px 4px 10px",
-                    background: "var(--surface)",
-                    fontSize: "var(--fs-xs)",
-                  }}>
-                    <Ic.attach style={{ width: 11, height: 11, opacity: 0.6 }} />
-                    <span className="truncate" style={{ maxWidth: 220 }}>{a.filename}</span>
-                    <span className="text-2xs muted mono">{humanBytes(a.sizeBytes)}</span>
-                    <button
-                      onClick={() => removePendingAttachment(a.id)}
-                      style={{ background: "none", border: 0, cursor: "pointer", padding: 2, color: "var(--mute-2)" }}
-                      aria-label="Remove attachment"
-                    >
-                      <Ic.x style={{ width: 11, height: 11 }} />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            {uploadError && (
-              <span className="text-xs" style={{ color: "var(--err-text)" }}>{uploadError}</span>
-            )}
-            {draftError && (
-              <span className="text-xs" style={{ color: "var(--err-text)" }}>{draftError}</span>
-            )}
-            <div className="row gap-2 center">
-              <Btn
-                variant="ghost"
-                iconOnly
-                icon={<Ic.attach style={{ width: 13, height: 13 }} />}
-                onClick={pickAndUpload}
-                disabled={pending || uploading}
-                aria-label="Attach a file"
-              />
-              {aiReplyAvailable && tab !== "internal" && canWrite && (
-                <Btn
-                  sm
-                  variant="ghost"
-                  icon={<Ic.sparkle style={{ width: 12, height: 12 }} />}
-                  onClick={onDraft}
-                  disabled={pending}
-                >
-                  {drafting ? "Drafting…" : "AI draft"}
-                </Btn>
-              )}
-              {uploading && <span className="text-xs muted">Uploading…</span>}
-              <div style={{ flex: 1 }} />
-              <Btn sm onClick={() => { setDraft(""); setPendingAttachments([]); }} disabled={pending || (!draft && pendingAttachments.length === 0)}>Clear</Btn>
-              <Btn sm variant="primary" icon={<Ic.send style={{ width: 12, height: 12 }} />} onClick={onSend} disabled={pending || (!draft.trim() && pendingAttachments.length === 0) || (!canWrite && tab !== "internal")}>
-                {pending ? "Sending…" : "Send"}
-              </Btn>
-            </div>
-          </div>
+          <ReplyComposer
+            itemShortId={item.shortId}
+            tab={tab}
+            submitterName={submitter.name}
+            accountName={account.name}
+            teammates={teammates}
+            aiReplyAvailable={aiReplyAvailable}
+            canWrite={canWrite}
+            onSent={() => router.refresh()}
+          />
         </Card>
 
         <div className="col gap-4">

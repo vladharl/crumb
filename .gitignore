@@ -36,3 +36,6 @@ apps/dashboard/playwright-report
 
 # Local Claude tooling state
 .claude/
+
+# Impeccable design-hook cache + critiques (local tooling state)
+.impeccable/

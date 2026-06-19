@@ -1,10 +1,10 @@
 import { Card, Ic, SkeletonLine, SkeletonRow } from "@crumb/ui";
 
-const GRID = "28px 64px 86px 1.4fr 110px 140px 110px 56px 56px 22px";
+// Mirrors the live InboxTable's desktop grid + chrome so nothing relabels or
+// shifts on hydration: same column template, the "Activity" header, and the
+// five loop-turn tabs the real toolbar shows.
+const GRID = "28px 64px 86px minmax(180px, 1.4fr) 110px 140px 110px 56px 72px 22px";
 
-// Mirrors the structure of InboxTable while data is loading: the toolbar
-// (search + tabs) renders as static chrome (no data needed), and the table
-// body shows 12 skeleton rows that match the live grid template.
 export function InboxTableSkeleton() {
   return (
     <>
@@ -17,38 +17,42 @@ export function InboxTableSkeleton() {
             padding: "6px 10px",
           }}
         >
-          <Ic.search style={{ width: 13, height: 13, color: "var(--mute-2)" }} />
+          <Ic.search style={{ width: 13, height: 13, color: "var(--mute)" }} />
           <SkeletonLine width="60%" height={10} />
         </div>
         <div className="seg" aria-hidden>
-          <button disabled>All</button>
-          <button disabled>Open</button>
+          <button disabled>Your turn</button>
+          <button disabled>Waiting</button>
+          <button disabled>Closed</button>
           <button disabled>Mine</button>
+          <button disabled>All</button>
         </div>
       </div>
 
       <Card style={{ padding: 0 }}>
-        <div className="list">
-          <div className="list-row head" style={{ gridTemplateColumns: GRID }}>
-            <span />
-            <span>ID</span>
-            <span>Type</span>
-            <span>Title</span>
-            <span>Account · by</span>
-            <span>Initiative</span>
-            <span>Status</span>
-            <span>Asg.</span>
-            <span>Age</span>
-            <span />
+        <div className="inbox-scroll">
+          <div className="list">
+            <div className="list-row head" style={{ gridTemplateColumns: GRID }}>
+              <span />
+              <span>ID</span>
+              <span>Type</span>
+              <span>Title</span>
+              <span>Account · by</span>
+              <span>Initiative</span>
+              <span>Status</span>
+              <span>Asg.</span>
+              <span>Activity</span>
+              <span />
+            </div>
+            {Array.from({ length: 12 }).map((_, i) => (
+              <SkeletonRow
+                key={i}
+                gridTemplateColumns={GRID}
+                columns={["blank", "line", "pill", "line", "line", "line", "pill", "circle", "line", "blank"]}
+                style={{ opacity: 1 - i * 0.05 }}
+              />
+            ))}
           </div>
-          {Array.from({ length: 12 }).map((_, i) => (
-            <SkeletonRow
-              key={i}
-              gridTemplateColumns={GRID}
-              columns={["blank", "line", "pill", "line", "line", "line", "pill", "circle", "line", "blank"]}
-              style={{ opacity: 1 - i * 0.05 }}
-            />
-          ))}
         </div>
       </Card>
     </>

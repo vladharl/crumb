@@ -69,7 +69,7 @@ export function renderMagicLinkHtml(v: MagicLinkVars): string {
           </td></tr>
           <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08);margin-top:32px">
             <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
-              Didn't request this? You can safely ignore the email — no account changes happen without clicking.
+              Didn't request this? You can safely ignore the email. No account changes happen without clicking.
             </p>
           </td></tr>
         </table>
@@ -247,8 +247,8 @@ const STATUS_BLURBS: Record<string, string> = {
   review:    "A PM is scoping this with the team.",
   planned:   "Picked up for an upcoming release.",
   progress:  "Engineering has started work.",
-  shipped:   "Live now — thanks for pushing on this one.",
-  declined:  "We're not building this — open the thread for the reasoning.",
+  shipped:   "Live now. Thanks for pushing on this one.",
+  declined:  "We're not building this. Open the thread for the reasoning.",
   deferred:  "Set aside for now. We'll revisit and ping you.",
   duplicate: "We're tracking this under another item.",
 };
@@ -342,7 +342,7 @@ ${v.itemTitle}
 
 ${v.vendorName} moved this${fromLabel ? ` from ${fromLabel}` : ""} to ${toLabel}.
 
-${toLabel} — ${blurb}${v.reason ? `\n\n${v.reason}` : ""}
+${toLabel}: ${blurb}${v.reason ? `\n\n${v.reason}` : ""}
 
 ${v.threadUrl ? `View thread: ${v.threadUrl}` : `Open Crumb inside ${v.workspaceName} to read the full thread or reply.`}${unsubLineText(v.unsubscribeUrl)}`;
 }
@@ -557,7 +557,7 @@ export function renderDunningHtml(v: DunningVars): string {
           <tr><td style="padding:0 8px">
             <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">Your payment didn't go through</h1>
             <p style="margin:0 0 16px;font-size:14px;color:#4A2E1F">
-              We couldn't charge the card on file for <strong style="font-weight:500">${ws}</strong>. Paid features — AI clustering, integrations, and managed email — stay live during a short grace period. Update your payment method to avoid dropping to the free plan.
+              We couldn't charge the card on file for <strong style="font-weight:500">${ws}</strong>. Paid features (AI clustering, integrations, and managed email) stay live during a short grace period. Update your payment method to avoid dropping to the free plan.
             </p>
             ${url ? `
             <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
@@ -584,7 +584,7 @@ export function renderDunningHtml(v: DunningVars): string {
 export function renderDunningText(v: DunningVars): string {
   return `Your payment didn't go through
 
-We couldn't charge the card on file for ${v.workspaceName}. Paid features stay live during a short grace period — update your payment method to avoid dropping to the free plan.
+We couldn't charge the card on file for ${v.workspaceName}. Paid features stay live during a short grace period. Update your payment method to avoid dropping to the free plan.
 
 ${v.billingUrl ? `Update payment method: ${v.billingUrl}` : "Open your Crumb dashboard → Settings → Billing to update your card."}`;
 }
@@ -618,7 +618,7 @@ export function renderRoadmapUpdateHtml(v: RoadmapUpdateVars): string {
           <tr><td style="padding:0 8px">
             <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">A roadmap item you follow was updated</h1>
             <p style="margin:0 0 20px;font-size:14px;color:#4A2E1F">
-              <strong style="font-weight:600">${name}</strong> — ${change}.
+              <strong style="font-weight:600">${name}</strong>: ${change}.
             </p>
             ${url ? `
             <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
@@ -642,7 +642,7 @@ export function renderRoadmapUpdateHtml(v: RoadmapUpdateVars): string {
 export function renderRoadmapUpdateText(v: RoadmapUpdateVars): string {
   return `A roadmap item you follow was updated
 
-${v.initiativeName} — ${v.change}.
+${v.initiativeName}: ${v.change}.
 
 ${v.productUrl ? `View the roadmap: ${v.productUrl}` : "Open the widget in your product to see the roadmap."}
 

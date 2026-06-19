@@ -649,6 +649,10 @@ export const usageEvents = pgTable("usage_events", {
   byWorkspaceTs: index("usage_events_workspace_ts_idx").on(t.workspaceId, t.ts),
   byAccountTs: index("usage_events_account_ts_idx").on(t.accountId, t.ts),
   byWorkspaceNameTs: index("usage_events_workspace_name_ts_idx").on(t.workspaceId, t.name, t.ts),
+  // eventsBefore() (thread usage breadcrumb) filters by account_user_id and
+  // orders by ts desc; without this it seq-scans the whole events table on
+  // every thread open. (account_user_id, ts) makes it a bounded backward scan.
+  byAccountUserTs: index("usage_events_account_user_ts_idx").on(t.accountUserId, t.ts),
 }));
 
 // ─── auth: magic tokens (single-use) ─────────────────────────

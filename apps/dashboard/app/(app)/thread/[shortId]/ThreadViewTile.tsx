@@ -16,21 +16,28 @@ import { ThreadView, type ThreadData } from "./ThreadView";
 // duplicates}. Summed over DISTINCT accounts so two duplicates from the same
 // account don't double-count ARR. Computed at read time so it stays correct as
 // ARR changes (feature 4).
-async function loadMergeGroup(itemId: string): Promise<{ combinedArrCents: number; followerCount: number }> {
-  const arrRows = (await db.execute(sql`
-    SELECT COALESCE(SUM(a.arr_cents), 0)::bigint AS arr
-    FROM (
-      SELECT DISTINCT i.account_id FROM items i
+async function loadMergeGroup(itemId: string): Promise<{ combinedArrCents: number; accountCount: number; followerCount: number }> {
+  // accountCount = the distinct accounts in the group (the inbox's "reach"),
+  // computed off the same distinct-account set as the ARR sum so the two always
+  // agree. That's the revenue-priority unit; followerCount (people) is kept for
+  // the legacy display but is secondary.
+  const [arrRows, followerRows] = await Promise.all([
+    db.execute(sql`
+      SELECT COALESCE(SUM(a.arr_cents), 0)::bigint AS arr, COUNT(*)::int AS accts
+      FROM (
+        SELECT DISTINCT i.account_id FROM items i
+        WHERE i.id = ${itemId} OR i.merged_into_id = ${itemId}
+      ) g
+      JOIN accounts a ON a.id = g.account_id
+    `) as unknown as Promise<Array<{ arr: string | number; accts: string | number }>>,
+    db.execute(sql`
+      SELECT COUNT(DISTINCT i.submitter_id)::int AS followers FROM items i
       WHERE i.id = ${itemId} OR i.merged_into_id = ${itemId}
-    ) g
-    JOIN accounts a ON a.id = g.account_id
-  `)) as unknown as Array<{ arr: string | number }>;
-  const followerRows = (await db.execute(sql`
-    SELECT COUNT(DISTINCT i.submitter_id)::int AS followers FROM items i
-    WHERE i.id = ${itemId} OR i.merged_into_id = ${itemId}
-  `)) as unknown as Array<{ followers: string | number }>;
+    `) as unknown as Promise<Array<{ followers: string | number }>>,
+  ]);
   return {
     combinedArrCents: Number(arrRows[0]?.arr ?? 0),
+    accountCount: Number(arrRows[0]?.accts ?? 0),
     followerCount: Number(followerRows[0]?.followers ?? 0),
   };
 }
@@ -45,6 +52,24 @@ type WorkspaceForThread = {
   planId: string;
   subscriptionStatus: string | null;
 };
+
+// Usage breadcrumb: the submitter's tracked events leading up to submission.
+// Gated like the other usage surfaces; returns null (card hidden) when off or
+// empty. Best-effort — a failure must not block the thread from loading, so it
+// can sit safely inside the parallel fan-out below.
+async function loadUsageBreadcrumb(
+  workspace: WorkspaceForThread,
+  accountUserId: string,
+  before: Date,
+): Promise<Array<{ name: string; at: string; pageUrl: string | null }> | null> {
+  if (!usageAnalyticsAllowed(workspace)) return null;
+  try {
+    const evs = await eventsBefore({ accountUserId, before, limit: 12 });
+    return evs.length ? evs.map((e) => ({ name: e.name, at: e.ts.toISOString(), pageUrl: e.pageUrl })) : null;
+  } catch {
+    return null;
+  }
+}
 
 async function loadThread(workspace: WorkspaceForThread, shortId: string, canManageInitiatives: boolean): Promise<ThreadData | null> {
   const workspaceId = workspace.id;
@@ -92,49 +117,126 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
   // ── merge group (feature 4) ──
   const sugItem = alias(items, "dup_candidate");
   const mergedIntoItem = alias(items, "merged_into");
-  const [mergedIntoRow] = head.mergedIntoId
-    ? await db
-        .select({ shortId: mergedIntoItem.shortId, title: mergedIntoItem.title })
-        .from(mergedIntoItem)
-        .where(eq(mergedIntoItem.id, head.mergedIntoId))
-        .limit(1)
-    : [];
-  const [{ count: mergedCount } = { count: 0 }] = await db
-    .select({ count: sql<number>`COUNT(*)::int` })
-    .from(items)
-    .where(eq(items.mergedIntoId, head.id));
-  const { combinedArrCents, followerCount } = await loadMergeGroup(head.id);
-  const [dupSuggestion] = await db
-    .select({
-      candidateShortId: sugItem.shortId,
-      candidateTitle: sugItem.title,
-      similarity: dedupeSuggestions.similarity,
-    })
-    .from(dedupeSuggestions)
-    .innerJoin(sugItem, eq(sugItem.id, dedupeSuggestions.candidateItemId))
-    .where(and(eq(dedupeSuggestions.itemId, head.id), eq(dedupeSuggestions.status, "pending")))
-    .orderBy(desc(dedupeSuggestions.createdAt))
-    .limit(1);
 
-  const wsAuthor = await db
-    .select({ id: workspaceUsers.id, name: workspaceUsers.name, initials: workspaceUsers.initials })
-    .from(workspaceUsers)
-    .where(eq(workspaceUsers.workspaceId, workspaceId));
-  const wsAuthorById = Object.fromEntries(wsAuthor.map(u => [u.id, u]));
+  // Past the head lookup, every read below depends only on `head` and is
+  // otherwise independent, so issue them concurrently. This used to be a chain
+  // of ~15 sequential awaits — one DB round trip stacked after another — which
+  // is most of why a thread was slow to open. Reply-scoped reads (attachments +
+  // the customers those replies cite) and the replay summary chain off their
+  // inputs further down.
+  const [
+    mergedIntoRow,
+    mergedCount,
+    mergeGroup,
+    dupSuggestion,
+    wsAuthor,
+    rows,
+    eventRows,
+    noticeRows,
+    initiativeOptions,
+    suggestionRow,
+    replayManifest,
+    usageBreadcrumb,
+  ] = await Promise.all([
+    head.mergedIntoId
+      ? db
+          .select({ shortId: mergedIntoItem.shortId, title: mergedIntoItem.title })
+          .from(mergedIntoItem)
+          .where(eq(mergedIntoItem.id, head.mergedIntoId))
+          .limit(1)
+          .then((r) => r[0] ?? null)
+      : Promise.resolve(null),
+    db
+      .select({ count: sql<number>`COUNT(*)::int` })
+      .from(items)
+      .where(eq(items.mergedIntoId, head.id))
+      .then((r) => r[0]?.count ?? 0),
+    loadMergeGroup(head.id),
+    db
+      .select({
+        candidateShortId: sugItem.shortId,
+        candidateTitle: sugItem.title,
+        similarity: dedupeSuggestions.similarity,
+      })
+      .from(dedupeSuggestions)
+      .innerJoin(sugItem, eq(sugItem.id, dedupeSuggestions.candidateItemId))
+      .where(and(eq(dedupeSuggestions.itemId, head.id), eq(dedupeSuggestions.status, "pending")))
+      .orderBy(desc(dedupeSuggestions.createdAt))
+      .limit(1)
+      .then((r) => r[0] ?? null),
+    db
+      .select({ id: workspaceUsers.id, name: workspaceUsers.name, initials: workspaceUsers.initials })
+      .from(workspaceUsers)
+      .where(eq(workspaceUsers.workspaceId, workspaceId)),
+    db
+      .select()
+      .from(replies)
+      .where(eq(replies.itemId, head.id))
+      .orderBy(asc(replies.createdAt)),
+    db
+      .select({
+        id: statusEvents.id,
+        fromStatus: statusEvents.fromStatus,
+        toStatus: statusEvents.toStatus,
+        reason: statusEvents.reason,
+        at: statusEvents.at,
+        byWorkspaceUserId: statusEvents.byWorkspaceUserId,
+      })
+      .from(statusEvents)
+      .where(eq(statusEvents.itemId, head.id))
+      .orderBy(asc(statusEvents.at)),
+    db
+      .select({
+        id: customerNotifications.id,
+        kind: customerNotifications.kind,
+        toStatus: customerNotifications.toStatus,
+        sentAt: customerNotifications.sentAt,
+      })
+      .from(customerNotifications)
+      .where(eq(customerNotifications.itemId, head.id))
+      .orderBy(asc(customerNotifications.sentAt)),
+    db
+      .select({ id: initiatives.id, name: initiatives.name, color: initiatives.color })
+      .from(initiatives)
+      .where(and(eq(initiatives.workspaceId, workspaceId), ne(initiatives.status, "parked")))
+      .orderBy(asc(initiatives.name)),
+    db
+      .select({
+        id: initiativeSuggestions.id,
+        initiativeId: initiativeSuggestions.initiativeId,
+        confidence: initiativeSuggestions.confidence,
+        reason: initiativeSuggestions.reason,
+        initiativeName: initiatives.name,
+        initiativeColor: initiatives.color,
+      })
+      .from(initiativeSuggestions)
+      .innerJoin(initiatives, eq(initiatives.id, initiativeSuggestions.initiativeId))
+      .where(and(
+        eq(initiativeSuggestions.itemId, head.id),
+        eq(initiativeSuggestions.status, "pending"),
+      ))
+      .orderBy(desc(initiativeSuggestions.createdAt))
+      .limit(1)
+      .then((r) => r[0] ?? null),
+    getReplayForItem(head.shortId, workspaceId),
+    loadUsageBreadcrumb(workspace, head.submitterId, head.createdAt),
+  ]);
 
-  const acctAuthor = await db
-    .select({ id: accountUsers.id, name: accountUsers.name, initials: accountUsers.initials })
-    .from(accountUsers)
-    .where(eq(accountUsers.workspaceId, workspaceId));
-  const acctAuthorById = Object.fromEntries(acctAuthor.map(u => [u.id, u]));
+  const { combinedArrCents, accountCount, followerCount } = mergeGroup;
+  const wsAuthorById = Object.fromEntries(wsAuthor.map((u) => [u.id, u]));
 
-  const rows = await db
-    .select()
-    .from(replies)
-    .where(eq(replies.itemId, head.id))
-    .orderBy(asc(replies.createdAt));
-
-  const replyIds = rows.map(r => r.id);
+  // Resolve only the customers these replies actually cite — not every account
+  // user in the workspace. The old query loaded the entire account_users table
+  // for the workspace on every thread open, so load time grew with customer
+  // count regardless of thread size. Attachments fetch alongside the lookup.
+  const replyIds = rows.map((r) => r.id);
+  const acctAuthorIds = [...new Set(rows.map((r) => r.accountUserId).filter((id): id is string => !!id))];
+  const acctAuthorPromise = acctAuthorIds.length === 0
+    ? Promise.resolve([] as Array<{ id: string; name: string; initials: string }>)
+    : db
+        .select({ id: accountUsers.id, name: accountUsers.name, initials: accountUsers.initials })
+        .from(accountUsers)
+        .where(inArray(accountUsers.id, acctAuthorIds));
   const attachmentRows = replyIds.length === 0 ? [] : await db
     .select({
       id: attachments.id,
@@ -145,6 +247,8 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
     })
     .from(attachments)
     .where(and(inArray(attachments.replyId, replyIds), isNotNull(attachments.replyId)));
+  const acctAuthor = await acctAuthorPromise;
+  const acctAuthorById = Object.fromEntries(acctAuthor.map((u) => [u.id, u]));
   const attachmentsByReply = new Map<string, typeof attachmentRows>();
   for (const a of attachmentRows) {
     if (!a.replyId) continue;
@@ -180,19 +284,6 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
     };
   });
 
-  const eventRows = await db
-    .select({
-      id: statusEvents.id,
-      fromStatus: statusEvents.fromStatus,
-      toStatus: statusEvents.toStatus,
-      reason: statusEvents.reason,
-      at: statusEvents.at,
-      byWorkspaceUserId: statusEvents.byWorkspaceUserId,
-    })
-    .from(statusEvents)
-    .where(eq(statusEvents.itemId, head.id))
-    .orderBy(asc(statusEvents.at));
-
   const events = eventRows.map(e => ({
     id: e.id,
     fromStatus: e.fromStatus,
@@ -205,16 +296,6 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
   // Loop ledger entries — every time the customer was actually notified.
   // Rendered as crumbs in the Trail; a terminal-status notice is the loop
   // visibly closing ("Maya was told it shipped").
-  const noticeRows = await db
-    .select({
-      id: customerNotifications.id,
-      kind: customerNotifications.kind,
-      toStatus: customerNotifications.toStatus,
-      sentAt: customerNotifications.sentAt,
-    })
-    .from(customerNotifications)
-    .where(eq(customerNotifications.itemId, head.id))
-    .orderBy(asc(customerNotifications.sentAt));
   const notices = noticeRows.map(n => ({
     id: n.id,
     kind: n.kind as "reply" | "status",
@@ -222,34 +303,9 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
     at: n.sentAt.toISOString(),
   }));
 
-  const initiativeOptions = await db
-    .select({ id: initiatives.id, name: initiatives.name, color: initiatives.color })
-    .from(initiatives)
-    .where(and(eq(initiatives.workspaceId, workspaceId), ne(initiatives.status, "parked")))
-    .orderBy(asc(initiatives.name));
-
-  const [suggestionRow] = await db
-    .select({
-      id: initiativeSuggestions.id,
-      initiativeId: initiativeSuggestions.initiativeId,
-      confidence: initiativeSuggestions.confidence,
-      reason: initiativeSuggestions.reason,
-      initiativeName: initiatives.name,
-      initiativeColor: initiatives.color,
-    })
-    .from(initiativeSuggestions)
-    .innerJoin(initiatives, eq(initiatives.id, initiativeSuggestions.initiativeId))
-    .where(and(
-      eq(initiativeSuggestions.itemId, head.id),
-      eq(initiativeSuggestions.status, "pending"),
-    ))
-    .orderBy(desc(initiativeSuggestions.createdAt))
-    .limit(1);
-
   // Linked replay session (one item ↔ at most one session). The card
   // disappears if there's nothing recorded for this item — including the
   // common case where session record is disabled for the workspace.
-  const replayManifest = await getReplayForItem(head.shortId, workspaceId);
   let replaySummaryRow: { summary: string; highlights: string[] | null } | null = null;
   if (replayManifest) {
     const [s] = await db
@@ -287,19 +343,6 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
         aiSummaryAvailable: replaySummaryConfigured() && hasFeature(workspace, "ai"),
       }
     : null;
-
-  // Usage breadcrumb: the submitter's tracked events leading up to submission.
-  // Gated like the other usage surfaces; returns null (card hidden) when off
-  // or empty. Best-effort — a failure must not block the thread from loading.
-  let usageBreadcrumb: Array<{ name: string; at: string; pageUrl: string | null }> | null = null;
-  if (usageAnalyticsAllowed(workspace)) {
-    try {
-      const evs = await eventsBefore({ accountUserId: head.submitterId, before: head.createdAt, limit: 12 });
-      usageBreadcrumb = evs.length ? evs.map((e) => ({ name: e.name, at: e.ts.toISOString(), pageUrl: e.pageUrl })) : null;
-    } catch {
-      usageBreadcrumb = null;
-    }
-  }
 
   return {
     item: {
@@ -362,6 +405,7 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       mergedInto: head.mergedIntoId && mergedIntoRow ? { shortId: mergedIntoRow.shortId, title: mergedIntoRow.title } : null,
       mergedCount,
       combinedArrCents,
+      accountCount,
       followerCount,
       pendingSuggestion: dupSuggestion
         ? {

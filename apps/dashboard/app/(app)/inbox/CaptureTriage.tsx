@@ -3,7 +3,9 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Card, CardHead, Dropdown, Ic, Pill } from "@crumb/ui";
-import { createItemFromCapture, dismissCapture } from "../captures/actions";
+import { useConfirm } from "@/components/confirm";
+import { useToast } from "@/components/toast";
+import { createItemFromCapture, dismissCapture, restoreCapture } from "../captures/actions";
 import type { CaptureRow, AccountOption } from "../captures/CapturesList";
 
 const TYPES = [
@@ -11,10 +13,6 @@ const TYPES = [
   { value: "bug", label: "Bug" },
   { value: "idea", label: "Idea" },
 ];
-
-function firstLine(s: string): string {
-  return (s.split(/\r?\n/).find(l => l.trim()) ?? "").trim().slice(0, 160);
-}
 
 /**
  * Pending captures (forwarded email / Slack / extension) surfaced at the top of
@@ -41,11 +39,18 @@ export function CaptureTriage({ captures, accounts, canWrite }: { captures: Capt
 
 function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow; accounts: AccountOption[]; canWrite: boolean }) {
   const router = useRouter();
+  const confirm = useConfirm();
+  const toast = useToast();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [accountName, setAccountName] = useState(capture.suggestedAccountName ?? "");
   const [type, setType] = useState("question");
-  const [title, setTitle] = useState(capture.subject?.trim() || firstLine(capture.body) || "");
+  // Title seeds from a real subject only. We don't pre-fill it with the body —
+  // that just duplicated the preview shown below and read like a bug. With no
+  // subject the field starts empty and the placeholder asks for a short title.
+  const [title, setTitle] = useState(capture.subject?.trim() ?? "");
+
+  const noAccount = !accountName.trim();
 
   // Account picker: existing accounts + the currently typed/created name so the
   // trigger shows it. composeItem upserts by name, so we pass the name through.
@@ -66,17 +71,41 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
         title,
         body: capture.body,
       });
-      if (r.ok) router.refresh();
-      else setError(r.error);
+      if (r.ok) {
+        router.refresh();
+        toast.show({ message: "Added to the inbox." });
+      } else setError(r.error);
     });
   }
 
-  function dismiss() {
+  async function dismiss() {
+    const ok = await confirm({
+      title: "Dismiss this capture?",
+      body: "It won't become a feedback item. You can undo right after.",
+      confirmLabel: "Dismiss",
+      destructive: true,
+    });
+    if (!ok) return;
     setError(null);
     start(async () => {
       const r = await dismissCapture(capture.id);
-      if (r.ok) router.refresh();
-      else setError(r.error);
+      if (r.ok) {
+        router.refresh();
+        // The row unmounts on refresh, so undo can't lean on this component's
+        // transition — restoreCapture + refresh are safe to fire from the toast.
+        toast.show({
+          message: "Capture dismissed.",
+          action: {
+            label: "Undo",
+            onClick: () => {
+              restoreCapture(capture.id).then(res => {
+                if (res.ok) router.refresh();
+                else toast.show({ message: "Couldn't restore the capture.", tone: "error" });
+              });
+            },
+          },
+        });
+      } else setError(r.error);
     });
   }
 
@@ -86,8 +115,7 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
         <Pill ring><Ic.filter style={{ width: 10, height: 10 }} /> {capture.source}</Pill>
         <span className="text-sm fw-med">{capture.fromName || capture.fromEmail || "Unknown sender"}</span>
         {capture.fromEmail && capture.fromName && <span className="text-xs muted">{capture.fromEmail}</span>}
-        {!accountName && <Pill style={{ color: "var(--rust)" }}>Unknown customer</Pill>}
-        {capture.suggestedAccountName && (
+        {capture.suggestedAccountName && noAccount && (
           <span className="text-xs row gap-1 center" style={{ color: "var(--accent-deep)" }} title={`${Math.round((capture.suggestedConfidence ?? 0) * 100)}% confidence`}>
             <Ic.sparkle style={{ width: 11, height: 11 }} /> suggests {capture.suggestedAccountName}
           </span>
@@ -102,18 +130,26 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
 
       {canWrite ? (
         <>
-          <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
-            <Dropdown
-              ariaLabel="Assign account"
-              placeholder="Assign account…"
-              value={accountName || null}
-              allowCreate
-              searchable
-              onChange={setAccountName}
-              onCreate={setAccountName}
-              options={accountOpts}
-              buttonStyle={{ minWidth: 180 }}
-            />
+          <div className="row gap-2 start" style={{ flexWrap: "wrap" }}>
+            {/* Account picker carries the "Unknown customer" alarm itself, so the
+                problem and its fix sit in one place instead of across the row. */}
+            <div className="col gap-1" style={{ flex: "0 1 220px", minWidth: 180 }}>
+              <Dropdown
+                ariaLabel="Assign account"
+                placeholder="Map to a customer…"
+                value={accountName || null}
+                allowCreate
+                searchable
+                onChange={setAccountName}
+                onCreate={setAccountName}
+                options={accountOpts}
+              />
+              {noAccount && (
+                <span className="text-2xs" style={{ color: "var(--rust)" }}>
+                  Unknown customer. Map it to a customer to continue.
+                </span>
+              )}
+            </div>
             <Dropdown
               ariaLabel="Type"
               size="sm"
@@ -125,14 +161,18 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
               className="input"
               value={title}
               onChange={e => setTitle(e.target.value)}
-              placeholder="Title"
+              placeholder="Give it a short title"
+              aria-label="Item title"
               disabled={pending}
               style={{ flex: "1 1 220px", minWidth: 160 }}
             />
-            <Btn sm variant="primary" icon={<Ic.plus style={{ width: 12, height: 12 }} />} onClick={create} disabled={pending || !accountName.trim() || !title.trim()}>
+            <Btn sm variant="primary" icon={<Ic.plus style={{ width: 12, height: 12 }} />} onClick={create} disabled={pending || noAccount || !title.trim()}>
               {pending ? "Creating…" : "Create item"}
             </Btn>
-            <Btn sm onClick={dismiss} disabled={pending}>Dismiss</Btn>
+            {/* A hairline + ghost styling separate the lesser, guarded action
+                from the primary one so a fast click doesn't drop a capture. */}
+            <span aria-hidden style={{ alignSelf: "stretch", width: 1, background: "var(--hair)", margin: "0 2px" }} />
+            <Btn sm variant="ghost" onClick={dismiss} disabled={pending}>Dismiss</Btn>
           </div>
           {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
         </>

@@ -56,7 +56,7 @@ const DOCS_URL = "https://crumb.localhostlabs.net/docs";
 export function SettingsNav() {
   const pathname = usePathname();
   return (
-    <div className="col gap-1">
+    <div className="settings-nav col gap-1">
       {GROUPS.map((g, gi) => {
         const items = g.items.filter(n => !n.cloudOnly || IS_CLOUD);
         if (items.length === 0) return null;

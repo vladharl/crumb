@@ -41,13 +41,13 @@ const STEPS: TourStep[] = [
     target: "inbox",
     icon: "inbox",
     title: "Every item is an open loop",
-    body: "Customers drop feedback here from your widget, email, or Slack — account and session attached. Each one is a loop that stays open until they hear back.",
+    body: "Customers drop feedback here from your widget, email, or Slack, with account and session attached. Each one is a loop that stays open until they hear back.",
   },
   {
     target: "accounts",
     icon: "building",
     title: "Weigh loops by revenue",
-    body: "Everyone who's sent feedback, sorted by ARR — so you answer the loops that matter most first. The view to open before every QBR.",
+    body: "Everyone who's sent feedback, sorted by ARR, so you answer the loops that matter most first. The view to open before every QBR.",
   },
   {
     target: "initiatives",
@@ -71,13 +71,13 @@ const STEPS: TourStep[] = [
     target: "notifs",
     icon: "bell",
     title: "When the ball comes back",
-    body: "Replies, new submissions, and mentions land in this bell — each one means it's your turn again. Tune what reaches you in Settings → Notifications.",
+    body: "Replies, new submissions, and mentions land in this bell. Each one means it's your turn again. Tune what reaches you in Settings → Notifications.",
   },
   {
     target: "settings",
     icon: "settings",
     title: "Close your first loop",
-    body: "Open this menu to install the widget, connect Slack or your CRM, and invite teammates. When something ships, Crumb tells the customer — the loop closes itself. Follow the trail.",
+    body: "Open this menu to install the widget, connect Slack or your CRM, and invite teammates. When something ships, Crumb tells the customer. The loop closes itself. Follow the trail.",
   },
 ];
 
