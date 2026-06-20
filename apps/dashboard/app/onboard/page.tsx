@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { db, workspaceUsers } from "@crumb/db";
+import { db, workspaceUsers, findValidSetupToken } from "@crumb/db";
 import { BrandMark } from "@crumb/ui";
 import { OnboardForm } from "./OnboardForm";
 
@@ -10,8 +10,13 @@ async function isFirstRun(): Promise<boolean> {
   return !row;
 }
 
-export default async function OnboardPage() {
-  if (!(await isFirstRun())) redirect("/login");
+export default async function OnboardPage({ searchParams }: { searchParams: { token?: string } }) {
+  // Onboarding is reachable only via a one-time setup link minted on the host
+  // (`cli setup-link`). No valid token — or an instance that's already set up —
+  // bounces to the sign-in screen.
+  const token = searchParams.token ?? "";
+  const setup = token ? await findValidSetupToken(token) : null;
+  if (!setup || !(await isFirstRun())) redirect("/login");
 
   return (
     <main style={{
@@ -37,7 +42,7 @@ export default async function OnboardPage() {
             No workspaces exist yet on this Crumb instance. The first person here becomes the admin (you). Add teammates after.
           </p>
 
-          <OnboardForm />
+          <OnboardForm token={token} />
         </div>
       </div>
     </main>

@@ -13,7 +13,7 @@ function slugify(name: string): string {
     .slice(0, 64);
 }
 
-export function OnboardForm() {
+export function OnboardForm({ token }: { token: string }) {
   const router = useRouter();
   const [workspaceName, setWorkspaceName] = useState("");
   const [slug, setSlug] = useState("");
@@ -48,6 +48,8 @@ export function OnboardForm() {
         });
       }}
     >
+      <input type="hidden" name="token" value={token} />
+
       <Field label="Workspace name" help="Shown to your customers and on outbound emails.">
         <input
           name="workspaceName"

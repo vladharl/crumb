@@ -678,6 +678,19 @@ export const sessions = pgTable("sessions", {
   byUser: index("sessions_user_idx").on(t.workspaceUserId, t.expiresAt),
 }));
 
+// ─── first-run setup tokens (gate /onboard) ──────────────────
+// Pre-workspace, single-use links that authorize the one-time onboarding
+// screen. Minted by the @crumb/db CLI (`setup-link`) on the host; validated
+// and consumed by the /onboard page + bootstrap action. No workspace/user
+// FKs because neither exists yet at first run.
+export const setupTokens = pgTable("setup_tokens", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  token: varchar("token", { length: 64 }).notNull().unique(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ─── relations (for joins) ───────────────────────────────────
 export const itemsRelations = relations(items, ({ one, many }) => ({
   account: one(accounts, { fields: [items.accountId], references: [accounts.id] }),

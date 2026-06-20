@@ -2,7 +2,7 @@
 
 import { cookies } from "next/headers";
 import { eq } from "drizzle-orm";
-import { db, workspaceUsers, workspaces } from "@crumb/db";
+import { db, workspaceUsers, workspaces, findValidSetupToken, consumeSetupToken } from "@crumb/db";
 import { SESSION_COOKIE, createSession } from "@/lib/auth";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -16,6 +16,12 @@ export async function bootstrapWorkspace(formData: FormData): Promise<OnboardRes
   // to clobber a fresh deploy.
   const [existing] = await db.select({ id: workspaceUsers.id }).from(workspaceUsers).limit(1);
   if (existing) return { ok: false, error: "Workspace already set up. Sign in instead." };
+
+  // Onboarding is authorized only by a valid one-time setup link (minted on the
+  // host via `cli setup-link`). Re-validate here so the form can't be posted
+  // without one.
+  const setup = await findValidSetupToken(String(formData.get("token") ?? ""));
+  if (!setup) return { ok: false, error: "This setup link is invalid or expired. Generate a new one on the server." };
 
   const workspaceName = String(formData.get("workspaceName") ?? "").trim();
   const slugRaw       = String(formData.get("slug") ?? "").trim().toLowerCase();
@@ -56,6 +62,9 @@ export async function bootstrapWorkspace(formData: FormData): Promise<OnboardRes
     expires: expiresAt,
     path: "/",
   });
+
+  // Burn the setup link now that the workspace exists — it's single-use.
+  await consumeSetupToken(setup.id);
 
   // Don't redirect server-side; let the client navigate so the Set-Cookie on
   // this action's response has actually settled in the browser before

@@ -33,6 +33,7 @@ COPY packages packages
 COPY apps apps
 RUN pnpm --filter @crumb/widget build \
  && pnpm --filter @crumb/db build:migrate \
+ && pnpm --filter @crumb/db build:cli \
  && if [ "$CRUMB_EDITION" = "cloud" ]; then pnpm --filter dashboard build:cloud; else pnpm --filter dashboard build:community; fi
 
 # ─── runner: minimal image, non-root, runs migrations then server ─
@@ -54,6 +55,8 @@ COPY --from=builder --chown=crumb:crumb /repo/apps/dashboard/public ./apps/dashb
 
 # Bundled migrate runner (self-contained, no node_modules needed) + SQL migrations.
 COPY --from=builder --chown=crumb:crumb /repo/packages/db/dist/migrate.mjs ./packages/db/dist/migrate.mjs
+# Bundled operator CLI (setup-link / add-user / list-users), run via `compose exec`.
+COPY --from=builder --chown=crumb:crumb /repo/packages/db/dist/cli.mjs ./packages/db/dist/cli.mjs
 COPY --from=builder --chown=crumb:crumb /repo/packages/db/drizzle ./packages/db/drizzle
 
 COPY --chown=crumb:crumb apps/dashboard/docker-entrypoint.sh ./docker-entrypoint.sh

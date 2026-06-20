@@ -120,6 +120,13 @@
       "when": 1781991703888,
       "tag": "0016_left_harpoon",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1781997410418,
+      "tag": "0017_graceful_firebird",
+      "breakpoints": true
     }
   ]
 }

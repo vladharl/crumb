@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import { db, workspaceUsers } from "@crumb/db";
 import { getSession } from "@/lib/auth";
 import { LoginForm } from "./LoginForm";
 import { BrandMark } from "@crumb/ui";
@@ -19,10 +18,6 @@ const ERROR_COPY: Record<string, string> = {
 export default async function LoginPage({ searchParams }: { searchParams: SearchParams }) {
   const session = await getSession();
   if (session) redirect("/inbox");
-
-  // First-run: zero users on this instance → onboarding flow.
-  const [anyUser] = await db.select({ id: workspaceUsers.id }).from(workspaceUsers).limit(1);
-  if (!anyUser) redirect("/onboard");
 
   const errorCode = searchParams.e;
   const error = errorCode ? (ERROR_COPY[errorCode] ?? null) : null;
@@ -67,7 +62,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
           <LoginForm />
 
           <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55 }}>
-            Self-hosting? Run <span className="mono">pnpm db:seed</span> once to create the first team, then sign in as any of the seeded admins.
+            Access is invite-only. Contact your administrator if you need an account.
           </p>
         </div>
       </div>
