@@ -1,0 +1,38 @@
+name: cloud-image
+
+# Builds the CLOUD edition (CRUMB_EDITION=cloud — includes the ee/ overlay and
+# real cloud SDKs) and uploads it as a docker-save artifact instead of pushing
+# to GHCR, so the proprietary cloud image is never published to a registry.
+# Download the artifact and `docker load` it where it needs to run.
+on:
+  workflow_dispatch:
+
+jobs:
+  cloud-image:
+    name: cloud image → artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build cloud image to a tarball
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/dashboard/Dockerfile
+          build-args: |
+            CRUMB_EDITION=cloud
+          tags: crumb-dashboard:cloud
+          outputs: type=docker,dest=/tmp/crumb-cloud.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Compress
+        run: gzip -9 /tmp/crumb-cloud.tar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crumb-cloud-image
+          path: /tmp/crumb-cloud.tar.gz
+          retention-days: 1
+          compression-level: 0
