@@ -1,19 +1,14 @@
 "use server";
 
-import { db, items, replies, replyMentions, accountUsers, workspaceUsers, statusEvents, attachments, workspaces, ticketSuggestions, dedupeSuggestions, replaySessions, customerNotifications } from "@crumb/db";
-import { and, desc, eq, inArray, isNull, isNotNull } from "drizzle-orm";
+import { db, items, replies, statusEvents, workspaces, ticketSuggestions, dedupeSuggestions, replaySessions } from "@crumb/db";
+import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { findDuplicateCandidates } from "@/lib/ai/dedup";
 import { replyConfigured, draftReply, translate } from "@/lib/ai/reply";
 import { withAiBudget } from "@/lib/ai/run";
-import { notifyWorkspaceChannel } from "@/lib/notify/chat";
-import { notifyAccountChannels } from "@/lib/notify/account-channel";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { getActiveSession } from "@/lib/server";
 import { originFromHeaders } from "@/lib/origin";
-import { sendReplyNotification, sendStatusChangeNotification } from "@/lib/email";
-import { notifyMentioned, parseMentionIds } from "@/lib/mention-notify";
-import { buildReplyAddress } from "@/lib/reply-token";
 import * as Linear from "@/lib/integrations/linear";
 import * as Jira from "@/lib/integrations/jira";
 import * as Github from "@/lib/integrations/github";
@@ -21,7 +16,8 @@ import { suggestTicket, ticketSuggestionConfigured, TICKET_MODEL } from "@/lib/a
 import { open } from "@/lib/crypto-at-rest";
 import { consumeAi } from "@/lib/usage";
 import { IntegrationAuthError, clearProviderInstall } from "@/lib/integrations/revoke";
-import { emitStatusChanged } from "@/lib/webhooks";
+import { emitEvent } from "@/lib/webhooks";
+import { createItemReply, updateItemStatus, assignItemTo, type Status, type VendorRole } from "@/lib/items/mutations";
 import { log } from "@/lib/log";
 
 // On a provider auth failure (revoked/expired token), clear the install so
@@ -36,24 +32,9 @@ async function handleRevoke(err: unknown, workspaceId: string): Promise<{ ok: fa
   return null;
 }
 
-function inboundReplyAddressFor(itemShortId: string, signingSecret: string): string | null {
-  const domain = process.env.CRUMB_INBOUND_DOMAIN?.trim();
-  if (!domain) return null;
-  return buildReplyAddress(itemShortId, signingSecret, domain);
-}
-
-type Status = "open" | "review" | "planned" | "progress" | "shipped" | "declined" | "deferred" | "duplicate";
-
-const STATUS_LABELS: Record<Status, string> = {
-  open:      "Open",
-  review:    "In review",
-  planned:   "Planned",
-  progress:  "In progress",
-  shipped:   "Shipped",
-  declined:  "Won’t ship",
-  deferred:  "Set aside",
-  duplicate: "Duplicate",
-};
+// Thin session-bound wrappers over the shared cores in lib/items/mutations.ts.
+// They resolve the dashboard session into a VendorActor + origin, delegate, and
+// own the Next cache invalidation (revalidatePath can't run from the MCP path).
 
 export async function createReply(input: {
   itemShortId: string;
@@ -61,260 +42,33 @@ export async function createReply(input: {
   internal: boolean;
   attachmentIds?: string[];
 }) {
-  const body = input.body.trim();
-  const attachmentIds = (input.attachmentIds ?? []).filter(Boolean);
-  // A reply can be just an attachment with no body — accept that.
-  if (!body && attachmentIds.length === 0) return { ok: false as const, error: "empty" };
-
   const { workspace, user } = await getActiveSession();
-
-  // Viewers are read-only EXCEPT internal notes: a customer-facing reply
-  // requires admin/pm. (Internal notes + @mentions stay open to all roles.)
-  if (!input.internal && user.role !== "admin" && user.role !== "pm") {
-    return { ok: false as const, error: "forbidden" };
+  const r = await createItemReply(
+    { workspaceId: workspace.id, actorWorkspaceUserId: user.id, role: user.role as VendorRole },
+    { ...input, origin: originFromHeaders(headers()) },
+  );
+  if (r.ok) {
+    revalidatePath(`/thread/${input.itemShortId}`);
+    revalidatePath("/inbox");
   }
-
-  // Fetch the item + submitter in one query so we have everything the
-  // notification email needs without a second round-trip.
-  const [row] = await db
-    .select({
-      id: items.id,
-      title: items.title,
-      status: items.status,
-      accountId: items.accountId,
-      submitterId: accountUsers.id,
-      submitterEmail: accountUsers.email,
-      submitterNotifyReplies: accountUsers.notifyReplies,
-      submitterUnsub: accountUsers.unsubscribedAll,
-      submitterUnsubToken: accountUsers.unsubToken,
-    })
-    .from(items)
-    .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
-    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, input.itemShortId)))
-    .limit(1);
-  if (!row) return { ok: false as const, error: "not_found" };
-
-  const [created] = await db.insert(replies).values({
-    itemId: row.id,
-    workspaceUserId: user.id,
-    body,
-    internal: input.internal,
-  }).returning({ id: replies.id });
-
-  // Link any pending attachments the vendor uploaded. Only their own
-  // unlinked rows are eligible — protects against attaching another
-  // vendor's draft upload by passing a guessed id.
-  if (attachmentIds.length > 0 && created) {
-    await db
-      .update(attachments)
-      .set({ replyId: created.id })
-      .where(and(
-        inArray(attachments.id, attachmentIds),
-        isNull(attachments.replyId),
-        eq(attachments.uploadedByWorkspaceUserId, user.id),
-      ));
-  }
-
-  await db.update(items).set({ updatedAt: new Date() }).where(eq(items.id, row.id));
-
-  // @-mentions live only on internal notes. Parse the body against teammates,
-  // record the matches, and notify them (excluding the author). Best-effort.
-  if (input.internal && created) {
-    const teammates = await db
-      .select({ id: workspaceUsers.id, name: workspaceUsers.name })
-      .from(workspaceUsers)
-      .where(eq(workspaceUsers.workspaceId, workspace.id));
-    const mentionedIds = parseMentionIds(body, teammates).filter(id => id !== user.id);
-    if (mentionedIds.length > 0) {
-      await db
-        .insert(replyMentions)
-        .values(mentionedIds.map(id => ({ replyId: created.id, workspaceUserId: id })))
-        .onConflictDoNothing();
-      void notifyMentioned({
-        workspaceId: workspace.id,
-        itemShortId: input.itemShortId,
-        itemTitle: row.title,
-        noteBody: body,
-        byName: user.name,
-        mentionedUserIds: mentionedIds,
-        dashboardOrigin: originFromHeaders(headers()),
-      });
-    }
-  }
-
-  revalidatePath(`/thread/${input.itemShortId}`);
-  revalidatePath("/inbox");
-
-  // Fire the customer notification asynchronously. Don't fail the action if
-  // email delivery hiccups — the reply is already in the DB. Honor the
-  // submitter's notification prefs (skip if muted or replies are off).
-  if (!input.internal && !row.submitterUnsub && row.submitterNotifyReplies) {
-    try {
-      const origin = originFromHeaders(headers());
-      const delivered = await sendReplyNotification({
-        to: row.submitterEmail,
-        workspaceName: workspace.name,
-        vendorName: user.name,
-        itemShortId: input.itemShortId,
-        itemTitle: row.title,
-        replyBody: body,
-        statusLabel: STATUS_LABELS[row.status as Status],
-        productUrl: workspace.productUrl,
-        inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
-        unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=replies` : null,
-      });
-      // Loop ledger: record that the customer actually heard back. Best-effort —
-      // the reply is already saved, so a failed insert only costs the metric.
-      if (delivered) {
-        await db.insert(customerNotifications).values({
-          itemId: row.id,
-          accountUserId: row.submitterId,
-          kind: "reply",
-        });
-      }
-    } catch (err) {
-      log.error("reply notification failed", { scope: "crumb/reply", err });
-    }
-  }
-
-  // Customer-side chat: post the vendor reply to the account's Slack/Teams
-  // channel (if connected), alongside the email above. Internal notes excluded.
-  if (!input.internal) {
-    void notifyAccountChannels(row.accountId, {
-      kind: "vendor_reply",
-      shortId: input.itemShortId,
-      title: row.title,
-      vendorName: user.name,
-      body,
-      url: workspace.productUrl ?? null,
-    }, "replies");
-  }
-
-  return { ok: true as const };
+  return r;
 }
-
-const ALLOWED: Status[] = ["open", "review", "planned", "progress", "shipped", "declined", "deferred", "duplicate"];
-
-const REASON_REQUIRED: Set<Status> = new Set(["declined", "deferred", "duplicate"]);
 
 export async function updateStatus(input: {
   itemShortId: string;
   status: Status;
   reason?: string;
 }) {
-  if (!ALLOWED.includes(input.status)) return { ok: false as const, error: "bad_status" };
-
-  const reason = input.reason?.trim() || null;
-  if (REASON_REQUIRED.has(input.status) && !reason) {
-    return { ok: false as const, error: "reason_required" };
-  }
-
   const { workspace, user } = await getActiveSession();
-  // Status changes are a manage action — viewers can't.
-  if (user.role !== "admin" && user.role !== "pm") return { ok: false as const, error: "forbidden" };
-  const [row] = await db
-    .select({
-      id: items.id,
-      title: items.title,
-      type: items.type,
-      accountId: items.accountId,
-      currentStatus: items.status,
-      submitterId: accountUsers.id,
-      submitterEmail: accountUsers.email,
-      submitterNotifyStatus: accountUsers.notifyStatus,
-      submitterUnsub: accountUsers.unsubscribedAll,
-      submitterUnsubToken: accountUsers.unsubToken,
-    })
-    .from(items)
-    .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
-    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, input.itemShortId)))
-    .limit(1);
-  if (!row) return { ok: false as const, error: "not_found" };
-
-  // No-op when status hasn't actually changed; avoids spamming the timeline.
-  if (row.currentStatus === input.status) {
-    return { ok: true as const };
+  const r = await updateItemStatus(
+    { workspaceId: workspace.id, actorWorkspaceUserId: user.id, role: user.role as VendorRole },
+    { ...input, origin: originFromHeaders(headers()) },
+  );
+  if (r.ok) {
+    revalidatePath(`/thread/${input.itemShortId}`);
+    revalidatePath("/inbox");
   }
-
-  await db.update(items).set({ status: input.status, updatedAt: new Date() }).where(eq(items.id, row.id));
-  await db.insert(statusEvents).values({
-    itemId: row.id,
-    fromStatus: row.currentStatus,
-    toStatus: input.status,
-    reason,
-    byWorkspaceUserId: user.id,
-  });
-
-  revalidatePath(`/thread/${input.itemShortId}`);
-  revalidatePath("/inbox");
-
-  // Fan out to registered webhook endpoints — fire-and-forget, never blocks
-  // or fails the status write.
-  void emitStatusChanged(workspace.id, {
-    type: "item.status_changed",
-    workspace: workspace.slug,
-    item: { short_id: input.itemShortId, title: row.title, type: row.type },
-    from_status: row.currentStatus,
-    to_status: input.status,
-    reason,
-    at: new Date().toISOString(),
-  });
-
-  // Chat cards: vendor Teams firehose + the customer's account channel.
-  const statusOrigin = originFromHeaders(headers());
-  void notifyWorkspaceChannel(workspace.id, {
-    kind: "status_change",
-    shortId: input.itemShortId,
-    title: row.title,
-    fromStatus: row.currentStatus,
-    toStatus: input.status,
-    reason,
-    url: statusOrigin ? `${statusOrigin}/thread/${input.itemShortId}` : null,
-  });
-  void notifyAccountChannels(row.accountId, {
-    kind: "status_change",
-    shortId: input.itemShortId,
-    title: row.title,
-    fromStatus: row.currentStatus,
-    toStatus: input.status,
-    reason,
-    url: workspace.productUrl ?? null,
-  }, "status");
-
-  // Email the customer; never let a flaky provider undo a status write. Honor
-  // the submitter's prefs (skip if muted or status updates are off).
-  if (!row.submitterUnsub && row.submitterNotifyStatus) {
-    try {
-      const origin = originFromHeaders(headers());
-      const delivered = await sendStatusChangeNotification({
-        to: row.submitterEmail,
-        workspaceName: workspace.name,
-        vendorName: user.name,
-        itemShortId: input.itemShortId,
-        itemTitle: row.title,
-        fromStatus: row.currentStatus as Status,
-        toStatus: input.status,
-        reason,
-        productUrl: workspace.productUrl,
-        inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
-        unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=status` : null,
-      });
-      // Loop ledger: a status notification for a terminal status is the loop
-      // actually closing — the customer heard the outcome (see Insights).
-      if (delivered) {
-        await db.insert(customerNotifications).values({
-          itemId: row.id,
-          accountUserId: row.submitterId,
-          kind: "status",
-          toStatus: input.status,
-        });
-      }
-    } catch (err) {
-      log.error("status notification failed", { scope: "crumb/status", err });
-    }
-  }
-
-  return { ok: true as const };
+  return r;
 }
 
 // ─── single-item properties (assignee / type) ────────────────
@@ -326,28 +80,15 @@ export async function assignItem(
   assigneeId: string | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { workspace, user } = await getActiveSession();
-  if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
-
-  // The assignee must be a member of this workspace.
-  if (assigneeId) {
-    const [member] = await db
-      .select({ id: workspaceUsers.id })
-      .from(workspaceUsers)
-      .where(and(eq(workspaceUsers.id, assigneeId), eq(workspaceUsers.workspaceId, workspace.id)))
-      .limit(1);
-    if (!member) return { ok: false, error: "not_a_member" };
+  const r = await assignItemTo(
+    { workspaceId: workspace.id, actorWorkspaceUserId: user.id, role: user.role as VendorRole },
+    { itemShortId, assigneeId },
+  );
+  if (r.ok) {
+    revalidatePath(`/thread/${itemShortId}`);
+    revalidatePath("/inbox");
   }
-
-  const r = await db
-    .update(items)
-    .set({ assigneeId, updatedAt: new Date() })
-    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
-    .returning({ id: items.id });
-  if (r.length === 0) return { ok: false, error: "not_found" };
-
-  revalidatePath(`/thread/${itemShortId}`);
-  revalidatePath("/inbox");
-  return { ok: true };
+  return r;
 }
 
 const ALLOWED_TYPES = new Set(["bug", "idea", "question"]);
@@ -836,7 +577,7 @@ export async function mergeItems(
   if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
 
   const rows = await db
-    .select({ id: items.id, shortId: items.shortId, status: items.status, mergedIntoId: items.mergedIntoId })
+    .select({ id: items.id, shortId: items.shortId, title: items.title, type: items.type, status: items.status, mergedIntoId: items.mergedIntoId })
     .from(items)
     .where(and(eq(items.workspaceId, workspace.id), inArray(items.shortId, [sourceShortId, targetShortId])));
   const source = rows.find((r) => r.shortId === sourceShortId);
@@ -876,6 +617,14 @@ export async function mergeItems(
     .update(dedupeSuggestions)
     .set({ status: "accepted", decidedAt: new Date() })
     .where(and(eq(dedupeSuggestions.itemId, source.id), eq(dedupeSuggestions.status, "pending")));
+
+  void emitEvent(workspace.id, {
+    type: "item.merged",
+    workspace: workspace.slug,
+    item: { short_id: source.shortId, title: source.title, type: source.type },
+    into: { short_id: targetShortId },
+    at: new Date().toISOString(),
+  });
 
   revalidatePath(`/thread/${targetShortId}`);
   revalidatePath(`/thread/${sourceShortId}`);

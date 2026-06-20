@@ -2,15 +2,23 @@ import "server-only";
 import { createHmac, randomBytes } from "node:crypto";
 import net from "node:net";
 import { lookup } from "node:dns/promises";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db, webhookEndpoints, type WebhookEndpoint } from "@crumb/db";
 import { isCloud } from "./tier";
+import { EVENT_TYPES, isEventType, type EventType } from "./event-catalog";
 import { log } from "./log";
 
-// Outbound webhooks. Vendors register HTTPS endpoints; when an item's status
-// changes we POST a signed JSON event. Best-effort and fire-and-forget from
-// the status-change action — never block or fail the status write on a slow
-// or down endpoint. Each delivery records last_status/failure_count, and a
+// Re-export the client-safe catalog so server callers can keep importing it
+// from here (the historical home).
+export { EVENT_TYPES, isEventType };
+export type { EventType };
+
+// Outbound webhooks + the internal event seam. Vendors register HTTPS
+// endpoints, each subscribed to one or more event types; when something
+// happens to an item we POST a signed JSON event to every endpoint that
+// subscribed to that type. Best-effort and fire-and-forget from the mutation
+// that triggered it — never block or fail the write on a slow or down
+// endpoint. Each delivery records last_status/failure_count, and a
 // chronically failing endpoint auto-pauses so we stop hammering it.
 
 const TIMEOUT_MS = 5000;
@@ -70,15 +78,42 @@ export async function isDeliverableUrl(url: string): Promise<boolean> {
   }
 }
 
-export type StatusChangedEvent = {
-  type: "item.status_changed";
-  workspace: string; // slug
-  item: { short_id: string; title: string; type: string };
-  from_status: string | null;
-  to_status: string;
-  reason: string | null;
-  at: string; // ISO timestamp
-};
+// ─── event catalog ───────────────────────────────────────────
+// Every event shares { type, workspace (slug), at (ISO) } and carries an
+// `item` reference. `item.status_changed` keeps the exact shape it shipped with
+// so existing receivers don't break. New types extend the catalog; an endpoint
+// only receives types it's subscribed to (webhook_endpoints.events[]).
+
+type ItemRef = { short_id: string; title: string; type: string };
+type CrumbEventBase = { workspace: string; at: string };
+
+export type CrumbEvent =
+  | (CrumbEventBase & { type: "item.created"; item: ItemRef; account: string })
+  | (CrumbEventBase & {
+      type: "item.status_changed";
+      item: ItemRef;
+      from_status: string | null;
+      to_status: string;
+      reason: string | null;
+    })
+  | (CrumbEventBase & {
+      type: "item.reply_created";
+      item: ItemRef;
+      // `internal` notes are never delivered to outbound endpoints (private);
+      // the field is carried so a future in-process subscriber can see them.
+      reply: { id: string; internal: boolean; author: string; is_customer: boolean };
+    })
+  | (CrumbEventBase & { type: "item.assigned"; item: ItemRef; assignee: { id: string; name: string } | null })
+  | (CrumbEventBase & { type: "item.merged"; item: ItemRef; into: { short_id: string } });
+
+// Compile-time guard: the runtime EVENT_TYPES catalog and the CrumbEvent union
+// must name exactly the same set of types. If they drift, this stops building.
+type _CatalogMatchesUnion =
+  CrumbEvent["type"] extends EventType
+    ? EventType extends CrumbEvent["type"] ? true : never
+    : never;
+const _catalogMatchesUnion: _CatalogMatchesUnion = true;
+void _catalogMatchesUnion;
 
 // HMAC-SHA256 over the raw body, hex, `sha256=` prefixed (GitHub-style).
 // Receivers recompute this with their endpoint secret to verify authenticity.
@@ -86,7 +121,7 @@ function sign(secret: string, body: string): string {
   return "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 }
 
-async function deliverOne(ep: WebhookEndpoint, body: string): Promise<void> {
+async function deliverOne(ep: WebhookEndpoint, eventType: EventType, body: string): Promise<void> {
   // Re-check at delivery time, not just create time — DNS can change and the
   // workspace plan/tier is what matters here.
   if (!(await isDeliverableUrl(ep.url))) {
@@ -107,7 +142,7 @@ async function deliverOne(ep: WebhookEndpoint, body: string): Promise<void> {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-crumb-event": "item.status_changed",
+          "x-crumb-event": eventType,
           "x-crumb-signature": sign(ep.secret, body),
           "user-agent": "Crumb-Webhooks/1",
         },
@@ -141,14 +176,31 @@ async function deliverOne(ep: WebhookEndpoint, body: string): Promise<void> {
   }
 }
 
-// Fan out an item.status_changed event to every active endpoint on the
-// workspace. Safe to `void` — all errors are swallowed per-endpoint.
-export async function emitStatusChanged(workspaceId: string, event: StatusChangedEvent): Promise<void> {
+// Deliver one event to every active endpoint on the workspace that subscribed
+// to its type. Internal-note reply events are private and never delivered to
+// outbound endpoints. Safe to `void` — all errors are swallowed per-endpoint.
+export async function deliverEvent(workspaceId: string, event: CrumbEvent): Promise<void> {
+  if (event.type === "item.reply_created" && event.reply.internal) return;
+
   const endpoints = await db
     .select()
     .from(webhookEndpoints)
-    .where(and(eq(webhookEndpoints.workspaceId, workspaceId), eq(webhookEndpoints.active, true)));
+    .where(and(
+      eq(webhookEndpoints.workspaceId, workspaceId),
+      eq(webhookEndpoints.active, true),
+      // Only endpoints subscribed to this event type. `events` is a text[];
+      // `:type = ANY(events)` is the array-membership test.
+      sql`${event.type} = ANY(${webhookEndpoints.events})`,
+    ));
   if (endpoints.length === 0) return;
   const body = JSON.stringify(event);
-  await Promise.all(endpoints.map(ep => deliverOne(ep, body).catch(() => {})));
+  await Promise.all(endpoints.map(ep => deliverOne(ep, event.type, body).catch(() => {})));
+}
+
+// The internal event seam every mutation calls. Today it only fans out to
+// outbound webhooks; keeping the indirection means a future in-process
+// subscriber (analytics, push notifications, MCP notifications) can hook in
+// here without touching any call site. Fire-and-forget — callers `void` it.
+export async function emitEvent(workspaceId: string, event: CrumbEvent): Promise<void> {
+  await deliverEvent(workspaceId, event);
 }

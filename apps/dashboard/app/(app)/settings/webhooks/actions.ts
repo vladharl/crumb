@@ -4,9 +4,22 @@ import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db, webhookEndpoints } from "@crumb/db";
 import { requireSession } from "@/lib/auth";
-import { newWebhookSecret, isDeliverableUrl } from "@/lib/webhooks";
+import { newWebhookSecret, isDeliverableUrl, EVENT_TYPES, isEventType, type EventType } from "@/lib/webhooks";
 
 const MAX_ENDPOINTS = 10;
+
+// Parse a JSON array of event-type strings from a form field, keeping only
+// valid types. Empty / missing → subscribe to everything (a freshly created
+// endpoint with no selection is most useful receiving all events).
+function parseEvents(raw: FormDataEntryValue | null): EventType[] {
+  if (typeof raw !== "string" || !raw.trim()) return [...EVENT_TYPES];
+  let arr: unknown;
+  try { arr = JSON.parse(raw); } catch { return [...EVENT_TYPES]; }
+  if (!Array.isArray(arr)) return [...EVENT_TYPES];
+  const valid = arr.filter((s): s is EventType => typeof s === "string" && isEventType(s));
+  const deduped = [...new Set(valid)];
+  return deduped.length > 0 ? deduped : [...EVENT_TYPES];
+}
 
 export type CreateResult =
   | { ok: true; id: string; url: string; secret: string }
@@ -41,9 +54,10 @@ export async function createWebhook(formData: FormData): Promise<CreateResult> {
   if (existing.length >= MAX_ENDPOINTS) return { ok: false, error: `Limit of ${MAX_ENDPOINTS} endpoints reached.` };
 
   const secret = newWebhookSecret();
+  const events = parseEvents(formData.get("events"));
   const [created] = await db
     .insert(webhookEndpoints)
-    .values({ workspaceId: workspace.id, url, secret })
+    .values({ workspaceId: workspace.id, url, secret, events })
     .returning({ id: webhookEndpoints.id, url: webhookEndpoints.url });
 
   revalidatePath("/settings/webhooks");
@@ -62,6 +76,21 @@ export async function setWebhookActive(id: string, active: boolean): Promise<Mut
     // Re-enabling resets the failure counter so a recovered endpoint isn't
     // instantly re-paused by stale failures.
     .set(active ? { active: true, failureCount: 0 } : { active: false })
+    .where(and(eq(webhookEndpoints.id, id), eq(webhookEndpoints.workspaceId, workspace.id)))
+    .returning({ id: webhookEndpoints.id });
+  if (r.length === 0) return { ok: false, error: "Endpoint not found." };
+  revalidatePath("/settings/webhooks");
+  return { ok: true };
+}
+
+export async function setWebhookEvents(id: string, events: string[]): Promise<MutationResult> {
+  const { workspace, user } = await requireSession();
+  if (user.role !== "admin") return { ok: false, error: "Only admins can manage webhooks." };
+  const valid = [...new Set(events.filter(isEventType))];
+  if (valid.length === 0) return { ok: false, error: "Pick at least one event." };
+  const r = await db
+    .update(webhookEndpoints)
+    .set({ events: valid })
     .where(and(eq(webhookEndpoints.id, id), eq(webhookEndpoints.workspaceId, workspace.id)))
     .returning({ id: webhookEndpoints.id });
   if (r.length === 0) return { ok: false, error: "Endpoint not found." };

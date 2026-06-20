@@ -6,6 +6,7 @@ import { notifyWorkspaceChannel } from "@/lib/notify/chat";
 import { clusterConfigured } from "@/lib/ai/cluster";
 import { autoClusterItem } from "@/lib/ai/auto-cluster";
 import { hasFeature } from "@/lib/entitlements";
+import { emitEvent } from "@/lib/webhooks";
 
 // Session-free core of "create an item on behalf of a customer" — upsert the
 // account + submitter, bump the per-workspace short-id sequence, insert the
@@ -81,7 +82,7 @@ export async function composeItem(input: {
     .update(workspaces)
     .set({ nextItemSeq: sql`${workspaces.nextItemSeq} + 1` })
     .where(eq(workspaces.id, input.workspaceId))
-    .returning({ next: workspaces.nextItemSeq });
+    .returning({ next: workspaces.nextItemSeq, slug: workspaces.slug });
   const seq = (bumped?.next ?? 1) - 1;
   const shortId = `FB-${seq}`;
 
@@ -100,6 +101,17 @@ export async function composeItem(input: {
   await db.insert(statusEvents).values({ itemId: created!.id, fromStatus: null, toStatus: "open" });
   if (body) {
     await db.insert(replies).values({ itemId: created!.id, accountUserId: submitter.id, body, internal: false });
+  }
+
+  // Outbound webhook fan-out: item.created (covers compose, Slack, capture-accept).
+  if (bumped?.slug) {
+    void emitEvent(input.workspaceId, {
+      type: "item.created",
+      workspace: bumped.slug,
+      item: { short_id: shortId, title, type: input.type },
+      account: accountName,
+      at: new Date().toISOString(),
+    });
   }
 
   // Vendor Teams firehose: new submission (covers compose, Slack, capture-accept).

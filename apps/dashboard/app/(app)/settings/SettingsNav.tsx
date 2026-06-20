@@ -31,6 +31,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: "/settings/integrations", label: "Integrations", icon: Ic.plug },
       { href: "/settings/webhooks",     label: "Webhooks",     icon: Ic.send },
+      { href: "/settings/api-keys",     label: "API keys",     icon: Ic.lock },
     ],
   },
   {

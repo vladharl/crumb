@@ -6,6 +6,7 @@ import { extractSender, stripQuotedTail } from "@/lib/inbound-text";
 import { notifyVendorsOfCustomerReply, dashboardOriginFromHeaders } from "@/lib/customer-reply-notify";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { LIMITS } from "@/lib/validation";
+import { emitEvent } from "@/lib/webhooks";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -91,8 +92,10 @@ export async function POST(req: Request) {
     .select({
       itemId: items.id,
       itemTitle: items.title,
+      itemType: items.type,
       itemWorkspaceId: items.workspaceId,
       itemAccountId: items.accountId,
+      workspaceSlug: workspaces.slug,
       signingSecret: workspaces.signingSecret,
     })
     .from(items)
@@ -125,14 +128,25 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, accepted: false, reason: "unknown_sender" });
   }
 
-  await db.insert(replies).values({
+  const [created] = await db.insert(replies).values({
     itemId: row.itemId,
     accountUserId: author.id,
     body,
     internal: false,
-  });
+  }).returning({ id: replies.id });
 
   await db.update(items).set({ updatedAt: new Date() }).where(eq(items.id, row.itemId));
+
+  // Outbound webhook fan-out: a customer answered by email.
+  if (created) {
+    void emitEvent(row.itemWorkspaceId, {
+      type: "item.reply_created",
+      workspace: row.workspaceSlug,
+      item: { short_id: parsed.shortId, title: row.itemTitle, type: row.itemType },
+      reply: { id: created.id, internal: false, author: author.name, is_customer: true },
+      at: new Date().toISOString(),
+    });
+  }
 
   // Notify the vendor team — best-effort.
   try {

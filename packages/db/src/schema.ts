@@ -819,6 +819,36 @@ export const webhookEndpoints = pgTable("webhook_endpoints", {
 
 export type WebhookEndpoint = typeof webhookEndpoints.$inferSelect;
 
+// ─── API keys (workspace-scoped bearer tokens for MCP / API access) ──
+// A vendor mints a key from settings and hands it to an external client (an
+// MCP host like Claude/Cursor, or a script). We store only the sha256 hash of
+// the raw key — the same one-way scheme as `sessions.token_hash` — so a DB read
+// can't recover a usable token. `prefix` is the first few visible chars, kept
+// for display ("crumb_sk_a1b2…") so a vendor can recognize a key in the list.
+//
+// Every key is tied to its creator (`created_by_workspace_user_id`): there is
+// no system/bot workspace user, and `status_events.by_workspace_user_id` /
+// `replies.workspace_user_id` are NOT NULL, so a write made through a key is
+// attributed to the person who minted it. Cascade-deleting the creator (e.g.
+// removing a teammate) therefore revokes their keys.
+export const apiKeys = pgTable("api_keys", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  // The actor for any write performed with this key.
+  createdByWorkspaceUserId: uuid("created_by_workspace_user_id").notNull().references(() => workspaceUsers.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),                         // human label
+  tokenHash: varchar("token_hash", { length: 128 }).notNull().unique(), // sha256 hex of the raw key
+  prefix: varchar("prefix", { length: 24 }).notNull(),  // first visible chars, for display
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  // Soft-revoke (keeps the row for the audit/list). A revoked key fails resolution.
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  byWorkspace: index("api_keys_workspace_idx").on(t.workspaceId),
+}));
+
+export type ApiKey = typeof apiKeys.$inferSelect;
+
 // ─── roadmap follows (customer subscribes to a public initiative) ────
 // One row per (account_user, initiative). When a vendor moves a followed
 // initiative's roadmap column or status, followers get a notification email.

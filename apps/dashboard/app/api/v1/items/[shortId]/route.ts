@@ -5,6 +5,7 @@ import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { notifyVendorsOfCustomerReply, dashboardOriginFromHeaders } from "@/lib/customer-reply-notify";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { createReplySchema, parseJsonBody } from "@/lib/validation";
+import { emitEvent } from "@/lib/webhooks";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -204,6 +205,17 @@ export async function POST(req: Request, { params }: { params: { shortId: string
   }
 
   await db.update(items).set({ updatedAt: new Date() }).where(eq(items.id, item.id));
+
+  // Outbound webhook fan-out: a customer answered from the widget.
+  if (created) {
+    void emitEvent(r.ctx.workspace.id, {
+      type: "item.reply_created",
+      workspace: r.ctx.workspace.slug,
+      item: { short_id: item.shortId, title: item.title, type: item.type },
+      reply: { id: created.id, internal: false, author: r.ctx.user.name, is_customer: true },
+      at: new Date().toISOString(),
+    });
+  }
 
   // Notify the vendor team — best-effort, never blocks the response.
   try {
