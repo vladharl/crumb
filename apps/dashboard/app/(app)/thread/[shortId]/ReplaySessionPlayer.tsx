@@ -130,6 +130,8 @@ function injectReplayStyles() {
 
 export function ReplaySessionPlayer({ replayId, chunks, durationMs, viewportW, viewportH, details, onClose }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const stageAreaRef = useRef<HTMLDivElement | null>(null);
+  const resizeObsRef = useRef<ResizeObserver | null>(null);
   const replayerRef = useRef<unknown>(null);
   const baseTimestampRef = useRef<number>(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -219,6 +221,33 @@ export function ReplaySessionPlayer({ replayId, chunks, durationMs, viewportW, v
         replayer.play(0);
         setLoading(false);
 
+        // Fit the recorded viewport into the available stage. rrweb renders the
+        // page at its native captured size (e.g. 1728×963), so without scaling
+        // the right/bottom edges overflow and clip. Scale the wrapper down to
+        // fit both dimensions and size the stage to the scaled box so it centers.
+        const applyScale = () => {
+          const area = stageAreaRef.current;
+          const stage = mountRef.current;
+          const wrapper = stage?.querySelector(".replayer-wrapper") as HTMLElement | null;
+          if (!area || !stage || !wrapper) return;
+          const vw = viewportW || wrapper.offsetWidth || 0;
+          const vh = viewportH || wrapper.offsetHeight || 0;
+          const aw = area.clientWidth, ah = area.clientHeight;
+          if (!vw || !vh || !aw || !ah) return;
+          const s = Math.min(aw / vw, ah / vh, 1);
+          wrapper.style.position = "absolute";
+          wrapper.style.top = "0";
+          wrapper.style.left = "0";
+          wrapper.style.transformOrigin = "0 0";
+          wrapper.style.transform = `scale(${s})`;
+          stage.style.width = `${Math.round(vw * s)}px`;
+          stage.style.height = `${Math.round(vh * s)}px`;
+        };
+        applyScale();
+        const ro = new ResizeObserver(() => applyScale());
+        ro.observe(stageAreaRef.current!);
+        resizeObsRef.current = ro;
+
         // The Replayer doesn't fire a continuous `progress` event we can
         // hook — its lifecycle is driven by an internal timer. We poll the
         // current play offset every 250ms while playing; updates pause
@@ -245,6 +274,8 @@ export function ReplaySessionPlayer({ replayId, chunks, durationMs, viewportW, v
     return () => {
       cancelled = true;
       if (tickRef.current) clearInterval(tickRef.current);
+      resizeObsRef.current?.disconnect();
+      resizeObsRef.current = null;
       const r = replayerRef.current as { pause?: () => void; destroy?: () => void } | null;
       try { r?.pause?.(); } catch { /* ignore */ }
       try { r?.destroy?.(); } catch { /* ignore */ }
@@ -303,9 +334,11 @@ export function ReplaySessionPlayer({ replayId, chunks, durationMs, viewportW, v
 
         <div style={{ flex: 1, display: "flex", minHeight: 360, overflow: "hidden" }}>
           <div
-            ref={mountRef}
-            style={{ flex: 1, overflow: "auto", background: "var(--surface)" }}
-          />
+            ref={stageAreaRef}
+            style={{ flex: 1, overflow: "hidden", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center" }}
+          >
+            <div ref={mountRef} style={{ position: "relative", overflow: "hidden" }} />
+          </div>
           {netEvents.length > 0 && (
             <div style={{ width: 340, borderLeft: "var(--border)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
               <div className="row gap-2 center" style={{ padding: "8px 12px", borderBottom: "var(--border)" }}>
