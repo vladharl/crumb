@@ -102,6 +102,12 @@ services:
       AISTACK_MODEL: ${AISTACK_MODEL:-}
       AISTACK_EMBEDDINGS_MODEL: ${AISTACK_EMBEDDINGS_MODEL:-}
       EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-}
+      # ── Blob storage (session-replay chunks + attachments) ──
+      # "postgres" keeps blobs in the DB — durable across container recreates,
+      # which matters whenever the container is ephemeral (every redeploy).
+      # "local" (default) writes to the container's disk and is LOST on redeploy.
+      CRUMB_STORAGE_PROVIDER: ${CRUMB_STORAGE_PROVIDER:-}
+      CRUMB_STORAGE_DIR: ${CRUMB_STORAGE_DIR:-}
     # Bind to localhost by default. With the Cloudflare Tunnel below, cloudflared
     # reaches the app over the internal `dashboard` network name, so no public
     # port is needed. Set DASHBOARD_BIND=0.0.0.0 only if exposing directly.
