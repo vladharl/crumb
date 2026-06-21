@@ -1,8 +1,9 @@
 import { Card, CardHead, Pill } from "@crumb/ui";
 import { getActiveSession } from "@/lib/server";
 import { isCloud } from "@/lib/tier";
-import { stripeConfigured, isActiveStatus } from "@/lib/stripe";
+import { stripeConfigured, stripeKeyMisconfigured, isActiveStatus } from "@/lib/stripe";
 import { workspaceFeatures, PLAN_FEATURE_MAP, type Feature } from "@/lib/entitlements";
+import { getUsageSummary, type UsageMetric } from "@/lib/usage";
 import { PlanPicker, ManageButton, type PlanCard } from "./BillingActions";
 
 const FEATURE_LABEL: Record<Feature, string> = {
@@ -12,7 +13,21 @@ const FEATURE_LABEL: Record<Feature, string> = {
   usage_analytics: "Product usage analytics",
 };
 
+const USAGE_LABEL: Record<UsageMetric, string> = {
+  ai: "AI operations",
+  replay_bytes: "Session replay",
+  usage_events: "Usage events",
+};
+
 export const dynamic = "force-dynamic";
+
+// Human-readable bytes for the replay-storage meter (1024-based, MB/GB).
+function formatBytes(n: number): string {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(n >= 10 * 1024 ** 3 ? 0 : 1)} GB`;
+  if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+  return `${n} B`;
+}
 
 function formatDate(d: Date | null): string {
   if (!d) return "—";
@@ -65,6 +80,8 @@ export default async function BillingPage() {
   const status = workspace.subscriptionStatus;
   const active = isActiveStatus(status);
   const configured = stripeConfigured();
+  const misconfigured = stripeKeyMisconfigured();
+  const usage = active ? await getUsageSummary(workspace) : [];
 
   return (
     <Card>
@@ -125,6 +142,21 @@ export default async function BillingPage() {
           </div>
         )}
 
+        {misconfigured && (
+          <div className="text-sm" style={{
+            background: "var(--err-bg)",
+            border: "1px solid var(--err-border)",
+            color: "var(--err-text)",
+            borderRadius: "var(--r-sm)",
+            padding: "10px 12px",
+            lineHeight: 1.55,
+          }}>
+            <strong style={{ fontWeight: 600 }}>Stripe is in test mode on a live deployment.</strong> Checkouts
+            will complete but <strong style={{ fontWeight: 600 }}>never actually charge</strong> — workspaces look
+            subscribed while no payment is taken. Set a live <span className="mono">STRIPE_SECRET_KEY</span> (<span className="mono">sk_live_…</span>).
+          </div>
+        )}
+
         <div className="col gap-1">
           <span className="eyebrow">Plan</span>
           <span className="serif text-md">{workspace.planId}</span>
@@ -155,6 +187,35 @@ export default async function BillingPage() {
             <span className="text-md">{formatDate(workspace.currentPeriodEnd)}</span>
           </div>
         </div>
+
+        {usage.length > 0 && (
+          <div className="col gap-2">
+            <span className="eyebrow">This month</span>
+            <div className="col gap-3">
+              {usage.map(line => {
+                const pct = line.cap > 0 ? Math.min(100, Math.round((line.used / line.cap) * 100)) : 0;
+                const near = pct >= 80;
+                const fmt = line.metric === "replay_bytes" ? formatBytes : (n: number) => n.toLocaleString("en-US");
+                return (
+                  <div key={line.metric} className="col gap-1">
+                    <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+                      <span className="text-sm">{USAGE_LABEL[line.metric]}</span>
+                      <span className="text-xs muted">{fmt(line.used)} / {fmt(line.cap)}</span>
+                    </div>
+                    <div style={{ height: 4, borderRadius: 999, background: "var(--bone-2)", overflow: "hidden" }}>
+                      <div style={{
+                        width: `${pct}%`,
+                        height: "100%",
+                        borderRadius: 999,
+                        background: near ? "var(--err-text)" : "var(--ember)",
+                      }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {!active && configured && isAdmin && (() => {
           const planCards: PlanCard[] = (["team", "growth"] as const).map(id => ({

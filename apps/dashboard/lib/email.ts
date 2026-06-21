@@ -12,6 +12,7 @@ import {
   renderMentionHtml, renderMentionText,
   renderDunningHtml, renderDunningText,
   renderRoadmapUpdateHtml, renderRoadmapUpdateText,
+  renderSignupNotificationHtml, renderSignupNotificationText,
 } from "./email/template";
 import { isCloud } from "./tier";
 import { log } from "./log";
@@ -363,6 +364,36 @@ export type DunningNotification = {
   workspaceName: string;
   billingUrl?: string | null;
 };
+
+// ─── New-signup notification (to the operator) ───────────────
+// Sent to CRUMB_OPS_EMAIL when someone completes self-serve signup. noreply
+// From — it's an internal ops notice, not a conversation. Best-effort: the
+// caller swallows failures so a notify hiccup never breaks signup.
+
+export type SignupNotification = {
+  to: string;
+  workspaceName: string;
+  adminName: string;
+  adminEmail: string;
+  slug: string;
+  dashboardUrl?: string | null;
+};
+
+export async function sendSignupNotification(m: SignupNotification): Promise<void> {
+  const { provider, from } = selectProvider();
+  const result = await provider.send({
+    to: m.to,
+    from: noreplyFrom(from),
+    subject: `New signup · ${m.workspaceName}`,
+    html: renderSignupNotificationHtml(m),
+    text: renderSignupNotificationText(m),
+    previewLine: `${m.adminName} <${m.adminEmail}> created ${m.workspaceName}`,
+    link: m.dashboardUrl ?? undefined,
+  });
+  if (!result.ok) {
+    log.error("signup-notification send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
+  }
+}
 
 export async function sendDunningNotification(m: DunningNotification): Promise<void> {
   const { provider, from } = selectProvider();

@@ -1,5 +1,6 @@
 import "server-only";
 import Stripe from "stripe";
+import { isCloud } from "./tier";
 
 // Lazy client — we don't want module import to throw on self-host where
 // Stripe creds are absent. Each helper that needs the client calls
@@ -24,6 +25,24 @@ export function stripeClient(): Stripe | null {
 
 export function stripeConfigured(): boolean {
   return stripeClient() !== null;
+}
+
+// Live vs test mode of the configured secret key. Stripe keys carry the mode in
+// their prefix (`sk_live_`/`rk_live_` → live; anything else, e.g. `sk_test_`, →
+// test). null when no key is set. The key never enters the client bundle — this
+// is server-only and only reads the prefix.
+export function stripeKeyMode(): "live" | "test" | null {
+  const key = process.env.STRIPE_SECRET_KEY?.trim();
+  if (!key) return null;
+  return key.startsWith("sk_live_") || key.startsWith("rk_live_") ? "live" : "test";
+}
+
+// The costly silent footgun: a TEST key on the live hosted product. Checkout
+// succeeds but never actually charges, so the workspace looks subscribed while
+// no money moves. True only on Cloud — self-host has no billing, and a test key
+// in dev/staging is expected. Surfaced as a loud banner + a checkout-time warn.
+export function stripeKeyMisconfigured(): boolean {
+  return isCloud() && stripeKeyMode() === "test";
 }
 
 // Read-only env getters, centralized so callers don't sprinkle process.env.

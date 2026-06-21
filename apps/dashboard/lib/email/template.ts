@@ -729,3 +729,74 @@ ${v.productUrl ? `View the roadmap: ${v.productUrl}` : "Open the widget in your 
 
 You're getting this because you follow this item on ${v.workspaceName}'s roadmap.${unsubLineText(v.unsubscribeUrl)}`;
 }
+
+// ─── New-signup notification (to the operator) ───────────────
+// Internal ops notice: fires when someone completes self-serve signup, so the
+// operator knows a new workspace exists. Factual, not customer-facing. Goes to
+// CRUMB_OPS_EMAIL only — never to the new user. Sender/title fields are user-
+// supplied, so everything interpolated here is escaped.
+
+export type SignupNotificationVars = {
+  workspaceName: string;
+  adminName: string;
+  adminEmail: string;
+  slug: string;
+  /** Dashboard root, for a convenience "Open Crumb" link. */
+  dashboardUrl?: string | null;
+};
+
+export function renderSignupNotificationHtml(v: SignupNotificationVars): string {
+  const ws = escapeHtml(v.workspaceName);
+  const name = escapeHtml(v.adminName);
+  const email = escapeHtml(v.adminEmail);
+  const slug = escapeHtml(v.slug);
+  const url = v.dashboardUrl ? escapeHtml(v.dashboardUrl) : null;
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%">
+          <tr><td style="padding:0 8px 24px">
+            <div style="font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</div>
+            <div style="font-size:12px;color:#6B5C50">New signup</div>
+          </td></tr>
+          <tr><td style="padding:0 8px">
+            <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">${name} created a new workspace</h1>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1C1815;border-radius:10px;margin-bottom:20px">
+              <tr><td style="padding:16px 18px;color:#FBF7F0;font-size:14px;line-height:1.7">
+                <div><span style="color:#9C8C7E">Workspace</span> &nbsp;<strong style="font-weight:500">${ws}</strong></div>
+                <div><span style="color:#9C8C7E">Slug</span> &nbsp;<span style="font-family:ui-monospace,JetBrains Mono,Menlo,monospace">${slug}</span></div>
+                <div><span style="color:#9C8C7E">Admin</span> &nbsp;${name} &lt;<a href="mailto:${email}" style="color:#FBF7F0">${email}</a>&gt;</div>
+              </td></tr>
+            </table>
+            ${url ? `
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+              <tr><td style="border-radius:8px;background:#1C1815">
+                <a href="${url}" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:500;color:#FBF7F0;text-decoration:none;border-radius:8px">Open Crumb</a>
+              </td></tr>
+            </table>` : ""}
+          </td></tr>
+          <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08)">
+            <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
+              You're receiving this because <span style="font-family:ui-monospace,Menlo,monospace">CRUMB_OPS_EMAIL</span> is set on this Crumb deployment. Unset it to stop these.
+            </p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export function renderSignupNotificationText(v: SignupNotificationVars): string {
+  return `New signup on Crumb
+
+${v.adminName} created a new workspace.
+
+Workspace: ${v.workspaceName}
+Slug:      ${v.slug}
+Admin:     ${v.adminName} <${v.adminEmail}>
+${v.dashboardUrl ? `\nOpen Crumb: ${v.dashboardUrl}` : ""}
+You're receiving this because CRUMB_OPS_EMAIL is set on this Crumb deployment.`;
+}

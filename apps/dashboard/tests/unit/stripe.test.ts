@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { isActiveStatus, lookupKeyFor, planIdFromLookupKey } from "@/lib/stripe";
+import { describe, it, expect, afterEach } from "vitest";
+import {
+  isActiveStatus, lookupKeyFor, planIdFromLookupKey,
+  stripeKeyMode, stripeKeyMisconfigured,
+} from "@/lib/stripe";
 
 describe("lib/stripe lookupKeyFor", () => {
   it("builds <plan>_<monthly|annual> keys", () => {
@@ -53,5 +56,70 @@ describe("lib/stripe isActiveStatus", () => {
     expect(isActiveStatus(null)).toBe(false);
     expect(isActiveStatus(undefined)).toBe(false);
     expect(isActiveStatus("")).toBe(false);
+  });
+});
+
+describe("lib/stripe stripeKeyMode", () => {
+  const origKey = process.env.STRIPE_SECRET_KEY;
+  afterEach(() => {
+    if (origKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = origKey;
+  });
+
+  it("returns null when no key is configured", () => {
+    delete process.env.STRIPE_SECRET_KEY;
+    expect(stripeKeyMode()).toBe(null);
+  });
+
+  it("reads live mode from the sk_live_ / rk_live_ prefix", () => {
+    process.env.STRIPE_SECRET_KEY = "sk_live_abc123";
+    expect(stripeKeyMode()).toBe("live");
+    process.env.STRIPE_SECRET_KEY = "rk_live_abc123";
+    expect(stripeKeyMode()).toBe("live");
+  });
+
+  it("treats sk_test_ (and anything non-live) as test", () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_abc123";
+    expect(stripeKeyMode()).toBe("test");
+  });
+
+  it("trims surrounding whitespace before reading the prefix", () => {
+    process.env.STRIPE_SECRET_KEY = "  sk_live_abc  ";
+    expect(stripeKeyMode()).toBe("live");
+  });
+});
+
+describe("lib/stripe stripeKeyMisconfigured", () => {
+  const origKey = process.env.STRIPE_SECRET_KEY;
+  const origTier = process.env.CRUMB_TIER;
+  afterEach(() => {
+    if (origKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = origKey;
+    if (origTier === undefined) delete process.env.CRUMB_TIER;
+    else process.env.CRUMB_TIER = origTier;
+  });
+
+  it("is true only for a test key on the Cloud tier", () => {
+    process.env.CRUMB_TIER = "cloud";
+    process.env.STRIPE_SECRET_KEY = "sk_test_abc";
+    expect(stripeKeyMisconfigured()).toBe(true);
+  });
+
+  it("is false for a live key on Cloud", () => {
+    process.env.CRUMB_TIER = "cloud";
+    process.env.STRIPE_SECRET_KEY = "sk_live_abc";
+    expect(stripeKeyMisconfigured()).toBe(false);
+  });
+
+  it("is false on self-host even with a test key (expected there)", () => {
+    process.env.CRUMB_TIER = "self_host";
+    process.env.STRIPE_SECRET_KEY = "sk_test_abc";
+    expect(stripeKeyMisconfigured()).toBe(false);
+  });
+
+  it("is false on Cloud when no key is set (caught by stripeConfigured instead)", () => {
+    process.env.CRUMB_TIER = "cloud";
+    delete process.env.STRIPE_SECRET_KEY;
+    expect(stripeKeyMisconfigured()).toBe(false);
   });
 });

@@ -14,6 +14,15 @@ export function stripeConfigured(): boolean {
   return false;
 }
 
+// No key, no Cloud — keep the surface in sync with the real module.
+export function stripeKeyMode(): "live" | "test" | null {
+  return null;
+}
+
+export function stripeKeyMisconfigured(): boolean {
+  return false;
+}
+
 export const STRIPE_WEBHOOK_SECRET = (): string | null => null;
 export const STRIPE_PORTAL_RETURN_URL = (defaultUrl: string): string => defaultUrl;
 

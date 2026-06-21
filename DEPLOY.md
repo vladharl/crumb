@@ -119,6 +119,60 @@ dashboard service to `image: ghcr.io/<you>/crumb-dashboard:latest` (remove the
 
 ---
 
+## Stripe billing (Cloud go-live)
+
+Only applies to the **Cloud edition** (built with `CRUMB_EDITION=cloud`, run with
+`CRUMB_TIER=cloud`). Self-host is free under AGPL and has no billing — skip this.
+Billing collapses to "free" until every step below is done, so treat it as a
+gate, not a nice-to-have.
+
+**1. Product + 4 prices, with exact lookup keys.** In the Stripe dashboard,
+create one product and four recurring prices. Set each price's **Lookup key** to
+*exactly* one of these — they're the single source of truth that ties a price to
+a plan + interval (`lib/stripe.ts` `lookupKeyFor` builds them; the webhook's
+`planIdFromLookupKey` reads the `team`/`growth` prefix back to set the plan):
+
+| Plan | Interval | Lookup key |
+|---|---|---|
+| Team | Monthly | `team_monthly` |
+| Team | Annual | `team_annual` |
+| Growth | Monthly | `growth_monthly` |
+| Growth | Annual | `growth_annual` |
+
+If a lookup key is missing/misspelled, checkout fails at click time with
+"No Stripe price found…".
+
+**2. Enable Stripe Tax.** We're the merchant of record (Stripe-direct), and
+checkout already requests `automatic_tax` + tax-id + billing-address collection.
+Turn on Stripe Tax and set your origin address so VAT/sales tax is charged.
+
+**3. Webhook endpoint.** Add an endpoint at
+`https://<your-host>/api/v1/stripe/webhook` subscribed to exactly these events
+(the only four the handler processes):
+`customer.subscription.created`, `customer.subscription.updated`,
+`customer.subscription.deleted`, `invoice.payment_failed`.
+
+**4. Environment.** Set on the dashboard service:
+- `STRIPE_SECRET_KEY` → the **live** secret key (`sk_live_…`). A `sk_test_…` key
+  on a live deployment lets checkout complete but **never charges** — the billing
+  page shows a red "test mode on a live deployment" banner and checkout logs a
+  warning if you do this.
+- `STRIPE_WEBHOOK_SECRET` → the signing secret of the endpoint from step 3
+  (without it the webhook returns 503 and subscriptions never sync).
+- `STRIPE_PORTAL_RETURN_URL` *(optional)* → defaults to `…/settings/billing`.
+
+**5. Smoke test** (Stripe **test mode** first, with a separate test key + test
+webhook secret, then repeat in live):
+1. As a workspace admin, **Settings → Billing → pick a plan → Upgrade**.
+2. Complete checkout with test card `4242 4242 4242 4242`.
+3. In Stripe → **Developers → Events**, confirm `customer.subscription.created`
+   was delivered to your endpoint (200).
+4. Reload billing: `Plan` shows team/growth, status `Active`, and the paid
+   features appear under "Includes" + the "This month" usage meters render.
+5. Failure path: in the Stripe customer, fail the next invoice (or use card
+   `4000 0000 0000 0341`) → confirm the **Past due** banner appears and the
+   admin dunning email is sent.
+
 ## Quick reference
 | Thing | Value |
 |---|---|

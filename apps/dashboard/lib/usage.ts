@@ -4,9 +4,10 @@ import { db, usageCounters, type Workspace } from "@crumb/db";
 import { workspacePlan, type Plan } from "./entitlements";
 
 // Per-workspace monthly usage metering + caps — the cost-control layer for
-// the metered Cloud features. Two metrics:
+// the metered Cloud features. Three metrics:
 //   "ai"           → count of LLM inference calls (clustering + ticket drafts)
 //   "replay_bytes" → bytes of replay session data ingested
+//   "usage_events" → count of product usage events ingested via crumb.track()
 //
 // Caps are per-plan, monthly, and reset automatically via the UTC "YYYY-MM"
 // period key (no cron). They only bite on Cloud — self-host's plan is always
@@ -135,4 +136,23 @@ export async function checkUsageEventsCap(
   const cap = usageEventsCap(ws);
   const used = await getUsage(ws.id, "usage_events");
   return { allowed: used + addCount <= cap, used, cap };
+}
+
+export type UsageLine = { metric: UsageMetric; used: number; cap: number };
+
+// Current-month consumption vs cap for every metered metric the workspace's
+// plan actually includes (cap > 0). For the billing page's "this month" view:
+// free yields [] (no metered features); team yields ai + usage_events; growth
+// adds replay_bytes. Caps reflect any env overrides via the *Cap() helpers.
+export async function getUsageSummary(
+  ws: Pick<Workspace, "id" | "planId" | "subscriptionStatus">,
+): Promise<UsageLine[]> {
+  const lines: UsageLine[] = [];
+  const ai = aiCap(ws);
+  if (ai > 0) lines.push({ metric: "ai", used: await getUsage(ws.id, "ai"), cap: ai });
+  const replay = replayBytesCap(ws);
+  if (replay > 0) lines.push({ metric: "replay_bytes", used: await getUsage(ws.id, "replay_bytes"), cap: replay });
+  const events = usageEventsCap(ws);
+  if (events > 0) lines.push({ metric: "usage_events", used: await getUsage(ws.id, "usage_events"), cap: events });
+  return lines;
 }

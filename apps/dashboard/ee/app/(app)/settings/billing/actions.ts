@@ -5,10 +5,11 @@ import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import { requireSession } from "@/lib/auth";
 import {
-  stripeClient, STRIPE_PORTAL_RETURN_URL, priceIdForPlan,
+  stripeClient, STRIPE_PORTAL_RETURN_URL, priceIdForPlan, stripeKeyMisconfigured,
   type PaidPlan, type BillingInterval,
 } from "@/lib/stripe";
 import { isCloud } from "@/lib/tier";
+import { log } from "@/lib/log";
 
 export type CheckoutResult =
   | { ok: true; url: string }
@@ -43,6 +44,15 @@ export async function createCheckoutSession(
 
   const stripe = stripeClient();
   if (!stripe) return { ok: false, error: "Stripe isn't configured on this deployment." };
+  // A test key on a live deployment lets checkout succeed without ever charging.
+  // Don't block (operators may test deliberately) — make it loud in the logs.
+  if (stripeKeyMisconfigured()) {
+    log.warn("stripe checkout on a test key in Cloud — checkout will not charge", {
+      workspaceId: workspace.id,
+      plan,
+      interval,
+    });
+  }
   const priceId = await priceIdForPlan(plan, interval);
   if (!priceId) return { ok: false, error: `No Stripe price found for the ${plan} (${interval === "year" ? "annual" : "monthly"}) plan.` };
 
