@@ -3,6 +3,7 @@ import { findValidPendingSignup, consumePendingSignup } from "@crumb/db";
 import { SESSION_COOKIE, createSession } from "@/lib/auth";
 import { createWorkspaceWithAdmin, ensureUniqueSlug } from "@/lib/provision";
 import { originFromHeaders } from "@/lib/origin";
+import { sendSignupNotification } from "@/lib/email";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,24 @@ export async function GET(req: Request) {
 
     // Burn the token now that the workspace exists — single-use.
     await consumePendingSignup(pending.id);
+
+    // Notify the operator that a new workspace signed up. Opt-in via
+    // CRUMB_OPS_EMAIL; best-effort so a send failure never breaks signup.
+    const opsEmail = process.env.CRUMB_OPS_EMAIL?.trim();
+    if (opsEmail) {
+      try {
+        await sendSignupNotification({
+          to: opsEmail,
+          workspaceName: pending.workspaceName,
+          adminName: pending.adminName,
+          adminEmail: pending.adminEmail,
+          slug,
+          dashboardUrl: base,
+        });
+      } catch (err) {
+        log.error("signup ops-notification send threw", { scope: "crumb/signup", err });
+      }
+    }
 
     const { cookieValue, expiresAt } = await createSession(created.workspace.id, created.user.id);
     const res = NextResponse.redirect(new URL("/inbox", base));
