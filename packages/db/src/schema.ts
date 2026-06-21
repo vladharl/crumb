@@ -691,6 +691,32 @@ export const setupTokens = pgTable("setup_tokens", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ─── self-serve signup tokens (Cloud; gate /signup → workspace) ──
+// A pending, email-verified self-serve signup. Unlike setupTokens (operator-
+// minted, no payload), this carries the workspace + admin details the visitor
+// entered, so the workspace is NOT created until they click the verify link —
+// a fake/unverified email can never mint a workspace. Single-use + short TTL,
+// mirroring magicTokens. Cloud-only in practice (the /signup route only ships
+// in the cloud edition), but the table exists everywhere. `ip` is kept solely
+// for the per-window abuse throttle in the signup action.
+export const pendingSignups = pgTable("pending_signups", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  token: varchar("token", { length: 64 }).notNull().unique(),
+  workspaceName: text("workspace_name").notNull(),
+  slug: varchar("slug", { length: 64 }).notNull(),
+  adminName: text("admin_name").notNull(),
+  adminEmail: text("admin_email").notNull(),
+  ip: text("ip"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  byEmailCreated: index("pending_signups_email_created_idx").on(t.adminEmail, t.createdAt),
+  byIpCreated: index("pending_signups_ip_created_idx").on(t.ip, t.createdAt),
+}));
+
+export type PendingSignup = typeof pendingSignups.$inferSelect;
+
 // ─── relations (for joins) ───────────────────────────────────
 export const itemsRelations = relations(items, ({ one, many }) => ({
   account: one(accounts, { fields: [items.accountId], references: [accounts.id] }),

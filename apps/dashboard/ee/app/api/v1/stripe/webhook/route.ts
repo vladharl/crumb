@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db, workspaces, workspaceUsers } from "@crumb/db";
-import { stripeClient, STRIPE_WEBHOOK_SECRET } from "@/lib/stripe";
+import { stripeClient, STRIPE_WEBHOOK_SECRET, planIdFromLookupKey } from "@/lib/stripe";
 import { sendDunningNotification } from "@/lib/email";
 import { originFromHeaders } from "@/lib/origin";
 import { log } from "@/lib/log";
@@ -129,10 +129,10 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
   // Subscription to the SubscriptionItem — read it off the line.
   const item = sub.items.data[0];
   const seats = item?.quantity ?? 1;
-  // plan_id is whatever the price's lookup_key resolves to (e.g. "team",
-  // "growth"); fall back to the raw price id if no lookup_key was set.
-  const lookupKey = item?.price?.lookup_key ?? null;
-  const planId = lookupKey ?? item?.price?.id ?? "unknown";
+  // plan_id is the plan PREFIX of the price's lookup_key ("team_annual" →
+  // "team"). Interval is a billing detail, not a feature gate. Unknown / unset
+  // → "unknown", which entitlements fail closed to "free".
+  const planId = planIdFromLookupKey(item?.price?.lookup_key);
   const currentPeriodEnd = item?.current_period_end
     ? new Date(item.current_period_end * 1000)
     : null;

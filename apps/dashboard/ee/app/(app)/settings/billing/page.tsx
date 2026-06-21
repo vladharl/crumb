@@ -2,8 +2,8 @@ import { Card, CardHead, Pill } from "@crumb/ui";
 import { getActiveSession } from "@/lib/server";
 import { isCloud } from "@/lib/tier";
 import { stripeConfigured, isActiveStatus } from "@/lib/stripe";
-import { workspaceFeatures, type Feature } from "@/lib/entitlements";
-import { UpgradeButton, ManageButton } from "./BillingActions";
+import { workspaceFeatures, PLAN_FEATURE_MAP, type Feature } from "@/lib/entitlements";
+import { PlanPicker, ManageButton, type PlanCard } from "./BillingActions";
 
 const FEATURE_LABEL: Record<Feature, string> = {
   ai: "AI clustering + ticket drafts",
@@ -121,7 +121,7 @@ export default async function BillingPage() {
             padding: "10px 12px",
             lineHeight: 1.55,
           }}>
-            Stripe isn't configured on this deployment. Set <span className="mono">STRIPE_SECRET_KEY</span>, <span className="mono">STRIPE_PRICE_ID</span>, and <span className="mono">STRIPE_WEBHOOK_SECRET</span>.
+            Stripe isn't configured on this deployment. Set <span className="mono">STRIPE_SECRET_KEY</span> and <span className="mono">STRIPE_WEBHOOK_SECRET</span>, and create prices with lookup keys <span className="mono">team_monthly/annual</span> and <span className="mono">growth_monthly/annual</span>.
           </div>
         )}
 
@@ -156,14 +156,21 @@ export default async function BillingPage() {
           </div>
         </div>
 
-        {!active && configured && isAdmin && (
-          <>
-            <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-              Upgrade to unlock managed email, AI clustering, and Slack — billed monthly, per seat. Cancel any time from the portal.
-            </p>
-            <UpgradeButton />
-          </>
-        )}
+        {!active && configured && isAdmin && (() => {
+          const planCards: PlanCard[] = (["team", "growth"] as const).map(id => ({
+            id,
+            name: id.charAt(0).toUpperCase() + id.slice(1),
+            features: PLAN_FEATURE_MAP[id].map(f => FEATURE_LABEL[f]),
+          }));
+          return (
+            <>
+              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+                Pick a plan to unlock managed email, AI clustering, and integrations. Annual is billed once a year; cancel any time from the portal.
+              </p>
+              <PlanPicker plans={planCards} />
+            </>
+          );
+        })()}
 
         {active && configured && isAdmin && (
           <>

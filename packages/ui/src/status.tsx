@@ -1,6 +1,6 @@
 import { Ic } from "./icons";
 
-export type Status = "open" | "review" | "planned" | "progress" | "shipped" | "declined" | "deferred" | "duplicate";
+export type Status = "open" | "review" | "planned" | "progress" | "shipped" | "declined" | "deferred" | "duplicate" | "resolved";
 
 export const StatusDot = ({ status }: { status: Status }) => <span className={`status-dot ${status}`} />;
 
@@ -13,6 +13,9 @@ const STATUS_MAP: Record<Status, { l: string; v: string }> = {
   declined:  { l: "Won’t ship",  v: "rust"   },
   deferred:  { l: "Set aside",   v: "amber"  },
   duplicate: { l: "Duplicate",   v: "ghost"  },
+  // Customer-initiated close ("I'm all set"). A closed loop, but distinct from
+  // the vendor outcomes above — the customer resolved it themselves.
+  resolved:  { l: "Resolved",    v: "green"  },
 };
 
 export const StatusPill = ({ status, withLabel = true }: { status: Status; withLabel?: boolean }) => {

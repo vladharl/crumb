@@ -331,6 +331,13 @@ export const css = `
 .status-dot.declined { background: #C7544E; }
 .status-dot.deferred { background: #9AA0AA; }
 .status-dot.duplicate { background: transparent; border: 1.5px dashed var(--c-ink-3); box-sizing: content-box; width: 4px; height: 4px; }
+/* Customer-closed — a sage green, distinct from shipped's brighter green. */
+.status-dot.resolved { background: #6BA583; }
+
+/* Close-the-loop affordance in the status rail. */
+.rail-close { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--c-line); }
+.rail-close .row { gap: 8px; }
+.rail-close-btn { width: 100%; justify-content: center; }
 
 .empty {
   text-align: center;

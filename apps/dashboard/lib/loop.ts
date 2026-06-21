@@ -14,11 +14,16 @@ export type LoopTurn = "yours" | "waiting" | "closed";
 
 export type ReplySide = "vendor" | "customer";
 
-/** Statuses where the customer has been told the outcome — the loop is closed. */
+/**
+ * Statuses where the loop is closed — the customer has been told the outcome
+ * (shipped/declined/duplicate) or closed it themselves from the widget
+ * ("resolved").
+ */
 export const LOOP_CLOSED_STATUSES: ReadonlySet<string> = new Set([
   "shipped",
   "declined",
   "duplicate",
+  "resolved",
 ]);
 
 export function loopTurn(item: { status: string; lastReplySide: ReplySide | null }): LoopTurn {

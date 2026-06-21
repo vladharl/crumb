@@ -109,8 +109,8 @@ RESEND_API_KEY=re_xxxxxxxxxxxx
 CRUMB_EMAIL_FROM="Crumb <noreply@crumb.localhostlabs.net>"
 CRUMB_STORAGE_PROVIDER=postgres   # share attachment + replay bytes across instances via the DB
 STRIPE_SECRET_KEY=sk_live_xxx     # billing — plans drive feature entitlements
-STRIPE_PRICE_ID=price_xxx         # price lookup_key must be "team" / "growth"
-STRIPE_WEBHOOK_SECRET=whsec_xxx
+STRIPE_WEBHOOK_SECRET=whsec_xxx   # prices: set lookup_key per price to
+                                  # team_monthly|team_annual|growth_monthly|growth_annual
 ANTHROPIC_API_KEY=sk-ant-xxx      # AI clustering (Team plan)
 # Slack / Linear / Jira / GitHub OAuth-app credentials as added later
 ```
@@ -164,11 +164,12 @@ To wire Stripe on a Cloud deployment:
 ```bash
 CRUMB_TIER=cloud
 STRIPE_SECRET_KEY=sk_live_…       # or sk_test_… in test mode
-STRIPE_PRICE_ID=price_…           # the price your Checkout sells
 STRIPE_WEBHOOK_SECRET=whsec_…     # from "Add endpoint" in the Stripe dashboard
 # Optional:
 STRIPE_PORTAL_RETURN_URL=https://dashboard.crumb.localhostlabs.net/settings/billing
 ```
+
+Create one product with **four prices** and set each price's `lookup_key` to `team_monthly`, `team_annual`, `growth_monthly`, and `growth_annual`. Checkout resolves the right price by `(plan, interval)`; the webhook maps the key's prefix (`team`/`growth`) onto `plan_id`. Enable **Stripe Tax** (`automatic_tax`) since Crumb is the merchant of record on the Stripe-direct path.
 
 Then point a Stripe webhook endpoint at `/api/v1/stripe/webhook` and subscribe to:
 
@@ -177,7 +178,7 @@ Then point a Stripe webhook endpoint at `/api/v1/stripe/webhook` and subscribe t
 - `customer.subscription.deleted`
 - `invoice.payment_failed`
 
-The handler keeps each workspace's `plan_id`, `subscription_status`, `seats`, `current_period_end` in sync with Stripe. Workspace admins click **Upgrade** to land on a Stripe-hosted Checkout, then **Manage subscription** to open the Customer Portal for invoices, card updates, or cancellation. Identity/entitlement gates that depend on plan live behind `isActiveStatus()` in `apps/dashboard/lib/stripe.ts`.
+The handler keeps each workspace's `plan_id`, `subscription_status`, `seats`, `current_period_end` in sync with Stripe. New customers self-serve via **`/signup`** (Cloud-only; email-verified, creates a free workspace), then workspace admins pick a plan + interval on **`/settings/billing`** to land on a Stripe-hosted Checkout, and **Manage subscription** opens the Customer Portal for invoices, card updates, or cancellation. Identity/entitlement gates that depend on plan live behind `isActiveStatus()` in `apps/dashboard/lib/stripe.ts`.
 
 ### Rate limiting
 

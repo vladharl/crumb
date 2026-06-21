@@ -21,6 +21,7 @@ apps/dashboard/app/api/v1/stripe/webhook/
 apps/dashboard/app/api/v1/replay-sessions/
 apps/dashboard/app/api/v1/ask/
 apps/dashboard/app/(app)/settings/billing/
+apps/dashboard/app/signup/
 # Local file-storage backend (replay chunks, attachments) — the default
 # CRUMB_STORAGE_DIR when CRUMB_STORAGE_PROVIDER=local (dev / single-instance).
 apps/dashboard/.crumb-uploads/
@@ -31,6 +32,7 @@ apps/dashboard/.crumb-uploads/
 coverage
 apps/dashboard/tests/e2e/.auth
 apps/dashboard/tests/e2e-ai/.auth
+apps/dashboard/tests/hosted/.auth
 apps/dashboard/test-results
 apps/dashboard/playwright-report
 

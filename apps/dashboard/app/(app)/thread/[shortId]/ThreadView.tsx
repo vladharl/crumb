@@ -184,6 +184,7 @@ function relAge(iso: string): string {
 const STATUS_LABEL_MAP: Record<string, string> = {
   open: "Open", review: "In review", planned: "Planned", progress: "In progress",
   shipped: "Shipped", declined: "Won’t ship", deferred: "Set aside", duplicate: "Duplicate",
+  resolved: "Resolved",
 };
 
 type TrailEntry =
@@ -548,6 +549,15 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
           <Card>
             <CardHead title="Status" />
             <div className="card-body col gap-1">
+              {item.status === "resolved" && (
+                // "resolved" is customer-only — it isn't one of the settable
+                // rows below, so surface the current state explicitly. The vendor
+                // can still pick another status to reopen the loop.
+                <span className="row gap-2 center text-xs" style={{ marginBottom: 6, color: "var(--green)" }}>
+                  <StatusDot status="resolved" />
+                  The customer closed this request.
+                </span>
+              )}
               {!canWrite && <span className="text-xs muted" style={{ marginBottom: 4 }}>Viewers can't change status.</span>}
               {STATUS_ROWS.map(([l, s]) => {
                 const isCurrent = item.status === s;

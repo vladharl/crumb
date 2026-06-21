@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { randomBytes, createHash } from "node:crypto";
@@ -27,7 +28,12 @@ function randomToken(bytes = 32): string {
 }
 
 // ─── session reads ─────────────────────────────────────────
-export async function getSession(): Promise<Session | null> {
+// Memoized per request: the (app) layout and every page that calls
+// getActiveSession()/requireSession() would otherwise each run this 3-table
+// session join. cache() collapses them to one query per render pass (the
+// cookie can't change mid-request), saving a DB round trip on every
+// authenticated render — including each thread open.
+export const getSession = cache(async function getSession(): Promise<Session | null> {
   const cookie = cookies().get(SESSION_COOKIE)?.value;
   if (!cookie) return null;
   const tokenHash = hashCookie(cookie);
@@ -50,7 +56,7 @@ export async function getSession(): Promise<Session | null> {
 
   if (!row) return null;
   return { workspace: row.workspace, user: row.user };
-}
+});
 
 export async function requireSession(): Promise<Session> {
   const s = await getSession();

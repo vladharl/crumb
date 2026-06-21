@@ -5,6 +5,7 @@ import { makeResendProvider } from "./email/resend";
 import { makeSmtpProvider } from "./email/smtp";
 import {
   renderMagicLinkHtml, renderMagicLinkText,
+  renderSignupVerifyHtml, renderSignupVerifyText,
   renderReplyNotificationHtml, renderReplyNotificationText,
   renderStatusChangeHtml, renderStatusChangeText,
   renderCustomerReplyNotificationHtml, renderCustomerReplyNotificationText,
@@ -144,6 +145,32 @@ export async function sendMagicLink(m: MagicLink): Promise<void> {
 
   if (!result.ok) {
     log.error("magic-link send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
+  }
+}
+
+// Self-serve signup confirmation. Mints the workspace only after the link is
+// clicked, so this is the verification gate for /signup. Uses the friendly From
+// (this is the first email a new admin gets, and the verify link is the action).
+export type SignupVerify = {
+  to: string;
+  link: string;
+  ttlMinutes: number;
+  workspaceName: string;
+};
+
+export async function sendSignupVerify(m: SignupVerify): Promise<void> {
+  const { provider } = selectProvider();
+  const result = await provider.send({
+    to: m.to,
+    subject: `Confirm your email · ${m.workspaceName}`,
+    html: renderSignupVerifyHtml({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
+    text: renderSignupVerifyText({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
+    previewLine: `confirm to create ${m.workspaceName} — expires in ${m.ttlMinutes} minutes`,
+    link: m.link,
+  });
+
+  if (!result.ok) {
+    log.error("signup-verify send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
 }
 

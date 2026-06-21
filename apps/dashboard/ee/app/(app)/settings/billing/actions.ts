@@ -4,7 +4,10 @@ import { headers } from "next/headers";
 import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import { requireSession } from "@/lib/auth";
-import { stripeClient, STRIPE_PRICE_ID, STRIPE_PORTAL_RETURN_URL } from "@/lib/stripe";
+import {
+  stripeClient, STRIPE_PORTAL_RETURN_URL, priceIdForPlan,
+  type PaidPlan, type BillingInterval,
+} from "@/lib/stripe";
 import { isCloud } from "@/lib/tier";
 
 export type CheckoutResult =
@@ -19,20 +22,29 @@ function originFromHeaders(): string | null {
   return `${proto}://${host}`;
 }
 
-// Vendor admin clicks "Upgrade" — we ensure a Stripe customer exists for
-// the workspace (creates one on first run, stores the id), then mint a
-// Checkout session for the configured price. The session redirects back
-// to /settings/billing where the webhook will have already written the
-// subscription row before the redirect lands.
-export async function createCheckoutSession(): Promise<CheckoutResult> {
+const PAID_PLANS = new Set<PaidPlan>(["team", "growth"]);
+const INTERVALS = new Set<BillingInterval>(["month", "year"]);
+
+// Vendor admin picks a plan + interval — we ensure a Stripe customer exists for
+// the workspace (creates one on first run, stores the id), then mint a Checkout
+// session for the matching price (resolved by its lookup_key). The session
+// redirects back to /settings/billing where the webhook will have already
+// written the subscription row before the redirect lands.
+export async function createCheckoutSession(
+  plan: PaidPlan,
+  interval: BillingInterval,
+): Promise<CheckoutResult> {
   if (!isCloud()) return { ok: false, error: "Billing is a Cloud-only feature." };
+  if (!PAID_PLANS.has(plan) || !INTERVALS.has(interval)) {
+    return { ok: false, error: "Pick a valid plan and billing interval." };
+  }
   const { workspace, user } = await requireSession();
   if (user.role !== "admin") return { ok: false, error: "Only admins can manage billing." };
 
   const stripe = stripeClient();
   if (!stripe) return { ok: false, error: "Stripe isn't configured on this deployment." };
-  const priceId = STRIPE_PRICE_ID();
-  if (!priceId) return { ok: false, error: "STRIPE_PRICE_ID is unset." };
+  const priceId = await priceIdForPlan(plan, interval);
+  if (!priceId) return { ok: false, error: `No Stripe price found for the ${plan} (${interval === "year" ? "annual" : "monthly"}) plan.` };
 
   const origin = originFromHeaders();
   if (!origin) return { ok: false, error: "Could not determine host." };
@@ -59,10 +71,16 @@ export async function createCheckoutSession(): Promise<CheckoutResult> {
     line_items: [{ price: priceId, quantity: 1 }],
     success_url: `${origin}/settings/billing?stripe=success`,
     cancel_url:  `${origin}/settings/billing?stripe=cancel`,
-    // Allows the customer to pick a quantity (seats) on the Checkout page.
-    // We don't expose seats in our UI yet; defaulting to 1 is fine for v1.
     allow_promotion_codes: true,
-    metadata: { workspace_id: workspace.id, workspace_slug: workspace.slug },
+    // We're the merchant of record (Stripe-direct), so charge the right
+    // VAT/sales tax. automatic_tax needs the customer's address — collect it at
+    // checkout and persist it onto the customer for the portal + invoices.
+    automatic_tax: { enabled: true },
+    billing_address_collection: "required",
+    customer_update: { address: "auto", name: "auto" },
+    tax_id_collection: { enabled: true },
+    metadata: { workspace_id: workspace.id, workspace_slug: workspace.slug, plan },
+    subscription_data: { metadata: { workspace_id: workspace.id, plan } },
   });
 
   if (!session.url) return { ok: false, error: "Stripe did not return a checkout URL." };

@@ -102,6 +102,18 @@ services:
       AISTACK_MODEL: ${AISTACK_MODEL:-}
       AISTACK_EMBEDDINGS_MODEL: ${AISTACK_EMBEDDINGS_MODEL:-}
       EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-}
+      # ── Billing (cloud tier): Stripe-direct subscriptions ──
+      # Prices carry lookup_keys team_monthly|team_annual|growth_monthly|growth_annual;
+      # checkout resolves by (plan, interval) and the webhook keys plan_id off the
+      # prefix. Webhook endpoint: ${CRUMB_APP_URL}/api/v1/stripe/webhook.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PORTAL_RETURN_URL: ${STRIPE_PORTAL_RETURN_URL:-}
+      # ── Self-serve signup abuse protection (Cloudflare Turnstile) ──
+      # Both read at runtime (no rebuild). Unset ⇒ not enforced (fine for
+      # self-host, which has no /signup).
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
       # ── Blob storage (session-replay chunks + attachments) ──
       # "postgres" keeps blobs in the DB — durable across container recreates,
       # which matters whenever the container is ephemeral (every redeploy).

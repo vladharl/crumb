@@ -1,0 +1,52 @@
+name: e2e-hosted
+
+# Verifies integrations against a LIVE deployment. Manual (and optional nightly)
+# only — it hits a real host and must never run on every PR. All credentials
+# come from repo secrets; specs self-skip (not fail) when a credential is
+# absent, so a partial secret set still produces a green, informative run.
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Base URL of the deployment to verify"
+        required: false
+        default: "https://crumb-app.localhostlabs.net"
+      edition:
+        description: "Build edition of the host (community | cloud)"
+        required: false
+        default: "community"
+  # Uncomment to run nightly at 06:00 UTC:
+  # schedule:
+  #   - cron: "0 6 * * *"
+
+jobs:
+  hosted:
+    name: hosted integration verification
+    runs-on: ubuntu-latest
+    env:
+      CRUMB_E2E_HOSTED_URL: ${{ github.event.inputs.base_url || 'https://crumb-app.localhostlabs.net' }}
+      CRUMB_E2E_EDITION: ${{ github.event.inputs.edition || 'community' }}
+      # Provisioned once, stored as repo secrets. Missing ones → those specs skip.
+      CRUMB_E2E_SESSION: ${{ secrets.CRUMB_E2E_SESSION }}
+      CRUMB_E2E_API_KEY: ${{ secrets.CRUMB_E2E_API_KEY }}
+      CRUMB_E2E_EXPECTED_APP_URL: ${{ secrets.CRUMB_E2E_EXPECTED_APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 11.3.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: install Playwright browser
+        run: pnpm --filter dashboard exec playwright install --with-deps chromium
+      - name: run hosted verification suite
+        run: pnpm --filter dashboard test:e2e:hosted
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-hosted
+          path: apps/dashboard/playwright-report
+          retention-days: 7

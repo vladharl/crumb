@@ -54,6 +54,19 @@ export const createReplySchema = z
 
 export type CreateReplyInput = z.infer<typeof createReplySchema>;
 
+// Customer closes ("resolves") their own request from the widget. Identity is
+// resolved/authorized in resolveCustomer (JWT, or workspace_slug + email on
+// self-host); the optional reason is a short free-text note for the timeline.
+export const closeItemSchema = z
+  .object({
+    workspace_slug: optSlug,
+    account_user_email: optEmail,
+    reason: z.string().trim().max(LIMITS.reply, "reason_too_long").optional(),
+  })
+  .strip();
+
+export type CloseItemInput = z.infer<typeof closeItemSchema>;
+
 // Usage-event ingestion (crumb.track). A batch of named events with bounded
 // props — caps mirror the widget's client-side batching so a hostile or chatty
 // client can't push unbounded JSON. props is capped by serialized size after

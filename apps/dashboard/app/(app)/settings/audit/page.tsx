@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 const STATUS_LABELS: Record<string, string> = {
   open: "Open", review: "In review", planned: "Planned", progress: "In progress",
   shipped: "Shipped", declined: "Won’t ship", deferred: "Set aside", duplicate: "Duplicate",
+  resolved: "Resolved",
 };
 
 type FeedEntry = {

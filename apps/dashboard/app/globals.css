@@ -1038,6 +1038,9 @@ textarea.input { resize: vertical; min-height: 80px; }
 .status-dot.declined  { background: var(--rust); border-color: var(--rust); }
 .status-dot.deferred  { background: var(--amber); border-color: var(--amber); }
 .status-dot.duplicate { background: transparent; border-style: dashed; }
+/* Customer-closed: a softer green than shipped, so a self-resolved loop reads
+   as closed-and-done without being mistaken for a shipped outcome. */
+.status-dot.resolved  { background: var(--green); border-color: var(--green); opacity: 0.55; }
 
 /* Switch */
 .switch {

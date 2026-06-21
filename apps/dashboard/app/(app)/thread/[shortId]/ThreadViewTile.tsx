@@ -421,9 +421,22 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
 }
 
 export async function ThreadViewTile({ shortId }: { shortId: string }) {
+  // Opt-in server timing for diagnosing "thread is slow to open" on a real
+  // deployment (dev slowness is just on-demand route compilation). Set
+  // CRUMB_PERF_LOG=1 and tail the server log: a high `load` ms points at DB
+  // latency / pool contention, a low one means the cost is elsewhere (RSC
+  // stream, CPU). Zero overhead when the env var is unset.
+  const perf = process.env.CRUMB_PERF_LOG ? performance.now() : 0;
   const { workspace, user } = await getActiveSession();
+  const sessionAt = perf ? performance.now() : 0;
   const canManageInitiatives = user.role === "admin" || user.role === "pm";
   const data = await loadThread(workspace, shortId, canManageInitiatives);
+  if (perf) {
+    const now = performance.now();
+    console.log(
+      `[perf] thread ${shortId} session=${(sessionAt - perf).toFixed(0)}ms load=${(now - sessionAt).toFixed(0)}ms total=${(now - perf).toFixed(0)}ms`,
+    );
+  }
   if (!data) notFound();
   const canWrite = user.role === "admin" || user.role === "pm";
   return <ThreadView data={data} canWrite={canWrite} />;

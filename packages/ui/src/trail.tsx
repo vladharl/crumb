@@ -26,10 +26,12 @@ const STAGES: Array<{ key: TrailStage; label: string; r: number }> = [
   { key: "closed",   label: "Closed",   r: 3.4 },
 ];
 
-// Statuses that mean a decision was made (past open/review triage).
-const DECIDED = new Set(["planned", "progress", "shipped", "declined", "deferred", "duplicate"]);
-// Statuses where the customer hears the outcome — the loop is closed.
-const CLOSED = new Set(["shipped", "declined", "duplicate"]);
+// Statuses that mean a decision was made (past open/review triage). "resolved"
+// counts — a customer-closed loop has reached its terminal beat.
+const DECIDED = new Set(["planned", "progress", "shipped", "declined", "deferred", "duplicate", "resolved"]);
+// Statuses where the loop is closed — the customer heard the outcome, or
+// closed it themselves ("resolved").
+const CLOSED = new Set(["shipped", "declined", "duplicate", "resolved"]);
 
 export type TrailProgress = { heard: boolean; answered: boolean; decided: boolean; closed: boolean };
 

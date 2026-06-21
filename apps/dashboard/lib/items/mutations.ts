@@ -26,7 +26,10 @@ import { log } from "@/lib/log";
 
 export type Status =
   | "open" | "review" | "planned" | "progress"
-  | "shipped" | "declined" | "deferred" | "duplicate";
+  | "shipped" | "declined" | "deferred" | "duplicate"
+  // Customer-initiated close, set only via the widget's close endpoint — never
+  // a vendor-settable status (deliberately absent from ALLOWED_STATUSES below).
+  | "resolved";
 
 export const STATUS_LABELS: Record<Status, string> = {
   open:      "Open",
@@ -37,8 +40,11 @@ export const STATUS_LABELS: Record<Status, string> = {
   declined:  "Won’t ship",
   deferred:  "Set aside",
   duplicate: "Duplicate",
+  resolved:  "Resolved",
 };
 
+// What a vendor may set from the dashboard/MCP. "resolved" is intentionally
+// excluded — only the item's submitter can resolve it, through the widget.
 export const ALLOWED_STATUSES: Status[] = [
   "open", "review", "planned", "progress", "shipped", "declined", "deferred", "duplicate",
 ];

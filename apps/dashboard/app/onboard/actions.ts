@@ -2,8 +2,9 @@
 
 import { cookies } from "next/headers";
 import { eq } from "drizzle-orm";
-import { db, workspaceUsers, workspaces, findValidSetupToken, consumeSetupToken } from "@crumb/db";
+import { db, workspaces, findValidSetupToken, consumeSetupToken } from "@crumb/db";
 import { SESSION_COOKIE, createSession } from "@/lib/auth";
+import { createWorkspaceWithAdmin } from "@/lib/provision";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
@@ -31,23 +32,14 @@ export async function bootstrapWorkspace(formData: FormData): Promise<OnboardRes
   const [slugTaken] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.slug, slugRaw)).limit(1);
   if (slugTaken) return { ok: false, error: "That workspace slug is already taken." };
 
-  const initials = adminName.split(/\s+/).filter(Boolean).slice(0, 2)
-    .map(s => s[0]?.toUpperCase() ?? "").join("") || "?";
-
-  const [ws] = await db.insert(workspaces).values({
-    slug: slugRaw,
+  const created = await createWorkspaceWithAdmin({
     name: workspaceName,
-  }).returning();
-  if (!ws) return { ok: false, error: "Could not create workspace." };
-
-  const [user] = await db.insert(workspaceUsers).values({
-    workspaceId: ws.id,
-    email: adminEmail,
-    name: adminName,
-    role: "admin",
-    initials: initials.slice(0, 4),
-  }).returning();
-  if (!user) return { ok: false, error: "Could not create admin user." };
+    slug: slugRaw,
+    adminName,
+    adminEmail,
+  });
+  if (!created) return { ok: false, error: "Could not create workspace." };
+  const { workspace: ws, user } = created;
 
   const { cookieValue, expiresAt } = await createSession(ws.id, user.id);
   cookies().set(SESSION_COOKIE, cookieValue, {

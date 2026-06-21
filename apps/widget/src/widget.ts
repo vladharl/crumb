@@ -13,7 +13,9 @@ type ItemType = "bug" | "idea" | "question";
 
 type Status =
   | "open" | "review" | "planned" | "progress"
-  | "shipped" | "declined" | "deferred" | "duplicate";
+  | "shipped" | "declined" | "deferred" | "duplicate"
+  // Set when the customer closes their own request from this widget.
+  | "resolved";
 
 type LauncherVisibility = "auto" | "always" | "hidden";
 
@@ -281,12 +283,17 @@ const STATUS_LABEL: Record<Status, string> = {
   declined:  "Won’t ship",
   deferred:  "Set aside",
   duplicate: "Duplicate",
+  resolved:  "Resolved",
 };
 
 // Statuses worth interrupting the customer for: their loop moved somewhere
 // meaningful (committed, in motion, or closed with an outcome). open/review/
 // deferred/duplicate are vendor bookkeeping — the launcher stays quiet.
 const NEWS_STATUSES = new Set<Status>(["planned", "progress", "shipped", "declined"]);
+
+// Statuses where the loop is already closed — the customer has nothing left to
+// do, so the "close this request" affordance is hidden.
+const CLOSED_STATUSES = new Set<Status>(["shipped", "declined", "duplicate", "resolved"]);
 
 // ─── time helper ──────────────────────────────────────────
 function ageFrom(iso: string): string {
@@ -505,6 +512,10 @@ function init(config: Config) {
   let roadmap: RoadmapData | null = null;
   let roadmapState: AsyncState = { kind: "idle" };
   let submitState: AsyncState = { kind: "idle" };
+  // Customer-close ("resolve") of the open thread. closeConfirm gates a one-tap
+  // confirm so a stray click can't close a request; both reset on thread load.
+  let closeState: AsyncState = { kind: "idle" };
+  let closeConfirm = false;
   let me: Me | null = null;
   let meState: AsyncState = { kind: "idle" };
   let memberMsg: string | null = null;
@@ -702,6 +713,9 @@ function init(config: Config) {
   async function fetchThread(shortId: string) {
     threadState = { kind: "loading" };
     thread = null;
+    // Fresh thread → drop any close prompt/error left over from another item.
+    closeConfirm = false;
+    closeState = { kind: "idle" };
     render();
     try {
       const u = withAuthParams(new URL(`${config.apiBase}/api/v1/items/${encodeURIComponent(shortId)}`));
@@ -910,6 +924,29 @@ function init(config: Config) {
       await fetchThread(t.shortId);
     } catch (err) {
       submitState = { kind: "error", message: err instanceof Error ? err.message : "Could not send." };
+      render();
+    }
+  }
+
+  // Close ("resolve") the open request. The customer is telling us they're all
+  // set; the server flips the item to "resolved" and notifies the vendor. We
+  // refetch so the thread reflects the closed loop (and the affordance hides).
+  async function closeRequest(t: Extract<View, { kind: "thread" }>) {
+    closeConfirm = false;
+    closeState = { kind: "loading" };
+    render();
+    try {
+      const res = await fetch(`${config.apiBase}/api/v1/items/${encodeURIComponent(t.shortId)}/close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: authBody({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      closeState = { kind: "idle" };
+      await fetchThread(t.shortId);
+    } catch (err) {
+      closeState = { kind: "error", message: err instanceof Error ? err.message : "Could not close." };
       render();
     }
   }
@@ -1326,6 +1363,29 @@ function init(config: Config) {
         </div>`;
       }).join("");
 
+      // Close-the-loop affordance — shown only while the request is still open.
+      // Two-tap: "Close this request" reveals a confirm so a stray tap can't
+      // resolve it. Hidden once the loop is closed (vendor outcome or resolved).
+      const canClose = !CLOSED_STATUSES.has(thread.item.status);
+      const closing = closeState.kind === "loading";
+      const closeErr = closeState.kind === "error" ? closeState.message : "";
+      const closeHtml = canClose ? `
+        <div class="rail-close">
+          ${closeErr ? `<div class="err">${escapeHtml(closeErr)}</div>` : ""}
+          ${closeConfirm ? `
+            <p class="lede" style="margin:0 0 8px">Close this request? We’ll let the team know you’re all set.</p>
+            <div class="row">
+              <button class="outline" data-act="close-request-cancel" ${closing ? "disabled" : ""}>Cancel</button>
+              <button class="primary" data-act="close-request" ${closing ? "disabled" : ""}>${closing ? "Closing…" : "Close request"}</button>
+            </div>
+          ` : `
+            <button class="outline rail-close-btn" data-act="close-request-ask" ${closing ? "disabled" : ""}>
+              ${ICONS.check}<span>${closing ? "Closing…" : "Close this request"}</span>
+            </button>
+          `}
+        </div>
+      ` : "";
+
       body = `
         <div class="thread-grid">
           <div class="thread-messages">
@@ -1338,6 +1398,7 @@ function init(config: Config) {
           <aside class="status-rail">
             <div class="rail-heading">Status</div>
             ${eventsHtml || `<p class="lede" style="margin:0">No history yet.</p>`}
+            ${closeHtml}
           </aside>
         </div>
       `;
@@ -1496,6 +1557,21 @@ function init(config: Config) {
     }
     if (act === "send-reply" && view.kind === "thread") {
       submitReply(view);
+      return;
+    }
+    if (act === "close-request-ask" && view.kind === "thread") {
+      closeConfirm = true;
+      closeState = { kind: "idle" };
+      render();
+      return;
+    }
+    if (act === "close-request-cancel") {
+      closeConfirm = false;
+      render();
+      return;
+    }
+    if (act === "close-request" && view.kind === "thread") {
+      closeRequest(view);
       return;
     }
     if (act === "pick-attachment") {

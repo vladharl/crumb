@@ -35,6 +35,7 @@ const STATUS_BAR_COLOR: Record<Status, string> = {
   shipped: "var(--green)",
   declined: "var(--rust)",
   deferred: "var(--amber)",
+  resolved: "rgba(107,142,90,0.55)",
 };
 
 // Time-range scope. Windows the "flow" metrics (loop time, response, volume,

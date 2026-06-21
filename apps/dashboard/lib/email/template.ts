@@ -90,6 +90,86 @@ ${v.link}
 Didn't request this? You can safely ignore this email.`;
 }
 
+// ─── Self-serve signup verification ──────────────────────────
+// Sent when a visitor signs up at /signup. Confirms they own the email before
+// the workspace is created (clicking the link mints it + signs them in).
+
+export type SignupVerifyVars = {
+  workspaceName: string;
+  link: string;
+  ttlMinutes: number;
+};
+
+export function renderSignupVerifyHtml(v: SignupVerifyVars): string {
+  const workspace = escapeHtml(v.workspaceName);
+  const ttl = escapeHtml(ttlPhrase(v.ttlMinutes));
+  const link = escapeHtml(v.link);
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%">
+          <tr><td style="padding:0 8px 24px">
+            <table role="presentation" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding-right:10px">
+                  <svg width="28" height="28" viewBox="-5 -5 42 42" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="16" cy="3"  r="3.0" fill="#E27D3A" fill-opacity="0.45"/>
+                    <circle cx="28" cy="11" r="3.5" fill="#E27D3A" fill-opacity="0.62"/>
+                    <circle cx="28" cy="22" r="4.0" fill="#E27D3A" fill-opacity="0.80"/>
+                    <circle cx="17" cy="29" r="4.5" fill="#E27D3A" fill-opacity="0.94"/>
+                    <circle cx="4"  cy="22" r="5.0" fill="#E27D3A"/>
+                  </svg>
+                </td>
+                <td>
+                  <div style="font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</div>
+                  <div style="font-size:12px;color:#6B5C50">Follow the trail.</div>
+                </td>
+              </tr>
+            </table>
+          </td></tr>
+          <tr><td style="padding:0 8px">
+            <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">Confirm your email</h1>
+            <p style="margin:0 0 24px;font-size:14px;color:#4A2E1F">
+              Click below to finish creating your <strong>${workspace}</strong> workspace and sign in. The link expires in ${ttl} and only works once.
+            </p>
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+              <tr><td style="border-radius:8px;background:#1C1815">
+                <a href="${link}" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:500;color:#FBF7F0;text-decoration:none;border-radius:8px">
+                  Create workspace
+                </a>
+              </td></tr>
+            </table>
+            <p style="margin:0 0 8px;font-size:12px;color:#6B5C50">
+              Or copy and paste this URL into your browser:
+            </p>
+            <p style="margin:0;font-size:12px;color:#4A2E1F;word-break:break-all">
+              <a href="${link}" style="color:#4A2E1F">${link}</a>
+            </p>
+          </td></tr>
+          <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08);margin-top:32px">
+            <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
+              Didn't sign up for Crumb? You can safely ignore this email. No workspace is created without clicking.
+            </p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export function renderSignupVerifyText(v: SignupVerifyVars): string {
+  return `Confirm your email
+
+Click the link below to finish creating your ${v.workspaceName} workspace and sign in. It expires in ${ttlPhrase(v.ttlMinutes)} and only works once.
+
+${v.link}
+
+Didn't sign up for Crumb? You can safely ignore this email.`;
+}
+
 // ─── Reply notification ─────────────────────────────────────
 // Sent to the customer when a vendor (PM) replies on a thread.
 // The email is fully self-contained — no clickable "open in widget"
@@ -241,6 +321,7 @@ const STATUS_LABELS: Record<string, string> = {
   declined:  "Won’t ship",
   deferred:  "Set aside",
   duplicate: "Duplicate",
+  resolved:  "Resolved",
 };
 
 const STATUS_BLURBS: Record<string, string> = {
