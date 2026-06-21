@@ -43,7 +43,7 @@ export function renderMagicLinkHtml(v: MagicLinkVars): string {
                 </td>
                 <td>
                   <div style="font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</div>
-                  <div style="font-size:12px;color:#6B5C50">Follow the trail. ${workspace}</div>
+                  <div style="font-size:12px;color:#6B5C50">Follow the trail${workspace ? ` ${workspace}` : "."}</div>
                 </td>
               </tr>
             </table>
@@ -259,7 +259,7 @@ export function renderReplyNotificationHtml(v: ReplyNotificationVars): string {
           <tr><td style="padding:0 8px">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1C1815;border-radius:10px">
               <tr><td style="padding:16px 18px;color:#FBF7F0">
-                ${body.replace(/color:#1C1815/g, "color:#FBF7F0").replace(/<p /g, '<p ')}
+                ${body.replace(/color:#1C1815/g, "color:#FBF7F0")}
               </td></tr>
             </table>
           </td></tr>
@@ -318,7 +318,7 @@ const STATUS_LABELS: Record<string, string> = {
   planned:   "Planned",
   progress:  "In progress",
   shipped:   "Shipped",
-  declined:  "Won’t ship",
+  declined:  "Won't ship",
   deferred:  "Set aside",
   duplicate: "Duplicate",
   resolved:  "Resolved",
@@ -638,7 +638,7 @@ export function renderDunningHtml(v: DunningVars): string {
           <tr><td style="padding:0 8px">
             <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">Your payment didn't go through</h1>
             <p style="margin:0 0 16px;font-size:14px;color:#4A2E1F">
-              We couldn't charge the card on file for <strong style="font-weight:500">${ws}</strong>. Paid features (AI clustering, integrations, and managed email) stay live during a short grace period. Update your payment method to avoid dropping to the free plan.
+              We couldn't charge the card on file for <strong style="font-weight:500">${ws}</strong>. Paid features stay live during a short grace period. Update your payment method to avoid dropping to the free plan.
             </p>
             ${url ? `
             <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
