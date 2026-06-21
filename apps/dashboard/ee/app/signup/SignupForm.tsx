@@ -9,6 +9,7 @@ export function SignupForm({ turnstileSiteKey }: { turnstileSiteKey?: string | n
   const [workspaceName, setWorkspaceName] = useState("");
   const [adminName, setAdminName] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
+  const [agreed, setAgreed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -89,6 +90,23 @@ export function SignupForm({ turnstileSiteKey }: { turnstileSiteKey?: string | n
 
       <TurnstileWidget siteKey={turnstileSiteKey} />
 
+      <label className="text-sm muted" style={{ display: "flex", alignItems: "flex-start", gap: 8, lineHeight: 1.5, cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          name="acceptedTerms"
+          checked={agreed}
+          onChange={e => setAgreed(e.target.checked)}
+          disabled={pending}
+          style={{ marginTop: 3, flex: "0 0 auto" }}
+        />
+        <span>
+          I agree to the{" "}
+          <a href="https://crumb.localhostlabs.net/terms" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent-deep)", textDecoration: "underline" }}>Terms of Service</a>
+          {" "}and{" "}
+          <a href="https://crumb.localhostlabs.net/privacy" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent-deep)", textDecoration: "underline" }}>Privacy Policy</a>.
+        </span>
+      </label>
+
       {error && (
         <div className="text-sm" style={{
           background: "var(--err-bg)",
@@ -99,7 +117,7 @@ export function SignupForm({ turnstileSiteKey }: { turnstileSiteKey?: string | n
         }}>{error}</div>
       )}
 
-      <Btn variant="primary" lg full icon={<Ic.send style={{ width: 12, height: 12 }} />} disabled={pending}>
+      <Btn variant="primary" lg full icon={<Ic.send style={{ width: 12, height: 12 }} />} disabled={pending || !agreed}>
         {pending ? "Sending confirmation…" : "Create workspace"}
       </Btn>
     </form>

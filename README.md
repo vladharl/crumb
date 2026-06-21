@@ -14,6 +14,7 @@ Built for product and solutions teams tired of watching feedback vanish into a b
 - **A roadmap customers can actually see.** Group feedback into initiatives, make them public, and let accounts follow Now / Next / Later and get notified when something they asked for ships.
 - **Ship to where engineering already lives.** Push an item to Linear, Jira, or GitHub as a ticket drafted by AI from the feedback plus your repo context, then sync status back.
 - **Let AI handle the triage grunt-work.** New feedback is auto-clustered into the right initiative, so your inbox starts organizing itself.
+- **Ask your feedback in plain English.** "What do our highest-ARR accounts keep asking for?" gets an answer grounded in the actual submissions, with citations back to them.
 
 ## See it in action
 
@@ -54,7 +55,7 @@ crumb/
 └── demos/              # Playwright → Remotion demo pipeline (GIFs, PNGs, video)
 ```
 
-On the roadmap: two-way status sync with engineering trackers, multiple linked tickets per item, per-plan replay retention, and required signed-JWT widget identity.
+On the roadmap: two-way status sync with engineering trackers (today it's one-way — Crumb reads engineering status back but doesn't push Crumb status changes out) and multiple linked tickets per item.
 
 ## Run locally
 
@@ -83,16 +84,22 @@ Crumb ships from one repo to two deployment shapes — a **community** build for
 | Submit / triage / reply / status flow | ✅ | ✅ |
 | Magic-link auth | ✅ | ✅ |
 | Embed widget | ✅ | ✅ |
+| Inbound email (reply-by-email + forward-to-capture) | ✅ | ✅ |
 | Magic-link emails (managed delivery) | stdout only | Resend (or other provider) |
 | Vendor-side Slack notifications | BYO Slack app | one-click OAuth · Team plan |
+| Microsoft Teams notifications | webhook URL | webhook URL |
 | Linear / Jira / GitHub ticket sync | BYO OAuth apps | one-click OAuth · Team plan |
+| CRM account + ARR sync (HubSpot / Salesforce) | BYO OAuth apps | one-click OAuth · Team plan |
+| Insights — usage analytics & churn signals | ✅ | ✅ (AI-enriched) |
 | AI initiative clustering | — (Cloud-only) | Team plan |
+| AI ticket drafting (Linear / Jira / GitHub) | — (Cloud-only) | Team plan |
+| Ask your feedback (plain-English Q&A) | — (Cloud-only) | Team plan |
 | Session Record (rrweb capture + in-thread replay) | — (Cloud-only) | Growth plan |
 
-Self-host is free and AGPL. The hosted tier at **[crumb.localhostlabs.net](https://crumb.localhostlabs.net)** runs the same source built as the `cloud` edition, plus the API keys we hold so you don't have to.
+Self-host is free and AGPL. The hosted tier is live at **[crumb-app.localhostlabs.net](https://crumb-app.localhostlabs.net)** (the marketing site is [crumb.localhostlabs.net](https://crumb.localhostlabs.net)) — it runs the same source built as the `cloud` edition, plus the API keys we hold so you don't have to.
 
 **Build-time edition vs. runtime tier** — two distinct knobs:
-- **`CRUMB_EDITION`** (build-time, default `community`) decides *what compiles in*. The `community` build physically excludes the cloud-only code — the Stripe billing UI + webhook, the session-replay APIs, and the heavy `stripe` / `@anthropic-ai/sdk` SDKs — so the self-host image never ships them (those routes 404). The `cloud` build includes everything. Build with `pnpm --filter dashboard build:community` (default) or `build:cloud`.
+- **`CRUMB_EDITION`** (build-time, default `community`) decides *what compiles in*. The `community` build physically excludes the cloud-only code — the Stripe billing UI + webhook, the session-replay APIs, and the heavy `stripe` SDK and cloud AI client — so the self-host image never ships them (those routes 404). The `cloud` build includes everything. Build with `pnpm --filter dashboard build:community` (default) or `build:cloud`.
 - **`CRUMB_TIER`** (runtime, default self-host) decides *behavior within the cloud edition* — per-workspace plan gating, managed creds, etc.
 
 The cloud-only route source lives in `apps/dashboard/ee/` (**licensed under Business Source License 1.1** — see [`apps/dashboard/ee/LICENSE`](./apps/dashboard/ee/LICENSE) for details; automatically converts to AGPL-3.0 on June 21, 2030) and is overlaid into the build by `apps/dashboard/scripts/apply-ee.mjs`: `build:cloud` copies it into `app/`, `build:community` strips it. `pnpm dev` builds the cloud edition so you get every feature locally; the SDK swap relies on webpack, so a Turbopack `next dev --turbo` would behave as cloud regardless.
@@ -111,7 +118,8 @@ CRUMB_STORAGE_PROVIDER=postgres   # share attachment + replay bytes across insta
 STRIPE_SECRET_KEY=sk_live_xxx     # billing — plans drive feature entitlements
 STRIPE_WEBHOOK_SECRET=whsec_xxx   # prices: set lookup_key per price to
                                   # team_monthly|team_annual|growth_monthly|growth_annual
-ANTHROPIC_API_KEY=sk-ant-xxx      # AI clustering (Team plan)
+AISTACK_API_KEY=xxx               # AI features: clustering, ticket drafts, Ask (Team plan)
+# AISTACK_BASE_URL / AISTACK_MODEL  # optional — override the OpenAI-compatible endpoint / model
 # Slack / Linear / Jira / GitHub OAuth-app credentials as added later
 ```
 
@@ -155,6 +163,8 @@ CRUMB_INBOUND_SECRET=optional_shared_secret   # protects the webhook
 
 The dashboard exposes `POST /api/v1/inbound/reply` accepting a generic JSON shape (`{ to, from, text, subject? }`). Point your provider's inbound parser at that endpoint (Resend Inbound, SendGrid Inbound Parse, Postmark, or a Mailgun route all work). The Reply-To on every notification is `reply+<shortId>.<token>@<CRUMB_INBOUND_DOMAIN>`, signed with the workspace's signing secret.
 
+**Forward-to-capture.** A second inbound flow turns forwarded mail into feedback: point a parser at `POST /api/v1/inbound/email` and any message sent (or forwarded) to your capture address lands as a **pending capture** — a triable item you confirm onto an account or discard, rather than a reply on an existing thread. Same `CRUMB_INBOUND_DOMAIN` / `CRUMB_INBOUND_SECRET` wiring.
+
 ### Subscription billing (Cloud)
 
 Crumb Cloud monetizes via Stripe. The community (self-host) edition omits billing entirely: the `/settings/billing` page and the Stripe webhook aren't compiled in (they live in `apps/dashboard/ee/`), the Billing nav item is hidden, and the `stripe` SDK is excluded from the bundle. Build the `cloud` edition (`CRUMB_EDITION=cloud`) to get them.
@@ -166,7 +176,7 @@ CRUMB_TIER=cloud
 STRIPE_SECRET_KEY=sk_live_…       # or sk_test_… in test mode
 STRIPE_WEBHOOK_SECRET=whsec_…     # from "Add endpoint" in the Stripe dashboard
 # Optional:
-STRIPE_PORTAL_RETURN_URL=https://dashboard.crumb.localhostlabs.net/settings/billing
+STRIPE_PORTAL_RETURN_URL=https://crumb-app.localhostlabs.net/settings/billing
 ```
 
 Create one product with **four prices** and set each price's `lookup_key` to `team_monthly`, `team_annual`, `growth_monthly`, and `growth_annual`. Checkout resolves the right price by `(plan, interval)`; the webhook maps the key's prefix (`team`/`growth`) onto `plan_id`. Enable **Stripe Tax** (`automatic_tax`) since Crumb is the merchant of record on the Stripe-direct path.
@@ -223,9 +233,11 @@ Then register a Slack app at [api.slack.com/apps](https://api.slack.com/apps) wi
 
 Slack user lookups are by email — each workspace member is matched once to their Slack `user_id` and cached on first DM. Failed lookups (member's Slack email doesn't match their Crumb email) are retried after 24h.
 
+**Microsoft Teams.** Teams uses an incoming-webhook URL rather than OAuth: paste a channel's webhook under **Settings → Integrations** and Crumb posts the same close-the-loop events as Adaptive Cards. The `Test` button sends a sample card so you can confirm the wiring before going live.
+
 ### Engineering integrations
 
-Push Crumb items out as **Linear / Jira / GitHub** tickets from the thread sidebar. Status syncs back via webhook (one-way, provider is canonical for engineering status; Crumb is canonical for the vendor↔customer relationship). On Cloud with `ANTHROPIC_API_KEY` set, the modal also offers **Suggest with AI** — drafts a title + body matched to your team's voice using up to 10 recent ticket titles from the target, plus (if a GitHub repo is connected on the workspace) the repo's README + top-level tree as project context for any provider's draft.
+Push Crumb items out as **Linear / Jira / GitHub** tickets from the thread sidebar. Status syncs back via webhook (one-way, provider is canonical for engineering status; Crumb is canonical for the vendor↔customer relationship). On Cloud with `AISTACK_API_KEY` set, the modal also offers **Suggest with AI** — drafts a title + body matched to your team's voice using up to 10 recent ticket titles from the target, plus (if a GitHub repo is connected on the workspace) the repo's README + top-level tree as project context for any provider's draft.
 
 Cloud comes with all three apps registered. Self-host BYO. See `apps/dashboard/.env.local.example` for the full env stanzas; the short version:
 
@@ -243,13 +255,22 @@ Webhook URLs (configure inside each provider's app settings):
 
 What this **does not** do: write Crumb status changes back to the provider, mirror comments/attachments, support multi-tracker links per item, or read deep repo code (README + tree only). See the phase plan for the deferred list.
 
+### CRM sync — accounts & ARR
+
+Crumb prioritizes by the revenue behind a request, so every account carries an ARR value. Connect **HubSpot** or **Salesforce** under **Settings → Integrations** and Crumb pulls your companies/accounts and their ARR, then matches incoming feedback to the right account. Like the engineering integrations it's one-click on Cloud (Team plan) and BYO OAuth on self-host:
+
+- **HubSpot**: `HUBSPOT_CLIENT_ID` / `HUBSPOT_CLIENT_SECRET` (+ `HUBSPOT_ARR_PROPERTY` to name the company property holding ARR). Redirect URL `{dashboard origin}/api/integrations/hubspot/callback`.
+- **Salesforce**: `SALESFORCE_CLIENT_ID` / `SALESFORCE_CLIENT_SECRET` (+ `SALESFORCE_LOGIN_URL` for a sandbox / My Domain). Redirect URL `{dashboard origin}/api/integrations/salesforce/callback`.
+
+Line up fields under **Settings → Account mapping**. Connect-time sync and the **Sync now** button work immediately; to keep ARR fresh, hit `POST /api/v1/internal/crm-sync` on a schedule (header `X-Crumb-Sweep-Secret`, e.g. every 6h). ARR you set by hand is marked manual and is never overwritten by a sync unless you opt in.
+
 ### AI initiative clustering
 
 Once a workspace has at least one Initiative, Crumb Cloud can auto-suggest which Initiative new feedback belongs to. Vendors review the guess inline — one click accepts, one click dismisses. Cloud-only; self-host stays untouched.
 
 ```bash
 CRUMB_TIER=cloud
-ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxx
+AISTACK_API_KEY=xxxxxxxxxxxxxxxxxxxx
 ```
 
 Behaviour:
@@ -258,7 +279,15 @@ Behaviour:
 - **Thread sidebar**: under the Initiative card, an "AI suggests" panel appears when nothing's set yet — same accept/dismiss controls.
 - **Bulk**: select unclassified items in the inbox and click **Cluster selected** to batch-classify (capped at 25 per click to keep costs bounded).
 
-Uses Claude Haiku 4.5 — fast and cheap (~$0.001 per item). Accepted/dismissed history is kept so a later model rerun can supersede an earlier dismissal.
+Runs on **aistack** — an OpenAI-compatible endpoint serving an open-weight model (`qwen-35b-8bit` by default); point `AISTACK_BASE_URL` / `AISTACK_MODEL` at your own inference host to use a different one. Accepted/dismissed history is kept so a later model rerun can supersede an earlier dismissal.
+
+### Ask your feedback
+
+Ask a plain-English question across your feedback and get an answer grounded in the actual items — not a guess. The question is embedded, matched against the feedback corpus by vector similarity (pgvector), and an answer is composed from the top matches with inline `[FB-N]` citations that resolve back to the source items. Questions about product usage route to your usage data instead. Cloud-only (Team plan); needs `AISTACK_API_KEY` and the pgvector-enabled Postgres image (`pgvector/pgvector:pg16`).
+
+### Insights — usage analytics & churn signals
+
+**Settings → Insights** turns the raw stream into a read on the relationship: median loop time (submission → outcome), open loops and the ARR behind them, first-response time, volume by status, a 12-week trend, and volume by account ARR tier. Stream product usage in via `POST /api/v1/usage-events` (`crumb.track()` from the widget) and accounts that go quiet or trend negative surface as **at-risk** churn signals. Export a per-account, QBR-style CSV from `GET /api/v1/insights/export`. The non-AI metrics run on self-host; the AI-enriched churn/sentiment signals need a Cloud Team plan.
 
 ### Session record (Cloud)
 
@@ -277,7 +306,7 @@ Cost guard-rails (capped per session):
 - 5,000 events
 - 30 minutes
 
-The recorder stops itself client-side at each cap; the server returns 413 if exceeded. Sessions are linked to a feedback item only after the customer submits with ≥1 chunk flushed — empty sessions stay orphan and can be swept later. v1 keeps sessions forever; per-plan retention is a follow-up.
+The recorder stops itself client-side at each cap; the server returns 413 if exceeded. Sessions are linked to a feedback item only after the customer submits with ≥1 chunk flushed — empty sessions stay orphan and can be swept later. **Per-plan retention is enforced by the sweep** — set `CRUMB_REPLAY_RETENTION_DAYS` (with `_FREE` / `_TEAM` / `_GROWTH` overrides) and aged sessions past the window are pruned; with no retention configured it's a no-op.
 
 **CSP gotcha:** if the customer's site uses `script-src 'self'`, the recorder script tag won't load. Allow your Crumb origin in `script-src` to enable session record on that site.
 
@@ -308,7 +337,7 @@ To embed it in your own product:
         defer></script>
 ```
 
-(For trusted identity, pass a signed `data-user-jwt` instead of the plain `data-*` attributes; the API then trusts only the JWT's claims. Requiring the JWT by default is planned.)
+(For trusted identity, pass a signed `data-user-jwt` instead of the plain `data-*` attributes; the API then trusts only the JWT's claims. **On Cloud the signed JWT is required** — the API rejects plain `data-*` identity with `401 jwt_required`; self-host still accepts plain attributes as a fallback.)
 
 ### Public API
 
@@ -318,6 +347,9 @@ To embed it in your own product:
 | `GET`  | `/api/v1/items?workspace&email`       | List the calling customer's submissions          |
 | `GET`  | `/api/v1/items/[shortId]?workspace&email` | Read a thread (only if the caller submitted it) |
 | `POST` | `/api/v1/items/[shortId]`             | Customer reply on a thread                       |
+| `GET`  | `/api/v1/roadmap?workspace&email`     | Public roadmap items, grouped Now / Next / Later |
+| `GET`  | `/api/v1/me?workspace&email`          | The calling customer's identity + workspace meta |
+| `POST` | `/api/v1/uploads`                     | Upload an attachment                             |
 
 All endpoints CORS-enabled (`Access-Control-Allow-Origin: *`) until auth narrows it down per-workspace.
 
@@ -390,7 +422,7 @@ DATABASE_URL=postgres://crumb:crumb@localhost:5432/crumb pnpm db:seed
 
 For a real deployment, point `DATABASE_URL` at your own managed Postgres and skip the `postgres` service.
 
-The hosted tier (when it ships) runs the same code with auth, billing, and AI clustering layered on top.
+The hosted tier is live at [crumb-app.localhostlabs.net](https://crumb-app.localhostlabs.net), running the same code with auth, billing, and the AI features layered on top.
 
 ### Health checks
 

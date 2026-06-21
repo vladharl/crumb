@@ -40,6 +40,9 @@ export async function startSignup(formData: FormData): Promise<SignupResult> {
   if (!workspaceName)             return { ok: false, error: "Workspace name is required." };
   if (!adminName)                 return { ok: false, error: "Your name is required." };
   if (!EMAIL_RE.test(adminEmail)) return { ok: false, error: "Enter a valid email." };
+  // Affirmative consent: the form gates the button on this, but never trust the
+  // client — a forged POST without the checkbox must not create a workspace.
+  if (!formData.get("acceptedTerms")) return { ok: false, error: "Please accept the Terms of Service and Privacy Policy." };
 
   const ip = h.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
 

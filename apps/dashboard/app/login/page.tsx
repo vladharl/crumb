@@ -64,6 +64,11 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
           <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55 }}>
             Access is invite-only. Contact your administrator if you need an account.
           </p>
+
+          <div className="text-xs muted" style={{ display: "flex", gap: 10, justifyContent: "center", borderTop: "var(--border)", paddingTop: 12 }}>
+            <a href="https://crumb.localhostlabs.net/terms" target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>Terms</a>
+            <a href="https://crumb.localhostlabs.net/privacy" target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>Privacy</a>
+          </div>
         </div>
       </div>
     </main>

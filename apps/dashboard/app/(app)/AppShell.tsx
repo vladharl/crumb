@@ -240,6 +240,10 @@ function UserMenu({ user }: { user: ShellUser }) {
             Settings
           </Link>
           <a href="/logout" className="usermenu-item" role="menuitem">Sign out</a>
+          <div className="text-xs muted" style={{ display: "flex", gap: 10, padding: "8px 12px", borderTop: "var(--border)" }}>
+            <a href="https://crumb.localhostlabs.net/terms" target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>Terms</a>
+            <a href="https://crumb.localhostlabs.net/privacy" target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>Privacy</a>
+          </div>
         </div>
       )}
     </div>
