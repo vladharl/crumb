@@ -2,6 +2,7 @@
 
 import { headers } from "next/headers";
 import { issueMagicLink } from "@/lib/auth";
+import { originFromHeaders } from "@/lib/origin";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -17,11 +18,8 @@ export async function requestMagicLink(formData: FormData): Promise<LoginResult>
     return { ok: false, error: "Please enter a valid email." };
   }
 
-  const h = headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  const proto = h.get("x-forwarded-proto") ?? "http";
-  if (!host) return { ok: false, error: "Could not determine host." };
-  const origin = `${proto}://${host}`;
+  const origin = originFromHeaders(headers());
+  if (!origin) return { ok: false, error: "Could not determine host." };
 
   await issueMagicLink(email, origin);
   return { ok: true };
