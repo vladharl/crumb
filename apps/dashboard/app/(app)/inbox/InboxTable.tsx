@@ -220,6 +220,16 @@ export function InboxTable({
   clusterEnabled: boolean;
 }) {
   const router = useRouter();
+  // Warm the thread route on hover/focus so opening from the inbox is as instant
+  // as opening from the account page. The inbox click is intercepted for the
+  // trail morph, and Next's automatic prefetch is unreliable under a large,
+  // churny row list — so prefetch explicitly, once per row.
+  const prefetched = useRef<Set<string>>(new Set());
+  const warmThread = (shortId: string) => {
+    if (prefetched.current.has(shortId)) return;
+    prefetched.current.add(shortId);
+    router.prefetch(`/thread/${shortId}`);
+  };
   const toast = useToast();
   const confirm = useConfirm();
   const searchParams = useSearchParams();
@@ -896,6 +906,8 @@ export function InboxTable({
                       data-vt-title
                       className="row-link fw-med truncate"
                       style={{ textDecoration: "none", color: "inherit", display: "block", minWidth: 0 }}
+                      onPointerEnter={() => warmThread(it.shortId)}
+                      onFocus={() => warmThread(it.shortId)}
                       onClick={e => {
                         // Plain left-click lifts the row into the thread via a
                         // View Transition; modified clicks (new tab/window) keep
