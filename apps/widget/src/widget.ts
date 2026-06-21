@@ -97,6 +97,9 @@ type LastEvent = { kind: "reply" | "status"; at: string; status?: Status; author
 type ItemSummary = {
   short_id: string;
   title: string;
+  // Present so the widget can search across the full description text, not just
+  // the title. Optional: older payloads (pre body-in-list) omit it.
+  body?: string;
   type: ItemType;
   status: Status;
   created_at: string;
@@ -313,6 +316,50 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+// ─── fuzzy search ─────────────────────────────────────────
+// Tiny dependency-free subsequence matcher: every char of the (lowercased)
+// query must appear in order within the text. Score rewards contiguous runs
+// and matches at word boundaries (start, after a space/-/_/digit boundary) so
+// "rpl strg" still finds "Replay storage" but ranks exact-ish hits higher.
+// Returns -1 when the query isn't a subsequence of the text.
+function fuzzyScore(query: string, text: string): number {
+  if (!query) return 0;
+  if (!text) return -1;
+  const t = text.toLowerCase();
+  let score = 0;
+  let ti = 0;
+  let run = 0; // length of the current contiguous match streak
+  for (let qi = 0; qi < query.length; qi++) {
+    const c = query[qi]!;
+    const found = t.indexOf(c, ti);
+    if (found === -1) return -1;
+    // Boundary bonus: matching the first char or one right after a separator.
+    const prev = found > 0 ? t[found - 1]! : " ";
+    const atBoundary = found === 0 || prev === " " || prev === "-" || prev === "_" || prev === "/";
+    run = found === ti ? run + 1 : 1; // contiguous with the previous match?
+    score += 1 + run + (atBoundary ? 3 : 0);
+    ti = found + 1;
+  }
+  return score;
+}
+
+// Best score across an item's searchable fields, weighted title > id > body.
+function scoreItem(query: string, it: ItemSummary): number {
+  const title = fuzzyScore(query, it.title);
+  const id = fuzzyScore(query, it.short_id);
+  const body = fuzzyScore(query, it.body ?? "");
+  const best = Math.max(title * 3, id * 2, body);
+  // Math.max of all-(-1) fields collapses to a negative — treat as no match.
+  return title < 0 && id < 0 && body < 0 ? -1 : best;
+}
+
+// Best score across a roadmap entry's name (weighted) and description.
+function scoreRoadmap(query: string, e: RoadmapEntry): number {
+  const name = fuzzyScore(query, e.name);
+  const desc = fuzzyScore(query, e.description ?? "");
+  return name < 0 && desc < 0 ? -1 : Math.max(name * 2, desc);
+}
+
 // ─── session record bootstrap ─────────────────────────────
 // Per-tab session token; sessionStorage so reloads continue, new tabs
 // start fresh. 16 random bytes → 32 hex chars → 128 bits of entropy. The
@@ -511,6 +558,9 @@ function init(config: Config) {
   let threadState: AsyncState = { kind: "idle" };
   let roadmap: RoadmapData | null = null;
   let roadmapState: AsyncState = { kind: "idle" };
+  // Live fuzzy-search query for the "Your feedback" list. Persists while the
+  // panel is open; reset when navigating away from the list (see handlers).
+  let searchQuery = "";
   let submitState: AsyncState = { kind: "idle" };
   // Customer-close ("resolve") of the open thread. closeConfirm gates a one-tap
   // confirm so a stray click can't close a request; both reset on thread load.
@@ -521,7 +571,12 @@ function init(config: Config) {
   let memberMsg: string | null = null;
   let channelMsg: string | null = null;
 
-  const setView = (v: View) => { view = v; render(); };
+  const setView = (v: View) => {
+    // Leaving the feedback list drops any active search so a return starts clean.
+    if (v.kind !== "list") searchQuery = "";
+    view = v;
+    render();
+  };
 
   // ── branding cache (instant first paint) ──────────────────
   // Persist /me branding so repeat visits paint the launcher with the correct
@@ -1087,6 +1142,70 @@ function init(config: Config) {
     return `<span class="status-pill"><span class="status-dot ${status}"></span>${STATUS_LABEL[status]}</span>`;
   }
 
+  function feedbackRowHtml(it: ItemSummary): string {
+    return `
+      <button class="item-row" data-act="open-thread" data-short="${escapeHtml(it.short_id)}">
+        <div class="top">
+          <span class="short">${escapeHtml(it.short_id)}</span>
+          ${statusPillHtml(it.status)}
+          <span class="age">${ageFrom(it.updated_at)}</span>
+        </div>
+        <div class="title">${escapeHtml(it.title)}</div>
+        ${it.reply_count > 1 ? `<div class="bottom">${it.reply_count - 1} ${it.reply_count - 1 === 1 ? "reply" : "replies"}</div>` : ""}
+      </button>`;
+  }
+
+  function roadmapResultHtml(e: RoadmapEntry): string {
+    return `
+      <div class="rm-card">
+        <div class="rm-card-top">
+          <span class="rm-name">${escapeHtml(e.name)}</span>
+          <button class="rm-follow${e.following ? " on" : ""}" data-act="follow" data-id="${escapeHtml(e.id)}" data-following="${e.following ? "1" : "0"}">${e.following ? "Following" : "Follow"}</button>
+        </div>
+        ${e.description ? `<p class="rm-desc">${escapeHtml(e.description)}</p>` : ""}
+      </div>`;
+  }
+
+  // Inner HTML for the live-search results container. Empty query → the full
+  // list; otherwise fuzzy-ranked feedback plus any matching public roadmap
+  // initiatives. Reads searchQuery/items/roadmap from closure state so the
+  // input handler can re-render just this container (preserving input focus).
+  function buildResultsHtml(): string {
+    const list = items ?? [];
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) {
+      return `<div class="items-list">${list.map(feedbackRowHtml).join("")}</div>`
+        + (listState.kind === "error" ? `<div class="err">${escapeHtml(listState.message)}</div>` : "");
+    }
+
+    const matched = list
+      .map(it => ({ it, s: scoreItem(q, it) }))
+      .filter(x => x.s >= 0)
+      .sort((a, b) => b.s - a.s);
+
+    const rmEntries: RoadmapEntry[] = roadmap
+      ? [...roadmap.columns.now, ...roadmap.columns.next, ...roadmap.columns.later]
+      : [];
+    const rmMatched = rmEntries
+      .map(e => ({ e, s: scoreRoadmap(q, e) }))
+      .filter(x => x.s >= 0)
+      .sort((a, b) => b.s - a.s);
+
+    if (matched.length === 0 && rmMatched.length === 0) {
+      return `<div class="empty"><p>No matches for “${escapeHtml(searchQuery.trim())}”.</p></div>`;
+    }
+
+    let html = "";
+    if (matched.length) html += `<div class="items-list">${matched.map(x => feedbackRowHtml(x.it)).join("")}</div>`;
+    if (rmMatched.length) {
+      html += `<div class="results-section">
+        <div class="results-head">From the roadmap</div>
+        <div class="rm-results">${rmMatched.map(x => roadmapResultHtml(x.e)).join("")}</div>
+      </div>`;
+    }
+    return html;
+  }
+
   function renderList() {
     const isLoading = listState.kind === "loading" && items === null;
     // The customer is looking at every status pill right now — that clears
@@ -1108,20 +1227,8 @@ function init(config: Config) {
         </div>`;
     } else {
       bodyHtml += `
-        <div class="items-list">
-          ${items.map(it => `
-            <button class="item-row" data-act="open-thread" data-short="${escapeHtml(it.short_id)}">
-              <div class="top">
-                <span class="short">${escapeHtml(it.short_id)}</span>
-                ${statusPillHtml(it.status)}
-                <span class="age">${ageFrom(it.updated_at)}</span>
-              </div>
-              <div class="title">${escapeHtml(it.title)}</div>
-              ${it.reply_count > 1 ? `<div class="bottom">${it.reply_count - 1} ${it.reply_count - 1 === 1 ? "reply" : "replies"}</div>` : ""}
-            </button>
-          `).join("")}
-        </div>
-        ${listState.kind === "error" ? `<div class="err">${escapeHtml(listState.message)}</div>` : ""}`;
+        <input class="field search-input" data-act="search" type="text" placeholder="Search feedback…" aria-label="Search feedback" />
+        <div class="results" data-results>${buildResultsHtml()}</div>`;
     }
 
     panel.innerHTML = `
@@ -1133,6 +1240,20 @@ function init(config: Config) {
           <button class="primary" data-act="new">${ICONS.plus}<span>Share feedback</span></button>
         </div>
       </div>`;
+
+    // A full re-render (roadmap arrival, follow toggle) rebuilds the input.
+    // Set its value via property (no HTML-escaping pitfalls) and, when a search
+    // is active, restore focus + caret-to-end so it stays usable. Keystroke
+    // updates take the partial path in the input handler and never reach here.
+    const searchEl = panel.querySelector<HTMLInputElement>('input[data-act="search"]');
+    if (searchEl) {
+      searchEl.value = searchQuery;
+      if (searchQuery && shadow.activeElement !== searchEl) {
+        searchEl.focus();
+        const n = searchEl.value.length;
+        try { searchEl.setSelectionRange(n, n); } catch { /* ignore */ }
+      }
+    }
   }
 
   function renderAdmin() {
@@ -1394,11 +1515,11 @@ function init(config: Config) {
               ${statusPillHtml(thread.item.status)}
             </div>
             ${msgs || `<p class="lede">No messages yet.</p>`}
+            ${closeHtml}
           </div>
           <aside class="status-rail">
             <div class="rail-heading">Status</div>
             ${eventsHtml || `<p class="lede" style="margin:0">No history yet.</p>`}
-            ${closeHtml}
           </aside>
         </div>
       `;
@@ -1473,7 +1594,7 @@ function init(config: Config) {
     if (!target) return;
     const act = target.dataset.act;
 
-    if (act === "close") { open = false; expanded = false; render(); return; }
+    if (act === "close") { open = false; expanded = false; searchQuery = ""; render(); return; }
     if (act === "toggle-expand") { expanded = !expanded; render(); return; }
     if (act === "back") {
       submitState = { kind: "idle" };
@@ -1589,6 +1710,16 @@ function init(config: Config) {
     const target = e.target as HTMLElement;
     const act = (target as HTMLInputElement | HTMLTextAreaElement).dataset?.act;
     if (!act) return;
+    if (view.kind === "list" && act === "search") {
+      searchQuery = (target as HTMLInputElement).value;
+      // Pull the roadmap in lazily the first time someone searches, so its
+      // initiatives can join the results (only if this workspace has one).
+      if (searchQuery.trim() && roadmap === null && me?.has_roadmap) fetchRoadmap();
+      // Re-render only the results container so the input keeps focus + caret.
+      const box = panel.querySelector("[data-results]");
+      if (box) box.innerHTML = buildResultsHtml();
+      return;
+    }
     if (view.kind === "compose") {
       if (act === "title") { view = { ...view, title: (target as HTMLInputElement).value }; }
       if (act === "body")  { view = { ...view, body:  (target as HTMLTextAreaElement).value }; }

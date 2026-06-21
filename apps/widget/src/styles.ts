@@ -732,4 +732,14 @@ button.outline svg { width: 13px; height: 13px; }
 }
 .rm-follow:hover { background: var(--c-surface-2); color: var(--c-ink); }
 .rm-follow.on { background: var(--c-accent-soft); border-color: var(--c-accent); color: var(--c-accent-ink); }
+
+/* ── list search ── */
+.search-input { flex: none; }
+.results { display: flex; flex-direction: column; gap: 14px; }
+.results-section { display: flex; flex-direction: column; gap: 8px; }
+.results-head {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--c-ink-3);
+}
+.rm-results { display: flex; flex-direction: column; gap: 8px; }
 `;

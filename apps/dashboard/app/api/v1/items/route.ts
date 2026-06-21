@@ -46,6 +46,7 @@ export async function GET(req: Request) {
     .select({
       shortId: items.shortId,
       title: items.title,
+      body: items.body,
       type: items.type,
       status: items.status,
       createdAt: items.createdAt,
@@ -111,6 +112,7 @@ export async function GET(req: Request) {
       return {
         short_id: row.shortId,
         title: row.title,
+        body: row.body,
         type: row.type,
         status: row.status,
         created_at: row.createdAt,
