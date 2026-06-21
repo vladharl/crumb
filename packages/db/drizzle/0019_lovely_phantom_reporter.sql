@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "attachments_reply_idx" ON "attachments" USING btree ("reply_id");

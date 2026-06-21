@@ -12,7 +12,9 @@ import {
   buildAuthUrl as buildLinearAuthUrl,
   LINEAR_REDIRECT_URL,
   linearConfigured,
+  listTeams as listLinearTeamsApi,
 } from "@/lib/integrations/linear";
+import { IntegrationAuthError, clearProviderInstall } from "@/lib/integrations/revoke";
 import {
   buildAuthUrl as buildJiraAuthUrl,
   JIRA_REDIRECT_URL,
@@ -68,6 +70,45 @@ export async function disconnectLinear(): Promise<{ ok: true } | { ok: false; er
     })
     .where(eq(workspaces.id, workspace.id));
 
+  revalidatePath("/settings/integrations");
+  return { ok: true };
+}
+
+// List the Linear teams the connected token can see, for the settings team
+// switcher. Admin-only (it changes where this workspace's tickets land).
+export async function listLinearTeams(): Promise<
+  | { ok: true; teams: Array<{ id: string; name: string; key: string }> }
+  | { ok: false; error: string }
+> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin") return { ok: false, error: "forbidden" };
+  if (!workspace.linearAccessToken) return { ok: false, error: "not_connected" };
+  try {
+    const teams = await listLinearTeamsApi(open(workspace.linearAccessToken));
+    return { ok: true, teams: teams.map(t => ({ id: t.id, name: t.name, key: t.key })) };
+  } catch (err) {
+    // A revoked token clears the install so the card flips to "not connected".
+    if (err instanceof IntegrationAuthError) {
+      await clearProviderInstall(workspace.id, "linear");
+      return { ok: false, error: "revoked" };
+    }
+    return { ok: false, error: "list_failed" };
+  }
+}
+
+// Change the default Linear team new tickets are created in. The team name is
+// cached on the workspace for the connected-card label.
+export async function setLinearDefaultTeam(
+  teamId: string,
+  teamName: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin") return { ok: false, error: "forbidden" };
+  if (!teamId) return { ok: false, error: "missing_team" };
+  await db
+    .update(workspaces)
+    .set({ linearTeamId: teamId, linearTeamName: teamName })
+    .where(eq(workspaces.id, workspace.id));
   revalidatePath("/settings/integrations");
   return { ok: true };
 }

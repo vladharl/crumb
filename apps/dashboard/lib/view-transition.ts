@@ -65,14 +65,21 @@ export function navigateWithTrailMorph(
   tag(source?.querySelector("[data-vt-trail]"), TRAIL_VT);
 
   const startedAt = performance.now();
-  // The destination heading only appears once the route's content streams in
-  // (its loading skeleton has no title). Hold the "after" snapshot until the
-  // real heading — tagged with our morph name — is in the DOM, so the row title
-  // morphs into the heading rather than cross-fading into a skeleton.
+  // Hold the "after" snapshot until a heading tagged with our morph name is in
+  // the DOM, then morph the row title into it. The thread's loading skeleton
+  // (ThreadSkeleton) carries the same morph name on its heading, so this fires
+  // as soon as the skeleton paints — we do NOT wait for the real content to
+  // stream. The cap below is the only thing that bounds how long the old view
+  // can stay frozen if even the skeleton is slow to render.
   const ready = () => {
     const h1 = document.querySelector<HTMLElement>(".content-head h1");
     return !!h1 && getComputedStyle(h1).viewTransitionName === TITLE_VT;
   };
+
+  // Worst-case freeze. The skeleton normally paints within a frame or two, so
+  // this rarely bites; keep it short so a slow navigation falls through to the
+  // route's own loading skeleton quickly instead of staring at the old page.
+  const MAX_HOLD_MS = 400;
 
   // Mark the morph as active so the per-route settle (template.tsx .route-fade)
   // stands down — the transition owns the motion for this navigation.
@@ -88,11 +95,11 @@ export function navigateWithTrailMorph(
         // "after" snapshot is captured.
         requestAnimationFrame(() => resolve());
       const tick = () => {
-        // Resolve as soon as the destination heading is painted (the real
-        // signal). In production a route's loading UI appears within a frame or
-        // two, so this fires fast; the cap is only a safety so a pathologically
-        // slow stream can't hold the old view on screen indefinitely.
-        if (ready() || performance.now() - startedAt > 1500) settle();
+        // Resolve as soon as the destination heading (skeleton or real) is
+        // painted. In production the loading UI appears within a frame or two,
+        // so this fires fast; the cap is only a safety so a pathologically slow
+        // navigation can't hold the old view on screen.
+        if (ready() || performance.now() - startedAt > MAX_HOLD_MS) settle();
         else requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);

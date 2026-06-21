@@ -14,6 +14,7 @@ import { githubConfigured } from "@/lib/integrations/github";
 import { crmConfigured } from "@/lib/integrations/crm";
 import { ConnectSlackButton, DisconnectSlackButton } from "./SlackActions";
 import { ConnectLinearButton, DisconnectLinearButton } from "./LinearActions";
+import { LinearTeamSwitcher } from "./LinearTeamSwitcher";
 import { ConnectJiraButton, DisconnectJiraButton } from "./JiraActions";
 import { ConnectGithubButton, DisconnectGithubButton } from "./GithubActions";
 import {
@@ -188,8 +189,27 @@ export default async function IntegrationsPage({
               <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
                 Crumb status stays canonical. Engineering status from Linear writes to a separate field on the item, displayed in the thread sidebar, never authoritative.
               </p>
+              <details style={{ borderTop: "var(--border)", paddingTop: 10 }}>
+                <summary className="text-xs" style={{ cursor: "pointer", color: "var(--ink)" }}>
+                  Status sync needs a webhook in Linear
+                </summary>
+                <div className="col gap-2" style={{ marginTop: 10 }}>
+                  <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
+                    Linear can&apos;t register webhooks automatically. In Linear, open Settings → API → Webhooks, add the URL below, subscribe to Issue events, and sign it with your <span className="mono">LINEAR_WEBHOOK_SECRET</span>. Until then, tickets are created but engineering status won&apos;t sync back.
+                  </p>
+                  <div className="col gap-1">
+                    <span className="eyebrow">Webhook URL</span>
+                    <div className="code" style={{ wordBreak: "break-all" }}>{`${origin ?? "https://your-dashboard.example.com"}/api/integrations/linear/webhook`}</div>
+                  </div>
+                </div>
+              </details>
               {isAdmin
-                ? <DisconnectLinearButton teamName={ws.linearTeamName} />
+                ? (
+                  <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
+                    <LinearTeamSwitcher currentTeamId={ws.linearTeamId} />
+                    <DisconnectLinearButton teamName={ws.linearTeamName} />
+                  </div>
+                )
                 : <p className="text-xs muted" style={{ margin: 0 }}>Only workspace admins can disconnect.</p>}
             </>
           ) : (

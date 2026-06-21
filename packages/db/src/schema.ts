@@ -769,7 +769,12 @@ export const attachments = pgTable("attachments", {
   uploadedByWorkspaceUserId: uuid("uploaded_by_workspace_user_id").references(() => workspaceUsers.id, { onDelete: "set null" }),
   uploadedByAccountUserId: uuid("uploaded_by_account_user_id").references(() => accountUsers.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => ({
+  // Thread load fetches attachments by the reply ids it just read
+  // (inArray(reply_id, …)); without this it's a seq scan that grows with the
+  // workspace's total attachment count, not the thread's.
+  byReply: index("attachments_reply_idx").on(t.replyId),
+}));
 
 export type Item = typeof items.$inferSelect;
 export type NewItem = typeof items.$inferInsert;

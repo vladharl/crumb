@@ -134,6 +134,13 @@
       "when": 1782010941214,
       "tag": "0018_lethal_shotgun",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1782014968588,
+      "tag": "0019_lovely_phantom_reporter",
+      "breakpoints": true
     }
   ]
 }

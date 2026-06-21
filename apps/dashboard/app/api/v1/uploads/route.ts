@@ -38,6 +38,13 @@ export async function POST(req: Request) {
   const rl = await checkRateLimitAsync(`uploads:${callerIpFromRequest(req)}`, { capacity: 20, refillPerSec: 0.33 });
   if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
 
+  // Parse the multipart body exactly once. Reading the request body twice
+  // (a clone() peek for the customer fields, then again here) could drop the
+  // upstream connection mid-upload and surface as a 502 from the proxy, so we
+  // parse up front and reuse the parsed form for both auth and the file.
+  const form = await req.formData().catch(() => null);
+  if (!form) return fail(400, "bad_multipart");
+
   // Vendor side first — preferred when a dashboard cookie is present.
   const session = await getSession();
   let uploaderWorkspaceUserId: string | null = null;
@@ -46,20 +53,17 @@ export async function POST(req: Request) {
   if (session) {
     uploaderWorkspaceUserId = session.user.id;
   } else {
-    // Customer side. resolveCustomer reads JWT or trusted-email fallback
-    // from the request itself; we just need the workspace_slug + email
-    // from the form for the legacy path.
-    const peek = await req.clone().formData().catch(() => null);
+    // Customer side. resolveCustomer reads the JWT from the request headers;
+    // the workspace_slug + email come from the already-parsed form for the
+    // legacy trusted-email path.
     const r = await resolveCustomer(req, {
-      workspaceSlug: peek?.get("workspace_slug")?.toString() ?? null,
-      email: peek?.get("account_user_email")?.toString() ?? null,
+      workspaceSlug: form.get("workspace_slug")?.toString() ?? null,
+      email: form.get("account_user_email")?.toString() ?? null,
     });
     if (!r.ok) return fail(r.status, r.error);
     uploaderAccountUserId = r.ctx.user.id;
   }
 
-  const form = await req.formData().catch(() => null);
-  if (!form) return fail(400, "bad_multipart");
   const file = form.get("file");
   if (!(file instanceof File)) return fail(400, "missing_file");
   if (file.size <= 0) return fail(400, "empty_file");

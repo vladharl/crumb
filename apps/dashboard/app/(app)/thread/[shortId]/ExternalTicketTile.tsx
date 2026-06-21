@@ -57,10 +57,14 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
   const anyConnected = linearReady || jiraReady || githubReady;
   const linked = !!(item.externalProvider && item.externalTicketId);
 
-  // Multiple providers can be connected at once. Default to whichever was
-  // installed most recently — but since we don't have that data here, fall
-  // back to a fixed priority (Linear > Jira > GitHub). Future iteration:
-  // add a per-item picker if vendors complain about the default.
+  // Multiple providers can be connected at once. The modal lets the vendor
+  // pick among the connected ones; this fixed priority (Linear > Jira > GitHub)
+  // is just the pre-selected default.
+  const connectedProviders = ([
+    linearReady ? "linear" : null,
+    jiraReady ? "jira" : null,
+    githubReady ? "github" : null,
+  ] as const).filter((p): p is "linear" | "jira" | "github" => p !== null);
   const defaultProvider: "linear" | "jira" | "github" =
     linearReady ? "linear" : jiraReady ? "jira" : "github";
 
@@ -135,12 +139,12 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
   }
 
   // ── State (b): provider connected, no ticket linked ────────
-  // All three providers wired. Default to the highest-priority connected
-  // one; the modal's target dropdown lets the vendor pick within that
-  // provider. (Switching providers from the tile is a future iteration.)
-  const createReady = linearReady || jiraReady || githubReady;
-  const provider = defaultProvider;
-  const providerLabel = PROVIDER_LABEL[provider];
+  // Pre-select the highest-priority connected provider; if more than one is
+  // connected the modal shows a tracker picker, and its target dropdown lets
+  // the vendor pick within the chosen provider.
+  const createReady = connectedProviders.length > 0;
+  const multiProvider = connectedProviders.length > 1;
+  const providerLabel = PROVIDER_LABEL[defaultProvider];
 
   return (
     <Card>
@@ -148,7 +152,9 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
       <div className="card-body col gap-2">
         <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.55 }}>
           {createReady
-            ? `Push this item out as a ${providerLabel} ticket. Engineering status will sync back.`
+            ? multiProvider
+              ? "Push this item out as a ticket and pick the tracker. Engineering status will sync back."
+              : `Push this item out as a ${providerLabel} ticket. Engineering status will sync back.`
             : "Connect a provider in Settings to create a ticket from here."}
         </p>
         <div className="row gap-2">
@@ -159,7 +165,7 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
             disabled={!createReady || pending}
             onClick={() => setModalOpen(true)}
           >
-            Create {providerLabel} ticket
+            {multiProvider ? "Create ticket" : `Create ${providerLabel} ticket`}
           </Btn>
         </div>
       </div>
@@ -167,8 +173,8 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
       {modalOpen && (
         <ExternalTicketModal
           itemShortId={itemShortId}
-          provider={provider}
-          providerLabel={providerLabel}
+          connectedProviders={connectedProviders}
+          defaultProvider={defaultProvider}
           initialTitle={itemTitle}
           initialBody={itemBody}
           aiAvailable={aiAvailable}

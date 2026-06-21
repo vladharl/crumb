@@ -5,10 +5,20 @@ import { useRouter } from "next/navigation";
 import { Btn, Dropdown, Ic } from "@crumb/ui";
 import { createExternalTicket, listProviderTargets, suggestExternalTicket } from "./actions";
 
+type Provider = "linear" | "jira" | "github";
+
+const PROVIDER_LABEL: Record<Provider, string> = {
+  linear: "Linear",
+  jira: "Jira",
+  github: "GitHub",
+};
+
 export type ExternalTicketModalProps = {
   itemShortId: string;
-  provider: "linear" | "jira" | "github";
-  providerLabel: string;
+  // Providers connected on this workspace. When more than one is connected the
+  // modal shows a tracker picker; otherwise the single provider is used.
+  connectedProviders: Provider[];
+  defaultProvider: Provider;
   initialTitle: string;
   initialBody: string;
   aiAvailable: boolean;
@@ -17,14 +27,16 @@ export type ExternalTicketModalProps = {
 
 export function ExternalTicketModal({
   itemShortId,
-  provider,
-  providerLabel,
+  connectedProviders,
+  defaultProvider,
   initialTitle,
   initialBody,
   aiAvailable,
   onClose,
 }: ExternalTicketModalProps) {
   const router = useRouter();
+  const [provider, setProvider] = useState<Provider>(defaultProvider);
+  const providerLabel = PROVIDER_LABEL[provider];
   const [title, setTitle] = useState(initialTitle);
   const [body, setBody] = useState(initialBody);
   const [target, setTarget] = useState<string>("");
@@ -56,6 +68,8 @@ export function ExternalTicketModal({
   useEffect(() => {
     let cancelled = false;
     setTargetsLoading(true);
+    setTargetsError(null);
+    setTarget("");
     listProviderTargets(provider).then(r => {
       if (cancelled) return;
       if (r.ok) {
@@ -149,6 +163,26 @@ export function ExternalTicketModal({
         )}
 
         <div className="col gap-3">
+          {connectedProviders.length > 1 && (
+            <div className="col gap-1">
+              <label className="eyebrow" htmlFor="ext-provider">Tracker</label>
+              <Dropdown
+                ariaLabel="Tracker"
+                value={provider}
+                onChange={v => {
+                  setProvider(v as Provider);
+                  // A draft is written in the prior tracker's voice; drop it so
+                  // it isn't mistaken for a suggestion for the new one.
+                  setAiReason(null);
+                  setAiConfidence(null);
+                }}
+                disabled={pending}
+                buttonStyle={{ width: "100%" }}
+                options={connectedProviders.map(p => ({ value: p, label: PROVIDER_LABEL[p] }))}
+              />
+            </div>
+          )}
+
           <div className="col gap-1">
             <label className="eyebrow" htmlFor="ext-title">Title</label>
             <input
