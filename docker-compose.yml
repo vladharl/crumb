@@ -95,6 +95,13 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      # ── AI (cloud tier): aistack model API for triage / clustering / drafting ──
+      # Defaults (endpoint + models) live in lib/ai/*; only the key is required.
+      AISTACK_API_KEY: ${AISTACK_API_KEY:-}
+      AISTACK_BASE_URL: ${AISTACK_BASE_URL:-}
+      AISTACK_MODEL: ${AISTACK_MODEL:-}
+      AISTACK_EMBEDDINGS_MODEL: ${AISTACK_EMBEDDINGS_MODEL:-}
+      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-}
     # Bind to localhost by default. With the Cloudflare Tunnel below, cloudflared
     # reaches the app over the internal `dashboard` network name, so no public
     # port is needed. Set DASHBOARD_BIND=0.0.0.0 only if exposing directly.
