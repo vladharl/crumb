@@ -1,0 +1,25 @@
+# gitleaks configuration for the crumb repository
+#
+# Extends the built-in gitleaks ruleset (useDefault = true) and allowlists
+# known-benign content so the scan stays green:
+#   - test fixtures (tests/**, *.test.*, *.spec.*) routinely carry FAKE
+#     credentials like "sk_live_abc123" to exercise key-parsing/auth logic
+#   - *.env*.example templates document placeholder vars (sk-ant-xxxx, re_xxxx,
+#     "-----BEGIN RSA PRIVATE KEY-----\n...")
+#
+# A real secret committed ANYWHERE else — including deep in git history — still
+# fails the scan and blocks the merge. Keep this allowlist tight: never add a
+# product source path here, only test fixtures and documented templates.
+
+title = "crumb gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and documented env-var placeholders — not real secrets"
+paths = [
+  '''(^|/)tests?/''',
+  '''.*\.(test|spec)\.[cm]?[jt]sx?$''',
+  '''.*\.env(\.[^/]*)?\.example$''',
+]
