@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { requireSession } from "@/lib/auth";
 import { hasFeature } from "@/lib/entitlements";
+import { supportContactEnabled } from "@/lib/email";
 import { AppShell } from "./AppShell";
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
@@ -15,6 +16,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       }}
       aiEnabled={hasFeature(workspace, "ai")}
       tourDone={user.guideCompletedAt != null}
+      supportEnabled={supportContactEnabled()}
     >
       {children}
     </AppShell>

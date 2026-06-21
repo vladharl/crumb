@@ -1,5 +1,5 @@
 import "server-only";
-import type { EmailProvider } from "./email/provider";
+import type { EmailProvider, SendResult } from "./email/provider";
 import { stdoutProvider } from "./email/stdout";
 import { makeResendProvider } from "./email/resend";
 import { makeSmtpProvider } from "./email/smtp";
@@ -13,6 +13,7 @@ import {
   renderDunningHtml, renderDunningText,
   renderRoadmapUpdateHtml, renderRoadmapUpdateText,
   renderSignupNotificationHtml, renderSignupNotificationText,
+  renderSupportRequestHtml, renderSupportRequestText,
 } from "./email/template";
 import { isCloud } from "./tier";
 import { log } from "./log";
@@ -81,6 +82,22 @@ export function activeEmailProvider(): { name: string; from: string } {
 // a self-hoster who hasn't wired email shouldn't be offered prefs we can't honor.
 export function emailConfigured(): boolean {
   return activeEmailProvider().name !== "stdout";
+}
+
+// Where in-app support messages are delivered. Explicit CRUMB_SUPPORT_EMAIL wins;
+// otherwise fall back to the operator address (CRUMB_OPS_EMAIL). Null when neither
+// is set — the in-app contact form stays hidden in that case.
+export function supportContactAddress(): string | null {
+  const explicit = process.env.CRUMB_SUPPORT_EMAIL?.trim();
+  if (explicit) return explicit;
+  const ops = process.env.CRUMB_OPS_EMAIL?.trim();
+  return ops || null;
+}
+
+// The in-app Help → Contact form is offered only when email can actually be
+// delivered AND a destination is configured. Never show a form we can't honor.
+export function supportContactEnabled(): boolean {
+  return emailConfigured() && supportContactAddress() !== null;
 }
 
 // Derive a noreply variant of the configured From — same domain, fixed local
@@ -393,6 +410,36 @@ export async function sendSignupNotification(m: SignupNotification): Promise<voi
   if (!result.ok) {
     log.error("signup-notification send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
+}
+
+// ─── In-app support request (to the operator) ────────────────
+// Sent when a teammate uses Help → Contact. noreply From (it's an internal
+// notice), but Reply-To is the requesting user so the operator can reply to
+// them directly. Returns the SendResult so the action can surface success.
+export type SupportRequest = {
+  to: string;
+  workspaceName: string;
+  fromUserName: string;
+  fromUserEmail: string;
+  subject: string;
+  message: string;
+};
+
+export async function sendSupportRequest(m: SupportRequest): Promise<SendResult> {
+  const { provider, from } = selectProvider();
+  const result = await provider.send({
+    to: m.to,
+    from: noreplyFrom(from),
+    replyTo: m.fromUserEmail,
+    subject: `Support · ${m.workspaceName} · ${m.subject}`,
+    html: renderSupportRequestHtml(m),
+    text: renderSupportRequestText(m),
+    previewLine: `${m.fromUserName} <${m.fromUserEmail}>: ${m.subject}`,
+  });
+  if (!result.ok) {
+    log.error("support-request send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
+  }
+  return result;
 }
 
 export async function sendDunningNotification(m: DunningNotification): Promise<void> {

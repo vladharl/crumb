@@ -8,6 +8,7 @@ import { ConfirmProvider } from "@/components/confirm";
 import { ToastProvider } from "@/components/toast";
 import { TourProvider, TourLauncher, useTour } from "@/components/tour";
 import { CommandProvider, CommandButton, type CommandItem } from "@/components/CommandPalette";
+import { HelpProvider, HelpButton, useHelp } from "@/components/HelpPanel";
 import { NotificationBell } from "@/components/NotificationBell";
 
 type NavLink = {
@@ -76,7 +77,7 @@ function greetTheConsole() {
   );
 }
 
-export function AppShell({ user, aiEnabled = false, tourDone = true, children }: { user: ShellUser; aiEnabled?: boolean; tourDone?: boolean; children: ReactNode }) {
+export function AppShell({ user, aiEnabled = false, tourDone = true, supportEnabled = false, children }: { user: ShellUser; aiEnabled?: boolean; tourDone?: boolean; supportEnabled?: boolean; children: ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -106,6 +107,7 @@ export function AppShell({ user, aiEnabled = false, tourDone = true, children }:
     <ToastProvider>
     <TourProvider autoStart={!tourDone}>
     <CommandProvider items={paletteItems}>
+    <HelpProvider supportEnabled={supportEnabled} userEmail={user.email}>
     <div className="app">
       <header className="topbar">
         <button className="topbar-burger" onClick={() => setOpen(o => !o)} aria-label="Menu">
@@ -134,6 +136,7 @@ export function AppShell({ user, aiEnabled = false, tourDone = true, children }:
 
         <div className="topbar-right">
           <CommandButton />
+          <HelpButton />
           <NotificationBell />
           <UserMenu user={user} />
         </div>
@@ -161,6 +164,7 @@ export function AppShell({ user, aiEnabled = false, tourDone = true, children }:
           <Ic.settings className="ic" />
           <span>Settings</span>
         </Link>
+        <MobileHelpButton onSelect={() => setOpen(false)} />
         <div className="row between" style={{ padding: "8px 6px", marginTop: 8, borderTop: "var(--border)" }}>
           <TourLauncher />
           <a className="link-back" href="/logout">Sign out →</a>
@@ -171,6 +175,7 @@ export function AppShell({ user, aiEnabled = false, tourDone = true, children }:
         {children}
       </main>
     </div>
+    </HelpProvider>
     </CommandProvider>
     </TourProvider>
     </ToastProvider>
@@ -178,9 +183,22 @@ export function AppShell({ user, aiEnabled = false, tourDone = true, children }:
   );
 }
 
-// Avatar dropdown: identity + Getting started (relaunch tour) + Settings + Sign out.
+// Mobile-sheet entry that opens the Help panel (and closes the sheet). Split out
+// because useHelp() must run inside <HelpProvider>, below AppShell in the tree.
+function MobileHelpButton({ onSelect }: { onSelect: () => void }) {
+  const { open } = useHelp();
+  return (
+    <button type="button" className="nav-item" onClick={() => { onSelect(); open(); }}>
+      <Ic.q className="ic" />
+      <span>Help &amp; support</span>
+    </button>
+  );
+}
+
+// Avatar dropdown: identity + Getting started (relaunch tour) + Help + Settings + Sign out.
 function UserMenu({ user }: { user: ShellUser }) {
   const { start } = useTour();
+  const { open: openHelp } = useHelp();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -214,6 +232,9 @@ function UserMenu({ user }: { user: ShellUser }) {
           </div>
           <button type="button" className="usermenu-item" role="menuitem" onClick={() => { setOpen(false); start(); }}>
             Getting started
+          </button>
+          <button type="button" className="usermenu-item" role="menuitem" onClick={() => { setOpen(false); openHelp(); }}>
+            Help &amp; support
           </button>
           <Link href="/settings" className="usermenu-item" role="menuitem" onClick={() => setOpen(false)}>
             Settings

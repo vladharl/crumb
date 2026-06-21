@@ -97,6 +97,8 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       # Operator address notified when someone completes self-serve signup.
       CRUMB_OPS_EMAIL: ${CRUMB_OPS_EMAIL:-}
+      # Where in-app Help → Contact messages go (falls back to CRUMB_OPS_EMAIL).
+      CRUMB_SUPPORT_EMAIL: ${CRUMB_SUPPORT_EMAIL:-}
       # ── AI (cloud tier): aistack model API for triage / clustering / drafting ──
       # Defaults (endpoint + models) live in lib/ai/*; only the key is required.
       AISTACK_API_KEY: ${AISTACK_API_KEY:-}

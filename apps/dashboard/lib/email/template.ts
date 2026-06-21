@@ -800,3 +800,68 @@ Admin:     ${v.adminName} <${v.adminEmail}>
 ${v.dashboardUrl ? `\nOpen Crumb: ${v.dashboardUrl}` : ""}
 You're receiving this because CRUMB_OPS_EMAIL is set on this Crumb deployment.`;
 }
+
+// ─── In-app support request (operator inbox) ─────────────────
+// Sent to the deployment's support address when a teammate uses the in-app
+// Help → Contact form. From is the noreply variant; Reply-To is set to the
+// sender so the operator can reply to them directly from their mail client.
+
+export type SupportRequestVars = {
+  workspaceName: string;
+  fromUserName: string;
+  fromUserEmail: string;
+  subject: string;
+  message: string;
+};
+
+export function renderSupportRequestHtml(v: SupportRequestVars): string {
+  const ws = escapeHtml(v.workspaceName);
+  const name = escapeHtml(v.fromUserName);
+  const email = escapeHtml(v.fromUserEmail);
+  const subject = escapeHtml(v.subject);
+  const body = escapeHtml(v.message).replace(/\n/g, "<br>");
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%">
+          <tr><td style="padding:0 8px 24px">
+            <div style="font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</div>
+            <div style="font-size:12px;color:#6B5C50">Support request</div>
+          </td></tr>
+          <tr><td style="padding:0 8px">
+            <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">${subject}</h1>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1C1815;border-radius:10px;margin-bottom:20px">
+              <tr><td style="padding:16px 18px;color:#FBF7F0;font-size:14px;line-height:1.7">
+                <div><span style="color:#9C8C7E">From</span> &nbsp;${name} &lt;<a href="mailto:${email}" style="color:#FBF7F0">${email}</a>&gt;</div>
+                <div><span style="color:#9C8C7E">Workspace</span> &nbsp;<strong style="font-weight:500">${ws}</strong></div>
+              </td></tr>
+            </table>
+            <div style="font-size:14px;line-height:1.7;color:#1C1815;white-space:normal">${body}</div>
+          </td></tr>
+          <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08)">
+            <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
+              Sent from the in-app Help &rarr; Contact form. Reply directly to reach ${name}.
+            </p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export function renderSupportRequestText(v: SupportRequestVars): string {
+  return `Support request · ${v.workspaceName}
+
+${v.subject}
+
+From:      ${v.fromUserName} <${v.fromUserEmail}>
+Workspace: ${v.workspaceName}
+
+${v.message}
+
+—
+Sent from the in-app Help → Contact form. Reply directly to reach ${v.fromUserName}.`;
+}
