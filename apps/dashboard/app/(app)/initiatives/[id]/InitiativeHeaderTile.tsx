@@ -4,6 +4,8 @@ import { Card, PageHead, Pill } from "@crumb/ui";
 import { db, initiatives, items, workspaceUsers } from "@crumb/db";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
+import { usageAnalyticsAllowed } from "@/lib/entitlements";
+import { knownEventNames } from "@/lib/usage/signals";
 import { InitiativeStatusPill } from "../InitiativeChip";
 import { EditPanel } from "./EditPanel";
 
@@ -71,6 +73,14 @@ export async function InitiativeHeaderTile({ id }: { id: string }) {
         .orderBy(asc(workspaceUsers.name))
     : [];
 
+  // Suggestions for the "tracked events" picker: event names this workspace has
+  // actually emitted. Only fetched for editors with the analytics entitlement;
+  // empty otherwise (the field stays free-text so you can pre-name an event a
+  // not-yet-shipped feature will emit).
+  const eventOptions = canManage && usageAnalyticsAllowed(workspace)
+    ? await knownEventNames(workspace.id)
+    : [];
+
   return (
     <>
       <PageHead
@@ -89,6 +99,7 @@ export async function InitiativeHeaderTile({ id }: { id: string }) {
               trackedEventNames: initiative.trackedEventNames,
             }}
             members={members}
+            eventOptions={eventOptions}
             canManage={canManage}
           />
         }

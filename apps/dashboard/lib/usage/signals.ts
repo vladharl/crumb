@@ -63,6 +63,26 @@ export async function accountTopEvents(accountId: string, limit = 6): Promise<To
   return rows.map((r) => ({ name: r.name, count: Number(r.n) }));
 }
 
+export type KnownEvent = { name: string; count: number };
+
+// Distinct usage-event names seen in the workspace over the last 90 days, with
+// their volume — the suggestion set for the initiative "tracked events" picker.
+// Ordered by recent volume so the events most worth tracking surface first.
+// Cheap against the (workspace_id, name, ts) index; capped so a chatty
+// integration can't return thousands of names. Empty on deployments with no
+// events (or no analytics entitlement) — callers fall back to free text.
+export async function knownEventNames(workspaceId: string, limit = 200): Promise<KnownEvent[]> {
+  const rows = (await db.execute(sql`
+    SELECT name, COUNT(*) AS n
+    FROM usage_events
+    WHERE workspace_id = ${workspaceId} AND ts > now() - interval '90 days'
+    GROUP BY name
+    ORDER BY n DESC, name ASC
+    LIMIT ${limit}
+  `)) as unknown as Array<{ name: string; n: number | string }>;
+  return rows.map((r) => ({ name: r.name, count: Number(r.n) }));
+}
+
 export type UsageEventRow = { name: string; ts: Date; pageUrl: string | null; props: Record<string, unknown> };
 
 // The submitter's events in the window leading up to a feedback item — powers
