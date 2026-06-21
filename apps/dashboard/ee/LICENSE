@@ -1,0 +1,58 @@
+Business Source License 1.1
+
+Parameters:
+
+Licensor:             Localhost Labs LLC
+Licensed Work:        The files in apps/dashboard/ee/
+                      The Licensed Work is (c) 2024 Localhost Labs LLC
+Change Date:          June 21, 2030
+Change License:       GNU Affero General Public License v3.0 or later
+
+For information about alternative commercial licensing arrangements for
+the Licensed Work, please contact sales@localhostlabs.net.
+
+Notice
+
+Business Source License 1.1
+
+This Business Source License (this "Agreement") sets forth the terms and conditions under which Licensor (as defined below) makes available the software identified above (the "Licensed Work").
+
+1. The Licensed Work is provided to you by the Licensor under the terms of this Business Source License until the Change Date (as defined below), upon which this Agreement will be superseded by the Change License (as defined below).
+
+2. As an alternative to section 1, the Licensed Work is also provided under the terms of the Additional Use Grant (as defined below).
+
+3. As of the Change Date, or if you have acquired a commercial license from the Licensor, the Licensed Work is instead provided to you under the terms of the Change License, effective as of the date you acquire the commercial license or the Change Date, as applicable.
+
+4. Redistribution and use in source and binary forms, with or without modification, is permitted provided that the following conditions are met:
+
+  a) Redistributions of source code must retain the above copyright notice, this list of conditions, and the following disclaimer.
+
+  b) Redistributions in binary form must reproduce the above copyright notice, this list of conditions, and the following disclaimer in the documentation provided with the distribution.
+
+  c) Neither the name of Licensor nor the names of any contributors may be used to endorse or promote products derived from this Licensed Work without specific prior written permission from Licensor, except as required by applicable law or regulation.
+
+5. As a condition to your use of the Licensed Work:
+
+  a) You may not offer the Licensed Work as a service to third parties. This includes, but is not limited to: operating the Licensed Work as a Software-as-a-Service (SaaS) offering, offering hosted access to the Licensed Work, or any substantially similar commercial use.
+
+  b) You may not use the Licensed Work in any production environment or for any production purpose, except under the terms of a separate commercial license agreement with Licensor, or under the Additional Use Grant (as defined below).
+
+6. Additional Use Grant. The source code of the Licensed Work is provided to you free of charge for the purpose of evaluation, development, and testing in non-production environments. You may:
+
+  a) Use the Licensed Work for evaluation, learning, and development purposes
+
+  b) Modify and distribute the Licensed Work for non-production purposes
+
+  c) Self-host the Licensed Work for internal, non-commercial use
+
+  d) Use the Licensed Work in your own application for non-production testing and development
+
+All non-production uses must not involve offering the Licensed Work (or any modification or derivative work thereof) as a service to third parties, and must not involve any production use.
+
+7. THE LICENSED WORK IS PROVIDED "AS IS", AND LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND CONDITIONS, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION ANY WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND TITLE.
+
+8. LICENSOR WILL NOT BE LIABLE FOR ANY DAMAGES OF ANY KIND, INCLUDING BUT NOT LIMITED TO INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, WHETHER OR NOT AWARE OF THE POSSIBILITY OF SUCH DAMAGES, ARISING OUT OF: (A) THIS AGREEMENT, (B) THE LICENSED WORK, (C) INTELLECTUAL PROPERTY INFRINGEMENT CLAIMS RELATING TO ANY LINKED CONTENT, OR (D) USE OF ANY LINKED CONTENT.
+
+9. For a commercial license to use the Licensed Work in production environments or for SaaS offerings, please contact sales@localhostlabs.net.
+
+10. This Agreement will automatically terminate and revert to the Change License on the Change Date, unless a commercial license has been obtained prior to that date, in which case the Change License will apply upon expiration or termination of the commercial license.
