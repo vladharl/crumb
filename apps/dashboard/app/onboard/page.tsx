@@ -1,22 +1,18 @@
 import { redirect } from "next/navigation";
-import { db, workspaceUsers, findValidSetupToken } from "@crumb/db";
+import { findValidSetupToken } from "@crumb/db";
 import { BrandMark } from "@crumb/ui";
 import { OnboardForm } from "./OnboardForm";
 
 export const dynamic = "force-dynamic";
 
-async function isFirstRun(): Promise<boolean> {
-  const [row] = await db.select({ id: workspaceUsers.id }).from(workspaceUsers).limit(1);
-  return !row;
-}
-
 export default async function OnboardPage({ searchParams }: { searchParams: { token?: string } }) {
-  // Onboarding is reachable only via a one-time setup link minted on the host
-  // (`cli setup-link`). No valid token — or an instance that's already set up —
-  // bounces to the sign-in screen.
+  // Onboarding creates a NEW workspace (+ its first admin). The one-time setup
+  // link minted on the host (`cli setup-link`) is the only gate — it works for
+  // the first use of ANY workspace, not just the first one on the instance.
+  // No valid token bounces to the sign-in screen.
   const token = searchParams.token ?? "";
   const setup = token ? await findValidSetupToken(token) : null;
-  if (!setup || !(await isFirstRun())) redirect("/login");
+  if (!setup) redirect("/login");
 
   return (
     <main style={{
@@ -39,7 +35,7 @@ export default async function OnboardPage({ searchParams }: { searchParams: { to
           <hr className="divider" />
 
           <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.55 }}>
-            No workspaces exist yet on this Crumb instance. The first person here becomes the admin (you). Add teammates after.
+            Create a new workspace. You'll be its admin — add teammates after.
           </p>
 
           <OnboardForm token={token} />

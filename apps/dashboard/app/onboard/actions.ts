@@ -11,15 +11,10 @@ const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 export type OnboardResult = { ok: true } | { ok: false; error: string };
 
 export async function bootstrapWorkspace(formData: FormData): Promise<OnboardResult> {
-  // Re-check first-run on the server: never allow workspace creation once
-  // any user exists — that protects against a stale browser tab being used
-  // to clobber a fresh deploy.
-  const [existing] = await db.select({ id: workspaceUsers.id }).from(workspaceUsers).limit(1);
-  if (existing) return { ok: false, error: "Workspace already set up. Sign in instead." };
-
   // Onboarding is authorized only by a valid one-time setup link (minted on the
-  // host via `cli setup-link`). Re-validate here so the form can't be posted
-  // without one.
+  // host via `cli setup-link`). The token — not an empty-instance check — is the
+  // gate, so this works for the first use of any NEW workspace, not just the
+  // first workspace on the instance.
   const setup = await findValidSetupToken(String(formData.get("token") ?? ""));
   if (!setup) return { ok: false, error: "This setup link is invalid or expired. Generate a new one on the server." };
 

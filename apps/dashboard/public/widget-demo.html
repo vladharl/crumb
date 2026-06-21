@@ -159,10 +159,18 @@
       var s = document.createElement('script');
       s.src = '/widget.js';
       s.defer = true;
-      s.dataset.workspace   = q.get('ws')      || 'southbeam';
-      s.dataset.userEmail   = q.get('email')   || 'maya@acme.co';
-      s.dataset.userName    = q.get('name')    || 'Maya';
-      s.dataset.accountName = q.get('account') || 'Acme Co';
+      s.dataset.workspace = q.get('ws') || 'southbeam';
+      // Cloud tier (CRUMB_TIER=cloud) rejects the trusted-email path, so pass a
+      // server-signed identity JWT via ?jwt=… to test against a cloud deploy.
+      // Self-host falls back to the ?email/?name/?account demo identity.
+      var jwt = q.get('jwt');
+      if (jwt) {
+        s.dataset.userJwt = jwt;
+      } else {
+        s.dataset.userEmail   = q.get('email')   || 'maya@acme.co';
+        s.dataset.userName    = q.get('name')    || 'Maya';
+        s.dataset.accountName = q.get('account') || 'Acme Co';
+      }
       document.head.appendChild(s);
     })();
   </script>
