@@ -11,6 +11,7 @@ import { suggestInitiative, clusterConfigured, CLUSTER_MODEL } from "@/lib/ai/cl
 import { autoClusterItem } from "@/lib/ai/auto-cluster";
 import { aiCap, consumeAi } from "@/lib/usage";
 import { notifyRoadmapFollowers } from "@/lib/roadmap-notify";
+import { draftChangelogForInitiative } from "@/lib/changelog";
 import { log } from "@/lib/log";
 
 const ROADMAP_COLUMNS = new Set(["now", "next", "later"]);
@@ -148,11 +149,22 @@ export async function updateInitiative(
     updates.description = desc;
   }
 
+  // Detect a transition INTO "shipped" so we can auto-draft a changelog entry
+  // once (not on every re-save while already shipped).
+  let shippedNow = false;
   if (patch.status !== undefined) {
     if (!ALLOWED_STATUSES.includes(patch.status as InitiativeStatus)) {
       return { ok: false, error: "bad_status" };
     }
     updates.status = patch.status;
+    if (patch.status === "shipped") {
+      const [prev] = await db
+        .select({ status: initiatives.status })
+        .from(initiatives)
+        .where(and(eq(initiatives.workspaceId, workspace.id), eq(initiatives.id, id)))
+        .limit(1);
+      shippedNow = !!prev && prev.status !== "shipped";
+    }
   }
 
   if (patch.color !== undefined) {
@@ -199,9 +211,14 @@ export async function updateInitiative(
     .returning({ id: initiatives.id });
   if (r.length === 0) return { ok: false, error: "not_found" };
 
+  // Just shipped → auto-draft an announce-shipped changelog entry (idempotent,
+  // fire-and-forget). A human reviews + publishes it from /changelog.
+  if (shippedNow) void draftChangelogForInitiative(workspace, id);
+
   revalidatePath("/initiatives");
   revalidatePath(`/initiatives/${id}`);
   revalidatePath("/inbox");
+  revalidatePath("/changelog");
   return { ok: true };
 }
 

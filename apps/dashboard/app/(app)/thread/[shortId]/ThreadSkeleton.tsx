@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Card, CardHead, Ic, PageHead, SkeletonCard, SkeletonCircle, SkeletonLine, SkeletonPill } from "@crumb/ui";
 
 // Mirrors ThreadView's PageHead + tabs + cols-2-1 layout while data is
@@ -8,7 +9,7 @@ export function ThreadSkeleton({ shortId }: { shortId?: string }) {
   return (
     <>
       <PageHead
-        crumb={<><span>Inbox</span><Ic.chevR style={{ width: 10, height: 10 }} />{shortId ? <span className="mono">{shortId}</span> : <SkeletonLine width={48} height={10} />}</>}
+        crumb={<><Link href="/inbox" style={{ color: "inherit" }}>Inbox</Link><Ic.chevR style={{ width: 10, height: 10 }} />{shortId ? <span className="mono">{shortId}</span> : <SkeletonLine width={48} height={10} />}</>}
         title={<SkeletonLine width="55%" height={22} />}
         // Carry the morph names on the skeleton too, so an opening row has a
         // target on the very first frame (before content streams) — the title

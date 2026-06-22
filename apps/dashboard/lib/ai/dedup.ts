@@ -25,27 +25,26 @@ function defaultThreshold(): number {
 
 type Row = { id: string; short_id: string; title: string; status: string; similarity: number };
 
-// Nearest neighbours to `itemId`'s stored embedding, within the same workspace,
-// excluding itself and anything already merged. Two-step (fetch target vector,
-// then ANN with a constant query vector) so Postgres uses the HNSW index — a
-// self-join wouldn't let it treat the vector as a planning constant.
-export async function findDuplicateCandidates(opts: {
+// Nearest neighbours to an arbitrary query vector within a workspace, excluding
+// anything already merged (and optionally one item id — used when the vector
+// belongs to an existing item). The vector is passed as a planning constant so
+// Postgres uses the HNSW index. This is the shared core: `findDuplicateCandidates`
+// fetches a stored item vector then calls here; the Autopilot gate embeds an
+// inbound capture's text and calls here BEFORE any item exists, to answer
+// "is this new?". `vec` is a raw embedding (number[]); we serialise it to
+// pgvector's "[a,b,c]" text form (same shape as the customType driver).
+export async function findDuplicatesForVector(opts: {
   workspaceId: string;
-  itemId: string;
+  vec: number[];
+  excludeItemId?: string | null;
   limit?: number;
   threshold?: number;
 }): Promise<DuplicateCandidate[]> {
   const limit = Math.max(1, Math.min(20, opts.limit ?? 5));
   const threshold = opts.threshold ?? defaultThreshold();
-
-  const target = (await db.execute(sql`
-    SELECT embedding::text AS embedding
-    FROM item_embeddings
-    WHERE item_id = ${opts.itemId} AND workspace_id = ${opts.workspaceId}
-    LIMIT 1
-  `)) as unknown as Array<{ embedding: string }>;
-  if (!target.length) return [];
-  const vec = target[0].embedding; // pgvector text form "[a,b,c]"
+  if (!opts.vec.length) return [];
+  const vec = `[${opts.vec.join(",")}]`;
+  const exclude = opts.excludeItemId ?? "00000000-0000-0000-0000-000000000000";
 
   const rows = (await db.execute(sql`
     SELECT i.id AS id, i.short_id AS short_id, i.title AS title, i.status AS status,
@@ -53,7 +52,7 @@ export async function findDuplicateCandidates(opts: {
     FROM item_embeddings e
     JOIN items i ON i.id = e.item_id
     WHERE e.workspace_id = ${opts.workspaceId}
-      AND e.item_id <> ${opts.itemId}
+      AND e.item_id <> ${exclude}
       AND i.merged_into_id IS NULL
       AND i.status <> 'duplicate'
     ORDER BY e.embedding <=> ${vec}::vector ASC
@@ -69,4 +68,32 @@ export async function findDuplicateCandidates(opts: {
       similarity: Number(r.similarity),
     }))
     .filter((c) => Number.isFinite(c.similarity) && c.similarity >= threshold);
+}
+
+// Nearest neighbours to `itemId`'s stored embedding. Two-step (fetch target
+// vector, then ANN) so Postgres treats the vector as a planning constant — a
+// self-join wouldn't.
+export async function findDuplicateCandidates(opts: {
+  workspaceId: string;
+  itemId: string;
+  limit?: number;
+  threshold?: number;
+}): Promise<DuplicateCandidate[]> {
+  const target = (await db.execute(sql`
+    SELECT embedding::text AS embedding
+    FROM item_embeddings
+    WHERE item_id = ${opts.itemId} AND workspace_id = ${opts.workspaceId}
+    LIMIT 1
+  `)) as unknown as Array<{ embedding: string }>;
+  if (!target.length) return [];
+  // pgvector text form "[a,b,c]" → number[] for the shared core.
+  const vec = JSON.parse(target[0].embedding) as number[];
+
+  return findDuplicatesForVector({
+    workspaceId: opts.workspaceId,
+    vec,
+    excludeItemId: opts.itemId,
+    limit: opts.limit,
+    threshold: opts.threshold,
+  });
 }

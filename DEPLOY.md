@@ -106,6 +106,12 @@ The same endpoint prunes `usage_events` older than `CRUMB_USAGE_EVENTS_RETENTION
 0 */6 * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" http://127.0.0.1:3000/api/v1/internal/crm-sync
 ```
 
+**Feedback pull cron (Autopilot)** (optional, only if you connected Gong / Zendesk / Intercom / Freshdesk / Freshchat in Settings → Integrations) — pulls new tickets/calls and lands them in the Inbox. The "Sync now" button works without it. On Cloud the AI "new & relevant" gate dedups + auto-promotes; on self-host every pulled record lands for review:
+```bash
+# every 20 minutes
+*/20 * * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" http://127.0.0.1:3000/api/v1/internal/feedback-sync
+```
+
 **Backups** (Postgres): `docker compose exec postgres pg_dump -U crumb crumb | gzip > crumb-$(date +%F).sql.gz` (see README "Backups & restore").
 
 **pgvector upgrade note:** the Postgres image is `pgvector/pgvector:pg16` (needed for the embeddings / semantic-search features — the migration runs `CREATE EXTENSION vector`). It's a drop-in replacement for the stock `postgres:16` and reuses the same `crumb-pg-data` volume, but **take a backup before the first `up -d` that pulls it** (command above). If you run an **external/managed Postgres** instead of the bundled container, install the extension once as a superuser: `CREATE EXTENSION IF NOT EXISTS vector;` (most managed providers — RDS, Cloud SQL, Supabase — ship it).

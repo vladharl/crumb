@@ -28,6 +28,8 @@ const PRIMARY: NavLink[] = [
     match: p => p.startsWith("/accounts") },
   { id: "initiatives", href: "/initiatives", label: "Initiatives", icon: Ic.road,
     match: p => p.startsWith("/initiatives") },
+  { id: "changelog", href: "/changelog",     label: "Changelog",   icon: Ic.doc,
+    match: p => p.startsWith("/changelog") },
   { id: "insights", href: "/insights",       label: "Insights",    icon: Ic.chart,
     match: p => p === "/insights" },
 ];

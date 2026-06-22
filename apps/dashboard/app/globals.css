@@ -1614,6 +1614,13 @@ details > summary::-webkit-details-marker { display: none; }
    (Component: InboxTable → InboxEmpty.)
    ═══════════════════════════════════════════════════════════ */
 .list-empty-row { display: block; }
+/* Reveal control for the windowed inbox: a centered row that grows the rendered
+   set as the user scrolls (also a real click target). */
+.inbox-more-row {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 6px;
+}
 .inbox-empty {
   display: flex;
   flex-direction: column;

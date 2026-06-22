@@ -31,6 +31,11 @@ export async function composeItem(input: {
   type: string;
   title: string;
   body?: string;
+  // Inbound provenance (Autopilot). Native callers leave these unset; the
+  // feedback connectors pass source = gong|zendesk|… and a deep-link back to
+  // the originating call/ticket so the inbox can badge + link the item.
+  source?: string;
+  sourceUrl?: string | null;
   // When provided (dashboard paths have the full Workspace), the new item gets
   // an AI initiative suggestion like widget submissions do. Omitted on the
   // session-free Slack path, which simply skips clustering.
@@ -96,6 +101,8 @@ export async function composeItem(input: {
     body,
     type: input.type,
     status: "open",
+    source: input.source ?? null,
+    sourceUrl: input.sourceUrl ?? null,
   }).returning();
 
   await db.insert(statusEvents).values({ itemId: created!.id, fromStatus: null, toStatus: "open" });

@@ -60,6 +60,12 @@ const nextConfig = {
           /^@\/lib\/ai\/triage$/,
           resolve(__dirname, "lib/ai/triage.community.ts"),
         ),
+        // Autopilot extraction/relevance gate — cloud-only. The community stub
+        // returns "not configured" so the feedback sync lands raw captures.
+        new webpack.NormalModuleReplacementPlugin(
+          /^@\/lib\/ai\/extract-feedback$/,
+          resolve(__dirname, "lib/ai/extract-feedback.community.ts"),
+        ),
         // Note: lib/ai/dedup.ts is intentionally NOT replaced — it's pure
         // pgvector SQL with no aistack import, and degrades to "no candidates"
         // on self-host (item_embeddings is empty there), so it's bundle-safe.

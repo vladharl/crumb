@@ -24,6 +24,8 @@ import {
 } from "./CrmActions";
 import { ConnectTeamsForm, TeamsConnectedActions } from "./TeamsActions";
 import { SessionRecordToggle } from "./SessionRecordToggle";
+import { FeedbackConnectors } from "./FeedbackConnectors";
+import { listConnections } from "@/lib/integrations/feedback/connections";
 
 export const dynamic = "force-dynamic";
 
@@ -151,6 +153,11 @@ export default async function IntegrationsPage({
   const salesforceBanner = searchParams.salesforce
     ? (CRM_BANNER[searchParams.salesforce] ?? { kind: "err" as const, text: searchParams.salesforce.replace(/^error_/, "") })
     : null;
+
+  // Inbound feedback connectors (Autopilot). Creds-gated like the rest; the AI
+  // new-and-relevant filter additionally needs the "ai" feature (Cloud).
+  const feedbackConnections = integrationsEntitled ? await listConnections(ws.id) : [];
+  const aiEnabled = hasFeature(ws, "ai");
 
   const teamsConnected = !!ws.teamsWebhookUrl;
 
@@ -577,6 +584,11 @@ export default async function IntegrationsPage({
           </p>
         </div>
       </Card>
+
+      {/* ─── Inbound feedback connectors (Autopilot) ─────────── */}
+      {integrationsEntitled && (
+        <FeedbackConnectors connections={feedbackConnections} canManage={isAdmin} aiEnabled={aiEnabled} />
+      )}
     </>
   );
 }

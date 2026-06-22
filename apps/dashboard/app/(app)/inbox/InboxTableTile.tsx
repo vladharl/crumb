@@ -55,6 +55,30 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     NULLIF(LEFT(regexp_replace(COALESCE(items.ai_summary, items.body), '\\s+', ' ', 'g'), 141), '')
   `.as("preview");
 
+  // Full-text search blob for the inbox search box: everything searchable about
+  // an item — its fields, the people, the initiative, AND every comment/reply
+  // body (string_agg over replies, internal + external). Lowercased and
+  // whitespace-collapsed in SQL so the client just fuzzy-matches (lib/fuzzy).
+  // Unlike `preview` this intentionally ships full bodies/comments; it's never
+  // displayed, only matched. ('\\s' for the same reason as preview above.)
+  const searchText = sql<string>`lower(regexp_replace(
+    concat_ws(' ',
+      items.short_id, items.title, items.type, items.status, items.source,
+      items.body, items.ai_summary,
+      accounts.name, account_users.name, workspace_users.name, initiatives.name,
+      (SELECT string_agg(rs.body, ' ') FROM replies rs WHERE rs.item_id = items.id)
+    ), '\\s+', ' ', 'g'))`.as("search_text");
+
+  // Auto-categorize tags (Autopilot): the item's tag names as a text[], for the
+  // inbox chips + search. Fully-qualified refs inside the correlated subquery so
+  // drizzle doesn't render item_tags.item_id unqualified (see CLAUDE memory).
+  const tagNames = sql<string[]>`(
+    SELECT COALESCE(array_agg(tags.name ORDER BY tags.name), '{}')
+    FROM item_tags
+    JOIN tags ON tags.id = item_tags.tag_id
+    WHERE item_tags.item_id = items.id
+  )`.as("tag_names");
+
   // Suggested-initiative join: aliasing initiatives a second time so the
   // primary join (current assignment) and the secondary join (AI guess)
   // don't collide.
@@ -96,8 +120,12 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
       shortId: items.shortId,
       title: items.title,
       preview,
+      searchText,
       type: items.type,
       status: items.status,
+      source: items.source,
+      sourceUrl: items.sourceUrl,
+      tags: tagNames,
       assigneeId: items.assigneeId,
       createdAt: items.createdAt,
       accountId: items.accountId,
@@ -149,8 +177,13 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     shortId: r.shortId,
     title: r.title,
     preview: r.preview === null ? null : r.preview.length > 140 ? r.preview.slice(0, 140).trimEnd() + "…" : r.preview,
+    // Append tag names so the fuzzy search box matches on them too.
+    searchText: ((r.searchText ?? "") + " " + (r.tags ?? []).join(" ")).trim(),
     type: r.type,
     status: r.status,
+    source: r.source,
+    sourceUrl: r.sourceUrl,
+    tags: r.tags ?? [],
     assigneeId: r.assigneeId,
     createdAtIso: r.createdAt.toISOString(),
     accountId: r.accountId,
@@ -281,6 +314,7 @@ export async function InboxTableTile() {
         initiatives={initiativeOptions}
         canManageInitiatives={canManageInitiatives}
         clusterEnabled={aiEntitled && clusterConfigured() && initiativeOptions.length > 0}
+        nowMs={Date.now()}
       />
     </>
   );

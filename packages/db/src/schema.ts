@@ -305,6 +305,13 @@ export const items = pgTable("items", {
   bodyTranslated:  text("body_translated"),
   translatedAt:    timestamp("translated_at", { withTimezone: true }),
 
+  // ── Inbound source (Autopilot; where this item came from) ────
+  // How the item entered Crumb. Native paths leave it null (widget/manual/api).
+  // The feedback connectors stamp gong | zendesk | intercom | freshdesk |
+  // freshchat, and source_url deep-links back to the originating call/ticket.
+  source:    varchar("source", { length: 16 }),
+  sourceUrl: text("source_url"),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
@@ -519,7 +526,7 @@ export type NewDedupeSuggestion = typeof dedupeSuggestions.$inferInsert;
 export const inboundCaptures = pgTable("inbound_captures", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  source: varchar("source", { length: 16 }).notNull(), // email | slack | extension
+  source: varchar("source", { length: 16 }).notNull(), // email | slack | extension | gong | zendesk | intercom | freshdesk | freshchat
   fromEmail: text("from_email"),
   fromName: text("from_name"),
   subject: text("subject"),
@@ -530,15 +537,111 @@ export const inboundCaptures = pgTable("inbound_captures", {
   status: varchar("status", { length: 16 }).notNull().default("pending"), // pending | accepted | dismissed
   createdItemId: uuid("created_item_id").references(() => items.id, { onDelete: "set null" }),
   rawMeta: text("raw_meta"), // JSON string of the provider payload (message_id, etc.)
+  // ── Autopilot: idempotency + the "new & relevant" gate's verdict ──────
+  // external_id is the provider's record id (ticket/call/conversation). A unique
+  // (workspace, source, external_id) guarantees a re-sync never re-ingests the
+  // same record. duplicate_of_item_id + similarity hold the capture-stage dedup
+  // match (see lib/ai/dedup.findDuplicatesForVector); relevance_score is the
+  // extraction gate's 0..1 confidence that this is real product feedback.
+  externalId: text("external_id"),
+  duplicateOfItemId: uuid("duplicate_of_item_id").references(() => items.id, { onDelete: "set null" }),
+  duplicateSimilarity: doublePrecision("duplicate_similarity"),
+  relevanceScore: doublePrecision("relevance_score"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
   decidedByWorkspaceUserId: uuid("decided_by_workspace_user_id").references(() => workspaceUsers.id, { onDelete: "set null" }),
 }, (t) => ({
   byWsStatus: index("inbound_captures_ws_status_idx").on(t.workspaceId, t.status, t.createdAt),
+  uniqExternal: unique("inbound_captures_external_uniq").on(t.workspaceId, t.source, t.externalId),
 }));
 
 export type InboundCapture = typeof inboundCaptures.$inferSelect;
 export type NewInboundCapture = typeof inboundCaptures.$inferInsert;
+
+// ─── integration connections (inbound feedback connectors; Autopilot) ──
+// One row per workspace × pulled-feedback provider (Gong, Zendesk, Intercom,
+// Freshdesk, Freshchat). Distinct from the outbound OAuth tokens stored as
+// columns on `workspaces` (Linear/Jira/HubSpot/etc.): each inbound provider
+// carries its own config shape (subdomain, region base URL, domain) and an
+// independent sync cursor, so a generic table beats ~10 columns per provider.
+// access_token / refresh_token are SEALED at rest (lib/crypto-at-rest), like the
+// workspace tokens. sync_cursor is provider-defined (an ISO timestamp, an
+// incremental-export token, etc.) and advanced after each successful pull.
+export const integrationConnections = pgTable("integration_connections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  provider: varchar("provider", { length: 16 }).notNull(), // gong | zendesk | intercom | freshdesk | freshchat
+  accessToken: text("access_token"),   // sealed
+  refreshToken: text("refresh_token"), // sealed
+  tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+  config: jsonb("config"), // { subdomain, baseUrl, domain, region, ... } — provider-specific, non-secret
+  syncCursor: text("sync_cursor"),
+  lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+  status: varchar("status", { length: 16 }).notNull().default("active"), // active | paused | error
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqProvider: unique("integration_connections_ws_provider_uniq").on(t.workspaceId, t.provider),
+  byStatus: index("integration_connections_status_idx").on(t.status),
+}));
+
+export type IntegrationConnection = typeof integrationConnections.$inferSelect;
+export type NewIntegrationConnection = typeof integrationConnections.$inferInsert;
+
+// ─── tags (auto-categorize; Autopilot) ──────────────────────────
+// Freeform labels for theming/triage. Auto-applied by the extraction gate on
+// inbound capture (Cloud) and editable by hand. Many-to-many with items via
+// item_tags. Distinct from the fixed `type` enum and from `initiatives` (which
+// are owned, status-bearing roadmap groupings).
+export const tags = pgTable("tags", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  name: varchar("name", { length: 64 }).notNull(),
+  color: varchar("color", { length: 16 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqName: unique("tags_ws_name_uniq").on(t.workspaceId, t.name),
+}));
+
+export const itemTags = pgTable("item_tags", {
+  itemId: uuid("item_id").notNull().references(() => items.id, { onDelete: "cascade" }),
+  tagId: uuid("tag_id").notNull().references(() => tags.id, { onDelete: "cascade" }),
+  // 'ai' when applied by the auto-categorize gate, 'human' when set in the UI —
+  // so an AI tag can be shown as a suggestion-style chip distinct from a curated one.
+  source: varchar("source", { length: 8 }).notNull().default("human"), // ai | human
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.itemId, t.tagId] }),
+  byTag: index("item_tags_tag_idx").on(t.tagId),
+}));
+
+export type Tag = typeof tags.$inferSelect;
+export type NewTag = typeof tags.$inferInsert;
+export type ItemTag = typeof itemTags.$inferSelect;
+
+// ─── changelog entries (announce-shipped; closes the open loop) ──
+// A published release note. Auto-drafted when an initiative moves to "shipped"
+// (lib/changelog), then everyone who asked is notified once via the existing
+// customer_notifications ledger + email. Surfaced in the dashboard /changelog
+// and the widget "What's new" tab; is_public also exposes it on the roadmap API.
+export const changelogEntries = pgTable("changelog_entries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  initiativeId: uuid("initiative_id").references(() => initiatives.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  body: text("body").notNull().default(""),
+  isPublic: boolean("is_public").notNull().default(true),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  createdByWorkspaceUserId: uuid("created_by_workspace_user_id").references(() => workspaceUsers.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  byWorkspace: index("changelog_entries_workspace_idx").on(t.workspaceId, t.publishedAt),
+}));
+
+export type ChangelogEntry = typeof changelogEntries.$inferSelect;
+export type NewChangelogEntry = typeof changelogEntries.$inferInsert;
 
 // ─── replay sessions (rrweb session record) ──────────────────
 // One row per distinct customer session inside the widget. Created the

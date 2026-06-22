@@ -106,6 +106,16 @@ services:
       AISTACK_MODEL: ${AISTACK_MODEL:-}
       AISTACK_EMBEDDINGS_MODEL: ${AISTACK_EMBEDDINGS_MODEL:-}
       EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-}
+      # ── Autopilot: inbound feedback connectors (Gong / Zendesk / Intercom /
+      # Freshdesk / Freshchat). Per-workspace creds are entered in Settings →
+      # Integrations and SEALED in the DB (not env). These optional knobs tune the
+      # Cloud "new & relevant" gate (all 0..1); defaults in lib/feedback/ingest.ts.
+      # Pull runs via the feedback-sync cron (see DEPLOY.md).
+      CRUMB_AUTOPILOT_MERGE_THRESHOLD: ${CRUMB_AUTOPILOT_MERGE_THRESHOLD:-}
+      CRUMB_AUTOPILOT_SUGGEST_THRESHOLD: ${CRUMB_AUTOPILOT_SUGGEST_THRESHOLD:-}
+      CRUMB_AUTOPILOT_RELEVANCE_FLOOR: ${CRUMB_AUTOPILOT_RELEVANCE_FLOOR:-}
+      CRUMB_AUTOPILOT_PROMOTE_RELEVANCE: ${CRUMB_AUTOPILOT_PROMOTE_RELEVANCE:-}
+      CRUMB_AUTOPILOT_PROMOTE_CONFIDENCE: ${CRUMB_AUTOPILOT_PROMOTE_CONFIDENCE:-}
       # ── Billing (cloud tier): Stripe-direct subscriptions ──
       # Prices carry lookup_keys team_monthly|team_annual|growth_monthly|growth_annual;
       # checkout resolves by (plan, interval) and the webhook keys plan_id off the

@@ -9,6 +9,7 @@ import type { Status, TypeKind } from "@crumb/ui";
 import { loopTurn, waitingDays, waitingSince, type LoopTurn, type ReplySide } from "@/lib/loop";
 import { priority, byPriorityDesc, formatArr, type Priority } from "@/lib/priority";
 import { gmailTime } from "@/lib/timefmt";
+import { splitTerms, matchesTerms } from "@/lib/fuzzy";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm";
 import { bulkAssign, bulkUpdateStatus, acceptTriageAssignee, dismissTriage } from "./actions";
@@ -35,8 +36,19 @@ export type InboxRow = {
   // One-line preview under the title: AI summary when triage produced one,
   // else a body snippet (or null for title-only submissions).
   preview: string | null;
+  // Lowercased, whitespace-collapsed blob of everything searchable about the
+  // item — fields, people, initiative, and every comment/reply body. Built
+  // server-side (loadItems), matched by the fuzzy search box, never displayed.
+  searchText: string;
   type: string;
   status: string;
+  // Inbound provenance (Autopilot): the connector this item came from (gong,
+  // zendesk, …) or null for native widget/manual/API items, plus a deep-link
+  // back to the source call/ticket.
+  source: string | null;
+  sourceUrl: string | null;
+  // Auto-categorize tags applied on ingest (or by hand), shown as inbox chips.
+  tags: string[];
   assigneeId: string | null;
   createdAtIso: string;
   accountId: string;
@@ -113,8 +125,8 @@ function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-function ageFrom(iso: string): string {
-  const d = Date.now() - new Date(iso).getTime();
+function ageFrom(iso: string, now: number): string {
+  const d = now - new Date(iso).getTime();
   if (d < 60_000) return "now";
   const units: Array<[string, number]> = [
     ["w", 1000 * 60 * 60 * 24 * 7],
@@ -207,8 +219,13 @@ function InboxEmpty({
   );
 }
 
+// How many rows of the active tab to mount at once. The full filtered set stays
+// in memory (so tab counts + client-side search are exact); only this many row
+// subtrees are built into the DOM, with more revealed on scroll.
+const RENDER_WINDOW = 60;
+
 export function InboxTable({
-  rows, assignees, meId, canWrite, aiEntitled, initiatives, canManageInitiatives, clusterEnabled,
+  rows, assignees, meId, canWrite, aiEntitled, initiatives, canManageInitiatives, clusterEnabled, nowMs: serverNowMs,
 }: {
   rows: InboxRow[];
   assignees: Assignee[];
@@ -218,8 +235,17 @@ export function InboxTable({
   initiatives: InitiativeOption[];
   canManageInitiatives: boolean;
   clusterEnabled: boolean;
+  nowMs: number;
 }) {
   const router = useRouter();
+  // A single "now" reference, seeded from the server so the first client render
+  // (hydration) computes identical timestamps/wait math to the server HTML —
+  // anything reading the live clock during render would mismatch and tip React
+  // into a full-root client re-render (#422). Bumped once after mount so the
+  // values reflect the real client clock (and, for time-of-day, the viewer's
+  // local zone) instead of staying pinned to render time.
+  const [nowMs, setNowMs] = useState(serverNowMs);
+  useEffect(() => { setNowMs(Date.now()); }, []);
   // Warm the thread route on hover/focus so opening from the inbox is as instant
   // as opening from the account page. The inbox click is intercepted for the
   // trail morph, and Next's automatic prefetch is unreliable under a large,
@@ -354,11 +380,10 @@ export function InboxTable({
   // wait term is stable across this render. InboxRow structurally satisfies
   // PriorityInput, so the row passes straight through.
   const priorityById = useMemo(() => {
-    const now = Date.now();
     const m = new Map<string, Priority>();
-    for (const r of rowsView) m.set(r.id, priority(r, now));
+    for (const r of rowsView) m.set(r.id, priority(r, nowMs));
     return m;
-  }, [rowsView]);
+  }, [rowsView, nowMs]);
 
   // Meter scale: every magnitude bar is sized against the single largest
   // ARR-at-stake in the workspace, so the same item reads the same width in
@@ -372,18 +397,15 @@ export function InboxTable({
   // the tab counts answer "of what I'm looking at, whose turn is it?" instead
   // of quietly reporting the unfiltered workspace.
   const scopedRows = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    // Fuzzy, multi-term search across the whole item — title, body, account,
+    // people, initiative, status, and every comment — with typo tolerance
+    // (lib/fuzzy). Terms split once here, not per row.
+    const terms = splitTerms(query);
     return baseRows.filter(r => {
       if (initiativeFilter === INITIATIVE_NONE && r.initiativeId !== null) return false;
       if (initiativeFilter !== INITIATIVE_ANY && initiativeFilter !== INITIATIVE_NONE && r.initiativeId !== initiativeFilter) return false;
-      if (!q) return true;
-      return (
-        r.title.toLowerCase().includes(q) ||
-        r.shortId.toLowerCase().includes(q) ||
-        r.accountName.toLowerCase().includes(q) ||
-        r.submitterName.toLowerCase().includes(q) ||
-        (r.initiativeName?.toLowerCase().includes(q) ?? false)
-      );
+      if (terms.length === 0) return true;
+      return matchesTerms(terms, r.searchText);
     });
   }, [baseRows, query, initiativeFilter]);
 
@@ -421,6 +443,42 @@ export function InboxTable({
     }
     return filtered;
   }, [scopedRows, tab, meId, sort, priorityById]);
+
+  // ── Windowed rendering ───────────────────────────────────────────────────
+  // Mount only a slice of the active tab into the DOM and grow it as the user
+  // scrolls. visibleRows (the full filtered set) still drives counts, select-all
+  // and search; this only bounds how many row subtrees React builds — which is
+  // what made a big inbox expensive to first-render (and to recover if hydration
+  // ever bailed to a client re-render).
+  const [renderCount, setRenderCount] = useState(RENDER_WINDOW);
+  // Snap back to the top window when the user changes what they're looking at,
+  // so a fresh view always starts at row one. Reset during render (React's
+  // sanctioned pattern) rather than in an effect, so we never paint a frame of
+  // the previous, larger window against the newly-chosen view.
+  const filterKey = `${tab} ${query} ${initiativeFilter} ${sort}`;
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
+  if (prevFilterKey !== filterKey) {
+    setPrevFilterKey(filterKey);
+    setRenderCount(RENDER_WINDOW);
+  }
+  const renderedRows = renderCount >= visibleRows.length ? visibleRows : visibleRows.slice(0, renderCount);
+  const hasMoreRows = visibleRows.length > renderedRows.length;
+  const moreSentinel = useRef<HTMLDivElement | null>(null);
+  // Auto-reveal: grow the window when the sentinel comes within reach. Rebuilt on
+  // each growth so that if it's still in view after a batch, it fires again and
+  // keeps filling until pushed out of range. The "Show more" button inside is a
+  // real click target too, so reveal works for keyboard users and without IO.
+  useEffect(() => {
+    if (!hasMoreRows) return;
+    const el = moreSentinel.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      entries => { if (entries.some(e => e.isIntersecting)) setRenderCount(c => c + RENDER_WINDOW); },
+      { rootMargin: "800px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMoreRows, renderCount, visibleRows]);
 
   // ── FLIP reorder ─────────────────────────────────────────────────────────
   // When the visible order changes — a sort flip, a tab switch, an optimistic
@@ -701,10 +759,10 @@ export function InboxTable({
               <Ic.search style={{ width: 13, height: 13, color: "var(--mute)" }} />
               <input
                 className="input search"
-                placeholder="Search feedback, accounts, people"
+                placeholder="Search everything — titles, comments, people…"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
-                aria-label="Search feedback"
+                aria-label="Search feedback, comments, and people"
                 style={{ border: 0, padding: 0, background: "transparent" }}
               />
               {query && (
@@ -872,7 +930,7 @@ export function InboxTable({
               </div>
             )}
 
-            {visibleRows.map(it => {
+            {renderedRows.map(it => {
               const isSel = selected.has(it.id);
               const turn = loopTurn(it);
               const prio = priorityById.get(it.id)!;
@@ -945,6 +1003,10 @@ export function InboxTable({
                             <Ic.copy style={{ width: 10, height: 10 }} />
                             {it.mergedCount}
                           </span>
+                        )}
+                        {it.tags.length > 0 && <TagChips tags={it.tags} />}
+                        {it.source && CONNECTOR_SOURCES.has(it.source) && (
+                          <SourceBadge source={it.source} url={it.sourceUrl} />
                         )}
                       </span>
                     </span>
@@ -1053,7 +1115,7 @@ export function InboxTable({
                       <span className="text-xs muted-2">—</span>
                     )}
                   </span>
-                  <span role="cell" className="inbox-col-activity"><LoopAge row={it} turn={turn} /></span>
+                  <span role="cell" className="inbox-col-activity"><LoopAge row={it} turn={turn} nowMs={nowMs} /></span>
                   <span role="cell" className="inbox-col-actions row-interactive">
                     <div className="row gap-1 center" style={{ justifyContent: "flex-end" }}>
                       {/* Reply-in-place: prominent (ember) on "your turn" rows —
@@ -1099,6 +1161,13 @@ export function InboxTable({
                 </Fragment>
               );
             })}
+            {hasMoreRows && (
+              <div ref={moreSentinel} className="inbox-more-row" role="row">
+                <Btn sm onClick={() => setRenderCount(c => c + RENDER_WINDOW)}>
+                  Show more · {renderedRows.length} of {visibleRows.length}
+                </Btn>
+              </div>
+            )}
           </div>
         </div>
       </Card>
@@ -1196,19 +1265,25 @@ function LoopBadge({ closed }: { closed: boolean }) {
 // the last activity IS the moment the wait started, so the colored time and
 // the urgency basis agree. Plain text (not a link): the row's single title
 // link already navigates the whole row.
-function LoopAge({ row, turn }: { row: InboxRow; turn: LoopTurn }) {
-  const stamp = gmailTime(row.lastExternalReplyAtIso ?? row.createdAtIso);
+function LoopAge({ row, turn, nowMs }: { row: InboxRow; turn: LoopTurn; nowMs: number }) {
+  // gmailTime formats in the runtime's local zone, so the server (UTC) and the
+  // client produce different strings — suppressHydrationWarning lets React keep
+  // the server text through hydration instead of erroring, and the post-mount
+  // `now` bump repaints it in the viewer's local zone. `nowMs` keeps the
+  // today/this-year branch identical across server and first client render.
+  const stamp = gmailTime(row.lastExternalReplyAtIso ?? row.createdAtIso, new Date(nowMs));
   if (turn !== "yours") {
-    return <span className="text-xs muted mono" style={{ whiteSpace: "nowrap" }}>{stamp}</span>;
+    return <span suppressHydrationWarning className="text-xs muted mono" style={{ whiteSpace: "nowrap" }}>{stamp}</span>;
   }
   const since = waitingSince(row);
-  const days = waitingDays(since, Date.now());
+  const days = waitingDays(since, nowMs);
   const color = days >= 7 ? "var(--rust)" : days >= 3 ? "var(--amber)" : undefined;
   return (
     <span
+      suppressHydrationWarning
       className="text-xs muted mono"
       style={{ whiteSpace: "nowrap", ...(color ? { color, fontWeight: 600 } : {}) }}
-      title={`Last reply ${stamp} · waiting ${ageFrom(since)}`}
+      title={`Last reply ${stamp} · waiting ${ageFrom(since, nowMs)}`}
     >
       {stamp}
     </span>
@@ -1308,6 +1383,59 @@ function SentimentGlyph({ score }: { score: number }) {
       title={`AI sentiment: ${label} (${score.toFixed(2)})`}
     >
       <span aria-hidden style={{ fontWeight: 600 }}>{arrow}</span>
+    </span>
+  );
+}
+
+// Inbound feedback connectors (Autopilot). Only these stamp items.source, so the
+// badge stays off native widget/manual/API items (source null).
+const SOURCE_LABEL: Record<string, string> = {
+  gong: "Gong",
+  zendesk: "Zendesk",
+  intercom: "Intercom",
+  freshdesk: "Freshdesk",
+  freshchat: "Freshchat",
+};
+const CONNECTOR_SOURCES = new Set(Object.keys(SOURCE_LABEL));
+
+// Provenance badge: where a pulled item came from. Quiet by design — it's a
+// signal, not a headline. Links back to the source call/ticket when we have a
+// permalink; the click is isolated from the row's title navigation.
+function SourceBadge({ source, url }: { source: string; url: string | null }) {
+  const label = SOURCE_LABEL[source] ?? source;
+  if (url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-2xs muted-2 row-interactive"
+        title={`Open in ${label}`}
+        style={{ flexShrink: 0, textDecoration: "none" }}
+        onClick={e => e.stopPropagation()}
+      >
+        {label}
+      </a>
+    );
+  }
+  return (
+    <span className="text-2xs muted-2" title={`Captured from ${label}`} style={{ flexShrink: 0 }}>
+      {label}
+    </span>
+  );
+}
+
+// Auto-categorize tags as compact chips. Capped at 2 with a "+N" overflow so the
+// dense inbox row stays scannable; the title lists them all.
+function TagChips({ tags }: { tags: string[] }) {
+  const shown = tags.slice(0, 2);
+  const extra = tags.length - shown.length;
+  return (
+    <span className="row gap-1 center" title={tags.join(", ")} style={{ minWidth: 0 }}>
+      {shown.map(t => (
+        <span key={t} className="text-2xs muted-2" style={{ flexShrink: 0 }}>#{t}</span>
+      ))}
+      {extra > 0 && <span className="text-2xs muted-2" style={{ flexShrink: 0 }}>+{extra}</span>}
     </span>
   );
 }

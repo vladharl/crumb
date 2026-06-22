@@ -285,7 +285,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
   return (
     <>
       <PageHead
-        crumb={<><span>Inbox</span><Ic.chevR style={{ width: 10, height: 10 }} /><span className="mono">{item.shortId}</span></>}
+        crumb={<><Link href="/inbox" style={{ color: "inherit" }}>Inbox</Link><Ic.chevR style={{ width: 10, height: 10 }} /><span className="mono">{item.shortId}</span></>}
         title={item.title}
         // Shared elements for the inbox→thread View Transition: the row's title
         // lifts into this heading and its loop dot blooms into the full trail.

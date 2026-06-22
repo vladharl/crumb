@@ -64,21 +64,30 @@ export function navigateWithTrailMorph(
   tag(source?.querySelector("[data-vt-title]"), TITLE_VT);
   tag(source?.querySelector("[data-vt-trail]"), TRAIL_VT);
 
-  const startedAt = performance.now();
   // Hold the "after" snapshot until a heading tagged with our morph name is in
   // the DOM, then morph the row title into it. The thread's loading skeleton
   // (ThreadSkeleton) carries the same morph name on its heading, so this fires
   // as soon as the skeleton paints — we do NOT wait for the real content to
-  // stream. The cap below is the only thing that bounds how long the old view
-  // can stay frozen if even the skeleton is slow to render.
+  // stream. The cap below bounds the freeze if the skeleton is slow.
   const ready = () => {
     const h1 = document.querySelector<HTMLElement>(".content-head h1");
-    return !!h1 && getComputedStyle(h1).viewTransitionName === TITLE_VT;
+    // Wait for the REAL heading — the title text, not the skeleton placeholder.
+    // If we settled on the skeleton, the browser would snapshot it, morph to it,
+    // and then the live content swaps in underneath during the animation; when
+    // the transition ends and reveals that content, it flashes. The thread
+    // renders in tens of ms, so the real title lands well inside the cap below;
+    // only a genuinely slow load falls through to the skeleton.
+    return (
+      !!h1 &&
+      getComputedStyle(h1).viewTransitionName === TITLE_VT &&
+      (h1.textContent ?? "").trim().length > 0
+    );
   };
 
-  // Worst-case freeze. The skeleton normally paints within a frame or two, so
-  // this rarely bites; keep it short so a slow navigation falls through to the
-  // route's own loading skeleton quickly instead of staring at the old page.
+  // Worst-case freeze, enforced by a real timer below. Normal opens settle the
+  // instant the real heading lands (tens to low-hundreds of ms), so this only
+  // bounds a genuinely slow load — high enough that content usually wins the
+  // race (clean morph), low enough to never feel stuck.
   const MAX_HOLD_MS = 400;
 
   // Mark the morph as active so the per-route settle (template.tsx .route-fade)
@@ -89,25 +98,39 @@ export function navigateWithTrailMorph(
     startViewTransition: (cb: () => Promise<void> | void) => { finished: Promise<void> };
   }).startViewTransition(() => {
     router.push(href);
+    // Settle on a TIMER, never requestAnimationFrame. While a view transition
+    // holds the old snapshot the browser pauses rendering, so rAF callbacks do
+    // not fire — an rAF-driven cap would never run, and the browser would only
+    // release the frozen frame at its built-in ~4s transition timeout (the
+    // multi-second "frozen inbox"). setTimeout/setInterval keep firing during
+    // the hold, so we settle promptly: as soon as the destination heading is in
+    // the DOM (morph lands), else at the hard cap (quick cross-fade).
     return new Promise<void>((resolve) => {
-      const settle = () =>
-        // One extra frame so the browser lays the heading out before the
-        // "after" snapshot is captured.
-        requestAnimationFrame(() => resolve());
-      const tick = () => {
-        // Resolve as soon as the destination heading (skeleton or real) is
-        // painted. In production the loading UI appears within a frame or two,
-        // so this fires fast; the cap is only a safety so a pathologically slow
-        // navigation can't hold the old view on screen.
-        if (ready() || performance.now() - startedAt > MAX_HOLD_MS) settle();
-        else requestAnimationFrame(tick);
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearInterval(poll);
+        clearTimeout(cap);
+        resolve();
       };
-      requestAnimationFrame(tick);
+      const poll = setInterval(() => { if (ready()) finish(); }, 24);
+      const cap = setTimeout(finish, MAX_HOLD_MS);
     });
   });
 
   void transition.finished.finally(() => {
     clearTags();
+    // The destination's `.route-fade` sat at `animation: none` while the morph
+    // owned the navigation (the `[data-vt-active]` rule). Pin that to the live
+    // element BEFORE clearing the flag — otherwise the rule stops matching, the
+    // `route-in` keyframes (opacity 0 → 1) restart on already-visible content,
+    // and the page flickers a fade-from-zero the moment the item finishes
+    // loading. The next navigation mounts a fresh `.route-fade`, so this only
+    // neutralizes the one the morph already covered.
+    document.querySelectorAll<HTMLElement>(".route-fade").forEach((el) => {
+      el.style.animation = "none";
+    });
     delete document.documentElement.dataset.vtActive;
   });
 }
