@@ -172,6 +172,9 @@ export async function POST(req: Request) {
     body: (body ?? "").trim(),
     type,
     status: "open",
+    // Widget-origin: the customer raised this through the embed widget, so they
+    // opted into Crumb's loop and may be auto-notified (see lib/feedback/source).
+    source: "widget",
   }).returning();
 
   // Initial status event so the timeline always starts with "Submitted".

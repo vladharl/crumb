@@ -10,6 +10,7 @@ import { notifyAccountChannels } from "@/lib/notify/account-channel";
 import { sendReplyNotification, sendStatusChangeNotification } from "@/lib/email";
 import { notifyMentioned, parseMentionIds } from "@/lib/mention-notify";
 import { buildReplyAddress } from "@/lib/reply-token";
+import { autoNotifiesSubmitter } from "@/lib/feedback/source";
 import { log } from "@/lib/log";
 
 // Session-free cores of the vendor-side item mutations (status / reply /
@@ -109,6 +110,7 @@ export async function updateItemStatus(
       title: items.title,
       type: items.type,
       accountId: items.accountId,
+      source: items.source,
       currentStatus: items.status,
       submitterId: accountUsers.id,
       submitterEmail: accountUsers.email,
@@ -169,8 +171,10 @@ export async function updateItemStatus(
   }, "status");
 
   // Email the customer; never let a flaky provider undo a status write. Honor
-  // the submitter's prefs (skip if muted or status updates are off).
-  if (!row.submitterUnsub && row.submitterNotifyStatus) {
+  // the submitter's prefs (skip if muted or status updates are off), and only
+  // auto-email widget-origin submitters — customers pulled from connectors never
+  // opted into Crumb's loop (see lib/feedback/source).
+  if (autoNotifiesSubmitter(row.source) && !row.submitterUnsub && row.submitterNotifyStatus) {
     try {
       const delivered = await sendStatusChangeNotification({
         to: row.submitterEmail,
@@ -227,6 +231,7 @@ export async function createItemReply(
       type: items.type,
       status: items.status,
       accountId: items.accountId,
+      source: items.source,
       submitterId: accountUsers.id,
       submitterEmail: accountUsers.email,
       submitterNotifyReplies: accountUsers.notifyReplies,
@@ -299,8 +304,9 @@ export async function createItemReply(
 
   // Fire the customer notification asynchronously. Don't fail the action if
   // email delivery hiccups — the reply is already in the DB. Honor the
-  // submitter's notification prefs (skip if muted or replies are off).
-  if (!input.internal && !row.submitterUnsub && row.submitterNotifyReplies) {
+  // submitter's prefs (skip if muted or replies are off), and only auto-email
+  // widget-origin submitters (see lib/feedback/source).
+  if (!input.internal && autoNotifiesSubmitter(row.source) && !row.submitterUnsub && row.submitterNotifyReplies) {
     try {
       const delivered = await sendReplyNotification({
         to: row.submitterEmail,

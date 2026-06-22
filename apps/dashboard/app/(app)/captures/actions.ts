@@ -28,12 +28,22 @@ export async function createItemFromCapture(input: {
   if (!canManage(user.role)) return { ok: false, error: "forbidden" };
 
   const [cap] = await db
-    .select({ id: inboundCaptures.id, status: inboundCaptures.status })
+    .select({ id: inboundCaptures.id, status: inboundCaptures.status, source: inboundCaptures.source, rawMeta: inboundCaptures.rawMeta })
     .from(inboundCaptures)
     .where(and(eq(inboundCaptures.workspaceId, workspace.id), eq(inboundCaptures.id, input.captureId)))
     .limit(1);
   if (!cap) return { ok: false, error: "not_found" };
   if (cap.status !== "pending") return { ok: false, error: "already_decided" };
+
+  // Carry the capture's origin onto the item so provenance (and the
+  // widget-only auto-notify rule, lib/feedback/source) survive acceptance —
+  // accepting a Zendesk/Gong capture must not turn it into a notifiable item.
+  let sourceUrl: string | null = null;
+  try {
+    sourceUrl = cap.rawMeta ? ((JSON.parse(cap.rawMeta) as { url?: string | null }).url ?? null) : null;
+  } catch {
+    sourceUrl = null;
+  }
 
   const r = await composeItem({
     workspaceId: workspace.id,
@@ -44,6 +54,8 @@ export async function createItemFromCapture(input: {
     type: input.type,
     title: input.title,
     body: input.body,
+    source: cap.source,
+    sourceUrl,
   });
   if (!r.ok) return { ok: false, error: r.error };
 

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
 import {
   db,
   changelogEntries,
@@ -10,6 +10,7 @@ import {
   type Workspace,
 } from "@crumb/db";
 import { sendRoadmapUpdateNotification } from "@/lib/email";
+import { WIDGET_SOURCE } from "@/lib/feedback/source";
 import { log } from "@/lib/log";
 
 // Announce-shipped (closes the open loop). When an initiative moves to "shipped"
@@ -66,6 +67,9 @@ async function announcementRecipients(workspaceId: string, initiativeId: string)
       and(
         eq(items.workspaceId, workspaceId),
         eq(items.initiativeId, initiativeId),
+        // Only announce to widget-origin submitters — pulled-connector customers
+        // never opted into Crumb's loop (see lib/feedback/source).
+        or(isNull(items.source), eq(items.source, WIDGET_SOURCE)),
         eq(accountUsers.notifyRoadmap, true),
         eq(accountUsers.unsubscribedAll, false),
       ),
