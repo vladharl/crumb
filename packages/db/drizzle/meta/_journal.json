@@ -148,6 +148,13 @@
       "when": 1782090647549,
       "tag": "0020_furry_red_ghost",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1782668467350,
+      "tag": "0021_early_electro",
+      "breakpoints": true
     }
   ]
 }

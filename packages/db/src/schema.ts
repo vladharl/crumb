@@ -145,7 +145,6 @@ export const workspaces = pgTable("workspaces", {
   subscriptionStatus:   varchar("subscription_status", { length: 32 }),
     // null | trialing | active | past_due | canceled | incomplete | …
   currentPeriodEnd:     timestamp("current_period_end", { withTimezone: true }),
-  seats:                integer("seats").notNull().default(1),
   planId:               varchar("plan_id", { length: 32 }).notNull().default("free"),
 
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

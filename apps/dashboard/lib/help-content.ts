@@ -39,7 +39,7 @@ export const HELP_GROUPS: HelpGroup[] = [
       {
         q: "How do I invite my team?",
         a: "Settings → Team & roles. Invite teammates by email and choose a role for each.",
-        keywords: "members seats roles permissions invite",
+        keywords: "members roles permissions invite",
         link: { href: "/settings/team", label: "Manage team & roles" },
       },
     ],

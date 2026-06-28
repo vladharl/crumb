@@ -66,7 +66,7 @@ export default async function BillingPage() {
         <CardHead title="Billing" after={<Pill ring>Self-hosted</Pill>} />
         <div className="card-body col gap-3">
           <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
-            You're <strong style={{ fontWeight: 500 }}>self-hosting Crumb</strong> — free under AGPL, with no per-seat fee and no usage limits.
+            You're <strong style={{ fontWeight: 500 }}>self-hosting Crumb</strong> — free under AGPL, with no subscription fee and no usage limits.
           </p>
           <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
             The hosted tier at <a href="https://crumb.localhostlabs.net" style={{ color: "var(--ink)" }}>crumb.localhostlabs.net</a> adds managed email delivery, hosted inbound replies, AI clustering, and one-click Slack/Linear integrations. Same source code, same OSS license — you're paying for the ops layer.
@@ -177,15 +177,9 @@ export default async function BillingPage() {
           })()}
         </div>
 
-        <div className="row gap-6" style={{ flexWrap: "wrap" }}>
-          <div className="col gap-1">
-            <span className="eyebrow">Seats</span>
-            <span className="text-md">{workspace.seats}</span>
-          </div>
-          <div className="col gap-1">
-            <span className="eyebrow">{status === "canceled" ? "Ended" : "Renews"}</span>
-            <span className="text-md">{formatDate(workspace.currentPeriodEnd)}</span>
-          </div>
+        <div className="col gap-1">
+          <span className="eyebrow">{status === "canceled" ? "Ended" : "Renews"}</span>
+          <span className="text-md">{formatDate(workspace.currentPeriodEnd)}</span>
         </div>
 
         {usage.length > 0 && (

@@ -128,7 +128,6 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
   // Note: in Stripe API 2026-04-22 current_period_end moved from the
   // Subscription to the SubscriptionItem — read it off the line.
   const item = sub.items.data[0];
-  const seats = item?.quantity ?? 1;
   // plan_id is the plan PREFIX of the price's lookup_key ("team_annual" →
   // "team"). Interval is a billing detail, not a feature gate. Unknown / unset
   // → "unknown", which entitlements fail closed to "free".
@@ -143,7 +142,6 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
       stripeSubscriptionId: sub.id,
       subscriptionStatus: sub.status,
       currentPeriodEnd,
-      seats,
       planId,
     })
     .where(eq(workspaces.stripeCustomerId, customerId));
