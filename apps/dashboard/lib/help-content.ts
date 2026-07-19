@@ -58,6 +58,12 @@ export const HELP_GROUPS: HelpGroup[] = [
         keywords: "reply respond message thread conversation close",
       },
       {
+        q: "Can Slack size a request for me?",
+        a: "On Cloud (Team plan), yes. @mention Crumb on a message in a connected Slack channel and it replies in-thread with the request restated, the account's ARR, similar open requests and the revenue behind them, and a rough T-shirt scope read from your connected repo. It reads only, nothing gets filed, and if it can't size a request it says so.",
+        keywords: "slack mention sizing scope arr revenue estimate t-shirt bot app_mention",
+        link: { href: "/settings/integrations", label: "Connect Slack" },
+      },
+      {
         q: "What's the difference between the Inbox and Initiatives?",
         a: "The Inbox is the raw stream of incoming loops. Initiatives group related loops into something you're deciding on or building, so the roadmap reflects real demand.",
         keywords: "initiatives roadmap group cluster theme",

@@ -41,7 +41,7 @@ Fill in at minimum:
 - `CRUMB_APP_URL=https://crumb.localhostlabs.net`
 - `CRUMB_ENCRYPTION_KEY` → `openssl rand -hex 32` (encrypts integration tokens)
 - `CRUMB_INTERNAL_SWEEP_SECRET` → `openssl rand -hex 32`
-- `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` (and any other integrations you've registered)
+- `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` / `SLACK_SIGNING_SECRET` (and any other integrations you've registered). `SLACK_SIGNING_SECRET` verifies Slack request signatures on the `/crumb` command and the events endpoint.
 - *(optional)* CRM sync — `HUBSPOT_CLIENT_ID`/`HUBSPOT_CLIENT_SECRET` and/or `SALESFORCE_CLIENT_ID`/`SALESFORCE_CLIENT_SECRET` to pull accounts + ARR. Redirect URLs: `…/api/integrations/hubspot/callback` and `…/api/integrations/salesforce/callback`.
 - `CLOUDFLARE_TUNNEL_TOKEN` → from step 5
 
@@ -83,6 +83,16 @@ For real email, set `CRUMB_EMAIL_PROVIDER=smtp` + `SMTP_*` (or Resend on cloud t
 In the app → **Settings → Integrations → Connect Slack**. Confirm the Slack app's
 redirect URL is exactly `https://crumb.localhostlabs.net/api/integrations/slack/callback`
 (it must match `CRUMB_APP_URL`). Repeat per provider you registered.
+
+**Enable @mention request sizing.** To let people @mention Crumb for an in-thread
+sizing reply, the Slack app needs the `app_mentions:read` bot scope and Event
+Subscriptions turned on: set the **Request URL** to
+`https://crumb.localhostlabs.net/api/integrations/slack/events` (Slack sends a
+one-time `challenge` on save and the endpoint answers it), then subscribe to the
+`app_mention` bot event. `SLACK_SIGNING_SECRET` must be set (it verifies the
+request signature). Workspaces connected before this scope existed must
+re-connect from Settings → Integrations to grant it. Sizing is Cloud + AI-gated;
+self-host answers the webhook but posts a "needs Cloud AI" note.
 
 ---
 
@@ -185,6 +195,7 @@ webhook secret, then repeat in live):
 | Public URL | `https://crumb.localhostlabs.net` |
 | Tunnel service target | `http://dashboard:3000` |
 | Slack redirect URL | `https://crumb.localhostlabs.net/api/integrations/slack/callback` |
+| Slack Events URL | `https://crumb.localhostlabs.net/api/integrations/slack/events` |
 | Start (with tunnel) | `docker compose --profile tunnel up -d --build` |
 | Logs | `docker compose logs -f dashboard` |
 | Health | `http://127.0.0.1:3000/api/health/ready` (on the box) |

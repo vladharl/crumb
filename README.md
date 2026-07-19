@@ -94,6 +94,7 @@ Crumb ships from one repo to two deployment shapes — a **community** build for
 | AI initiative clustering | — (Cloud-only) | Team plan |
 | AI ticket drafting (Linear / Jira / GitHub) | — (Cloud-only) | Team plan |
 | Ask your feedback (plain-English Q&A) | — (Cloud-only) | Team plan |
+| Slack request sizing (@mention → ARR + scope reply) | — (Cloud-only) | Team plan |
 | Session Record (rrweb capture + in-thread replay) | — (Cloud-only) | Growth plan |
 
 Self-host is free and AGPL. The hosted tier is live at **[crumb-app.localhostlabs.net](https://crumb-app.localhostlabs.net)** (the marketing site is [crumb.localhostlabs.net](https://crumb.localhostlabs.net)) — it runs the same source built as the `cloud` edition, plus the API keys we hold so you don't have to.
@@ -227,11 +228,14 @@ Cloud comes with a Slack app registered. Self-host needs to bring its own — se
 ```bash
 SLACK_CLIENT_ID=...
 SLACK_CLIENT_SECRET=...
+SLACK_SIGNING_SECRET=...
 ```
 
-Then register a Slack app at [api.slack.com/apps](https://api.slack.com/apps) with bot scopes `chat:write`, `im:write`, `users:read`, `users:read.email` and redirect URL `{dashboard origin}/api/integrations/slack/callback`. Optional: `SLACK_REDIRECT_URL` if the dashboard sits behind a proxy that mangles `x-forwarded-host`; `SLACK_STATE_SECRET` if you want a dedicated HMAC key for the OAuth `state` (otherwise falls back to `CRUMB_INBOUND_SECRET`, then `SLACK_CLIENT_SECRET`).
+Then register a Slack app at [api.slack.com/apps](https://api.slack.com/apps) with bot scopes `chat:write`, `im:write`, `users:read`, `users:read.email`, `app_mentions:read` and redirect URL `{dashboard origin}/api/integrations/slack/callback`. `SLACK_SIGNING_SECRET` (from the app's Basic Information) verifies the request signature on the `/crumb` command and the events endpoint. Optional: `SLACK_REDIRECT_URL` if the dashboard sits behind a proxy that mangles `x-forwarded-host`; `SLACK_STATE_SECRET` if you want a dedicated HMAC key for the OAuth `state` (otherwise falls back to `CRUMB_INBOUND_SECRET`, then `SLACK_CLIENT_SECRET`).
 
 Slack user lookups are by email — each workspace member is matched once to their Slack `user_id` and cached on first DM. Failed lookups (member's Slack email doesn't match their Crumb email) are retried after 24h.
+
+**Request sizing (@mention).** On Cloud (Team plan), Crumb sizes incoming requests right in Slack. @mention the bot on any message in a channel it belongs to and it replies in-thread with the request restated, the submitter's account ARR, similar open requests and their combined ARR at stake, and a rough T-shirt scope (S/M/L/XL) grounded in your connected GitHub repo's README + file tree, with a confidence level. It reads only — nothing is written to the inbox — and degrades gracefully: no account match, no repo, or AI unavailable each produce a plain note rather than a wrong answer. To enable it, add the `app_mentions:read` bot scope, then turn on **Event Subscriptions** with the Request URL `{dashboard origin}/api/integrations/slack/events` (the endpoint answers Slack's one-time challenge on save) and subscribe to the `app_mention` bot event. Because it adds a scope, workspaces connected before this shipped must re-connect from **Settings → Integrations** to grant it. Self-host builds answer the webhook but post a "needs Cloud AI" note; the sizing itself is Cloud-only.
 
 **Microsoft Teams.** Teams uses an incoming-webhook URL rather than OAuth: paste a channel's webhook under **Settings → Integrations** and Crumb posts the same close-the-loop events as Adaptive Cards. The `Test` button sends a sample card so you can confirm the wiring before going live.
 
