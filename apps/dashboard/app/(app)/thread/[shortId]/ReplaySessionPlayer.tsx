@@ -44,10 +44,10 @@ type NetEvent = {
 };
 
 function statusColor(s: number): string {
-  if (s === 0 || s >= 500) return "var(--danger, #c0392b)";
-  if (s >= 400) return "var(--warn, #d4a24c)";
-  if (s >= 300) return "var(--mute-2, #8a8278)";
-  return "var(--ok, #6b8e5a)";
+  if (s === 0 || s >= 500) return "var(--rust)";
+  if (s >= 400) return "var(--amber)";
+  if (s >= 300) return "var(--mute-2)";
+  return "var(--green)";
 }
 
 // Session context shown in the player header (and a compact line on the card).

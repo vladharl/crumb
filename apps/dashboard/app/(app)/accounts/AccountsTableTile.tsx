@@ -86,8 +86,8 @@ function arr(arrCents: number): string {
 // Feedback health → a colored dot. Red when high-value work is waiting on us.
 function health(openCount: number, awaitingCount: number): { color: string; label: string } {
   if (awaitingCount > 0) return { color: "var(--err-text)", label: `${awaitingCount} awaiting reply` };
-  if (openCount > 0) return { color: "#C8881F", label: `${openCount} open` };
-  return { color: "#4F7A52", label: "All addressed" };
+  if (openCount > 0) return { color: "var(--amber)", label: `${openCount} open` };
+  return { color: "var(--green)", label: "All addressed" };
 }
 
 function Kpi({ label, value }: { label: string; value: string }) {

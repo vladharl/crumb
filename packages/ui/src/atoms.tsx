@@ -55,7 +55,7 @@ export const Avatar = ({ kind = "", size = "", children, className, ...rest }: A
 );
 
 export const Switch = ({ on, onClick }: { on?: boolean; onClick?: () => void }) => (
-  <span className={`switch ${on ? "on" : ""}`} onClick={onClick} role="switch" aria-checked={!!on} />
+  <button type="button" className={`switch ${on ? "on" : ""}`} onClick={onClick} role="switch" aria-checked={!!on} />
 );
 
 export const Field = ({ label, help, htmlFor, children }: { label?: ReactNode; help?: ReactNode; htmlFor?: string; children?: ReactNode }) => (

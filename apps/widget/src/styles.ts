@@ -30,6 +30,12 @@ export const css = `
   --c-accent-ink: #B65E22;
   --c-accent-soft: rgba(226, 125, 58, 0.10);
 
+  /* ── status semantics (mirror dashboard globals.css so a loop reads the
+        same color to the customer here as it does to the vendor) ── */
+  --c-green: #6B8E5A;
+  --c-amber: #D4A24C;
+  --c-rust:  #B3573A;
+
   /* ── radii / motion ── */
   --r-sm: 6px;
   --r-md: 8px;
@@ -325,14 +331,15 @@ export const css = `
 }
 .status-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--c-ink-3); display: inline-block; }
 .status-dot.review { background: var(--c-ink-3); box-shadow: inset 0 0 0 1.5px var(--c-ink); }
-.status-dot.planned { background: #6E8BD6; }
-.status-dot.progress { background: #C7913C; }
-.status-dot.shipped { background: #4E9E6A; }
-.status-dot.declined { background: #C7544E; }
-.status-dot.deferred { background: #9AA0AA; }
+.status-dot.planned { background: var(--c-accent); opacity: 0.55; }
+.status-dot.progress { background: var(--c-accent); }
+.status-dot.shipped { background: var(--c-green); }
+.status-dot.declined { background: var(--c-rust); }
+.status-dot.deferred { background: var(--c-amber); }
 .status-dot.duplicate { background: transparent; border: 1.5px dashed var(--c-ink-3); box-sizing: content-box; width: 4px; height: 4px; }
-/* Customer-closed — a sage green, distinct from shipped's brighter green. */
-.status-dot.resolved { background: #6BA583; }
+/* Customer-closed — softer green than shipped, so a self-resolved loop reads
+   as closed-and-done without being mistaken for a shipped outcome. */
+.status-dot.resolved { background: var(--c-green); opacity: 0.55; }
 
 /* Close-the-loop affordance in the status rail. */
 .rail-close { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--c-line); }
@@ -486,9 +493,9 @@ button.outline svg { width: 13px; height: 13px; }
 .foot .row { display: flex; gap: 8px; align-items: center; }
 
 .err {
-  background: rgba(199, 84, 78, 0.08);
-  border: 1px solid rgba(199, 84, 78, 0.22);
-  color: #B23A34;
+  background: rgba(179, 87, 58, 0.08);
+  border: 1px solid rgba(179, 87, 58, 0.22);
+  color: var(--c-rust);
   padding: 9px 11px;
   border-radius: var(--r-sm);
   font-size: 12.5px;
@@ -620,7 +627,7 @@ button.outline svg { width: 13px; height: 13px; }
   display: grid; place-items: center;
 }
 .member-remove svg { width: 14px; height: 14px; }
-.member-remove:hover { background: var(--c-surface-2); color: #B42318; }
+.member-remove:hover { background: var(--c-surface-2); color: var(--c-rust); }
 .role-pill.ghost { color: var(--c-ink-3); background: var(--c-surface-2); }
 
 /* ── notification settings (toggle switches) ── */
@@ -742,4 +749,17 @@ button.outline svg { width: 13px; height: 13px; }
   color: var(--c-ink-3);
 }
 .rm-results { display: flex; flex-direction: column; gap: 8px; }
+
+/* ── reduced motion (catch-all) ──────────────────────────────
+   The shadow root can't see the dashboard's global backstop, so the
+   widget carries its own: no translation, scale, or spin for users who
+   ask for stillness. Opacity fades survive at a token duration. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 `;

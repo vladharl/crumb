@@ -29,7 +29,7 @@ export default async function WebhooksPage() {
       <Card>
         <CardHead title="Outbound webhooks" after={<Pill ring>{rows.length} endpoint{rows.length === 1 ? "" : "s"}</Pill>} />
         <div className="card-body col gap-4">
-          <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+          <p className="text-sm muted note">
             Get a signed POST to your own services whenever something happens to a feedback item: created, status changed, replied to, assigned, or merged. Drive your own automations (notify a channel, update a dashboard, kick off a deploy). Pick the events each endpoint receives; each signs payloads with its own secret.
           </p>
           <WebhooksPanel initial={initial} isAdmin={user.role === "admin"} />
@@ -39,10 +39,10 @@ export default async function WebhooksPage() {
       <Card>
         <CardHead title="Payload & verification" />
         <div className="card-body col gap-3">
-          <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+          <p className="text-sm muted note">
             We POST JSON with an <span className="mono">X-Crumb-Signature: sha256=&lt;hex&gt;</span> header, an HMAC-SHA256 of the raw body keyed by the endpoint secret. Recompute it and compare (constant-time) to verify the request came from Crumb.
           </p>
-          <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+          <p className="text-sm muted note">
             The <span className="mono">X-Crumb-Event</span> header and the body's <span className="mono">type</span> name the event. Possible types: <span className="mono">item.created</span>, <span className="mono">item.status_changed</span>, <span className="mono">item.reply_created</span>, <span className="mono">item.assigned</span>, <span className="mono">item.merged</span>. Internal notes are never delivered.
           </p>
           <div className="code">

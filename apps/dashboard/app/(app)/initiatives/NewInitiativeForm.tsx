@@ -4,8 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Ic } from "@crumb/ui";
 import { createInitiative } from "./actions";
-
-const PRESET_COLORS = ["#E27D3A", "#4A2E1F", "#6B8E23", "#3D6FA8", "#A23E3E", "#7A5BA1"];
+import { PRESET_COLORS } from "./presetColors";
 
 export function NewInitiativeForm({ disabled }: { disabled?: boolean }) {
   const [open, setOpen] = useState(false);

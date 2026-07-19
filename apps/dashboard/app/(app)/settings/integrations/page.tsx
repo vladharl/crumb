@@ -187,13 +187,13 @@ export default async function IntegrationsPage({
 
           {linearInstalled ? (
             <>
-              <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm note">
                 Connected to <strong style={{ fontWeight: 500 }}>{ws.linearTeamName ?? "Linear"}</strong>
                 {ws.linearInstalledAt && (
                   <> since {ws.linearInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
                 )}.
               </p>
-              <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-xs muted note">
                 Crumb status stays canonical. Engineering status from Linear writes to a separate field on the item, displayed in the thread sidebar, never authoritative.
               </p>
               <details style={{ borderTop: "var(--border)", paddingTop: 10 }}>
@@ -221,7 +221,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
-              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm muted note">
                 Push Crumb items out as Linear issues, with status synced back via webhook. On Cloud, an AI draft suggests a title + body that matches your team's voice.
               </p>
               {!linearCanInstall && (
@@ -259,7 +259,7 @@ export default async function IntegrationsPage({
 
           {jiraInstalled ? (
             <>
-              <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm note">
                 Connected to <strong style={{ fontWeight: 500 }}>{ws.jiraSiteUrl ? ws.jiraSiteUrl.replace(/^https?:\/\//, "") : "Jira"}</strong>
                 {ws.jiraInstalledAt && (
                   <> since {ws.jiraInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
@@ -268,7 +268,7 @@ export default async function IntegrationsPage({
                   <> · default project <span className="mono">{ws.jiraDefaultProjectKey}</span></>
                 )}.
               </p>
-              <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-xs muted note">
                 Crumb status stays canonical. Engineering status from Jira writes to a separate field on the item, displayed in the thread sidebar, never authoritative.
               </p>
               {isAdmin
@@ -277,7 +277,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
-              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm muted note">
                 Push Crumb items out as Jira issues, with status synced back via webhook. Atlassian Cloud only.
               </p>
               {!jiraCanInstall && (
@@ -315,7 +315,7 @@ export default async function IntegrationsPage({
 
           {githubInstalled ? (
             <>
-              <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm note">
                 Installed on <strong style={{ fontWeight: 500 }}>{ws.githubAppInstallAccount ?? "GitHub"}</strong>
                 {ws.githubInstalledAt && (
                   <> since {ws.githubInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
@@ -324,7 +324,7 @@ export default async function IntegrationsPage({
                   <> · default repo <span className="mono">{ws.githubDefaultRepo}</span></>
                 )}.
               </p>
-              <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-xs muted note">
                 When AI drafting is enabled (Cloud + ANTHROPIC_API_KEY), README + repo structure also feed Linear/Jira drafts, not just GitHub.
               </p>
               {isAdmin
@@ -333,7 +333,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
-              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm muted note">
                 Push Crumb items out as GitHub issues. Status syncs back via webhook. When installed, README + repo structure also enrich AI drafts for any provider.
               </p>
               {!githubCanInstall && (
@@ -371,14 +371,14 @@ export default async function IntegrationsPage({
 
           {hubspotInstalled ? (
             <>
-              <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm note">
                 Connected{ws.hubspotPortalId ? <> to portal <span className="mono">{ws.hubspotPortalId}</span></> : ""}
                 {ws.hubspotInstalledAt && (
                   <> since {ws.hubspotInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
                 )}.{" "}
                 {crmStats["hubspot"] ? <>{crmStats["hubspot"].count} accounts synced{fmtSync(crmStats["hubspot"].lastSync) ? <> · last {fmtSync(crmStats["hubspot"].lastSync)}</> : null}.</> : "Run a sync to pull accounts."}
               </p>
-              <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-xs muted note">
                 Companies sync into Accounts with ARR from the <span className="mono">annualrevenue</span> property. Manually-set ARR is never overwritten.
               </p>
               <div className="row gap-3 center" style={{ flexWrap: "wrap" }}>
@@ -390,7 +390,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
-              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm muted note">
                 One-way sync of companies + ARR from HubSpot, so prioritization by revenue uses live dollar figures instead of hand-entered ones.
               </p>
               {!hubspotCanInstall && (
@@ -426,14 +426,14 @@ export default async function IntegrationsPage({
 
           {salesforceInstalled ? (
             <>
-              <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm note">
                 Connected{ws.salesforceInstanceUrl ? <> to <span className="mono">{ws.salesforceInstanceUrl.replace(/^https?:\/\//, "")}</span></> : ""}
                 {ws.salesforceInstalledAt && (
                   <> since {ws.salesforceInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
                 )}.{" "}
                 {crmStats["salesforce"] ? <>{crmStats["salesforce"].count} accounts synced{fmtSync(crmStats["salesforce"].lastSync) ? <> · last {fmtSync(crmStats["salesforce"].lastSync)}</> : null}.</> : "Run a sync to pull accounts."}
               </p>
-              <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-xs muted note">
                 Accounts sync from the <span className="mono">AnnualRevenue</span> field. Manually-set ARR is never overwritten.
               </p>
               <div className="row gap-3 center" style={{ flexWrap: "wrap" }}>
@@ -445,7 +445,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
-              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm muted note">
                 One-way sync of Accounts + ARR from Salesforce. Sandboxes are supported via <span className="mono">SALESFORCE_LOGIN_URL</span>.
               </p>
               {!salesforceCanInstall && (
@@ -481,13 +481,13 @@ export default async function IntegrationsPage({
 
           {slackInstalled ? (
             <>
-              <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm note">
                 Connected to <strong style={{ fontWeight: 500 }}>{ws.slackTeamName ?? "Slack"}</strong>
                 {ws.slackInstalledAt && (
                   <> since {ws.slackInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
                 )}.
               </p>
-              <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-xs muted note">
                 Members who pick <em>Slack</em> as their delivery channel on <a href="/settings/notifications" style={{ color: "var(--ink)" }}>their preferences</a> get DMs instead of email for customer replies. We look each member up by email the first time we DM them; failures fall back to email.
               </p>
               {isAdmin
@@ -496,7 +496,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
-              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm muted note">
                 Post new submissions, status changes, and replies into your team's Slack. Customer-side Slack is configured separately by each customer admin from inside the widget.
               </p>
               {!slackCanInstall && (
@@ -524,7 +524,7 @@ export default async function IntegrationsPage({
           after={teamsConnected ? <Pill ring ringFill>Connected</Pill> : <Pill>Not connected</Pill>}
         />
         <div className="card-body col gap-3">
-          <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+          <p className="text-sm muted note">
             Post new submissions, customer replies, and status changes to a Teams channel. In Teams, add a <strong style={{ fontWeight: 500 }}>Workflows</strong> → "When a Teams webhook request is received" flow and paste its URL here. No app install required.
           </p>
           {teamsConnected ? (
@@ -555,7 +555,7 @@ export default async function IntegrationsPage({
           }
         />
         <div className="card-body col gap-3">
-          <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+          <p className="text-sm muted note">
             When a customer submits feedback, attach a video-like replay of their session so you can see what they were doing, no more guessing what "the page broke" means. All inputs are masked by default; password and email fields are never recorded. Sessions cap at 10 MB / 5,000 events / 30 minutes.
           </p>
           {sessionRecordEntitled ? (

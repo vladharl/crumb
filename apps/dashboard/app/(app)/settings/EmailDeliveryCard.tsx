@@ -33,12 +33,12 @@ export function EmailDeliveryCard({ isAdmin }: { isAdmin: boolean }) {
             </span>
           </div>
         ) : cloud ? (
-          <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+          <p className="text-sm muted note">
             You're on Crumb Cloud, but no email provider is configured. Set <span className="mono">CRUMB_EMAIL_PROVIDER=resend</span>, <span className="mono">RESEND_API_KEY</span>, and <span className="mono">CRUMB_EMAIL_FROM</span> to enable delivery.
           </p>
         ) : (
           <>
-            <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+            <p className="text-sm note">
               Magic-link and notification emails are being printed to the dashboard's stdout. Bring your own relay with <span className="mono">CRUMB_EMAIL_PROVIDER=smtp</span> plus <span className="mono">SMTP_HOST</span>, <span className="mono">SMTP_PORT</span>, <span className="mono">SMTP_USER</span>, <span className="mono">SMTP_PASS</span>, and <span className="mono">CRUMB_EMAIL_FROM</span>.
             </p>
             <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>

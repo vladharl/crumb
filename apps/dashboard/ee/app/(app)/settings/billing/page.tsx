@@ -65,10 +65,10 @@ export default async function BillingPage() {
       <Card>
         <CardHead title="Billing" after={<Pill ring>Self-hosted</Pill>} />
         <div className="card-body col gap-3">
-          <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+          <p className="text-sm note">
             You're <strong style={{ fontWeight: 500 }}>self-hosting Crumb</strong> — free under AGPL, with no subscription fee and no usage limits.
           </p>
-          <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+          <p className="text-xs muted note">
             The hosted tier at <a href="https://crumb.localhostlabs.net" style={{ color: "var(--ink)" }}>crumb.localhostlabs.net</a> adds managed email delivery, hosted inbound replies, AI clustering, and one-click Slack/Linear integrations. Same source code, same OSS license — you're paying for the ops layer.
           </p>
         </div>
@@ -219,7 +219,7 @@ export default async function BillingPage() {
           }));
           return (
             <>
-              <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+              <p className="text-sm muted note">
                 Pick a plan to unlock managed email, AI clustering, and integrations. Annual is billed once a year; cancel any time from the portal.
               </p>
               <PlanPicker plans={planCards} />
@@ -229,7 +229,7 @@ export default async function BillingPage() {
 
         {active && configured && isAdmin && (
           <>
-            <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+            <p className="text-sm muted note">
               Open the Stripe portal to update payment method, download invoices, or cancel your subscription.
             </p>
             <ManageButton />

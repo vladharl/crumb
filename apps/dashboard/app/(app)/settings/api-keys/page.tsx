@@ -32,7 +32,7 @@ export default async function ApiKeysPage() {
       <Card>
         <CardHead title="API keys" after={<Pill ring>{rows.length} active</Pill>} />
         <div className="card-body col gap-4">
-          <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+          <p className="text-sm muted note">
             API keys let an AI assistant connect to this workspace over MCP to read and triage your feedback. A key acts as the teammate who created it: writes (status changes, replies) are attributed to you and respect your role. Treat a key like a password.
           </p>
           <ApiKeysPanel initial={initial} isAdmin={user.role === "admin"} />
@@ -42,7 +42,7 @@ export default async function ApiKeysPage() {
       <Card>
         <CardHead title="Connect over MCP" />
         <div className="card-body col gap-3">
-          <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+          <p className="text-sm muted note">
             Crumb exposes a Model Context Protocol server at the URL below. Point an MCP client (Claude Desktop, Cursor, or any MCP host) at it and authenticate with a key from above. The server offers tools to list and search feedback, read threads, change status, reply, create items, and view the roadmap.
           </p>
           <div className="code">{mcpUrl}</div>

@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Ic } from "@crumb/ui";
 import { updateInitiative } from "../actions";
+import { PRESET_COLORS } from "../presetColors";
 
 // "Parked" is just a status — selecting it here is the same as the old "Park"
 // button (which only set status='parked'), so there's no separate control.
@@ -13,8 +14,6 @@ const STATUSES = [
   { value: "shipped",     label: "Shipped" },
   { value: "parked",      label: "Parked" },
 ];
-
-const PRESET_COLORS = ["#E27D3A", "#4A2E1F", "#6B8E23", "#3D6FA8", "#A23E3E", "#7A5BA1"];
 
 type Patch = {
   name?: string;

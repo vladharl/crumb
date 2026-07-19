@@ -166,7 +166,7 @@ function BrandingPreview({
       }}>
         <span style={{
           width: 6, height: 6, borderRadius: 999, flexShrink: 0,
-          background: siteState === "loaded" ? "var(--green, #4E9E6A)" : "var(--ink)",
+          background: siteState === "loaded" ? "var(--green)" : "var(--ink)",
           opacity: siteState === "loaded" ? 0.9 : 0.55,
         }} />
         <input
@@ -186,7 +186,7 @@ function BrandingPreview({
           }}
         />
         {siteState === "loading" && <span className="text-2xs" style={{ color: "var(--mute)", flexShrink: 0 }}>Fetching…</span>}
-        {siteState === "error" && <span className="text-2xs" style={{ color: "var(--rust, #B23A34)", flexShrink: 0 }}>{siteError}</span>}
+        {siteState === "error" && <span className="text-2xs" style={{ color: "var(--rust)", flexShrink: 0 }}>{siteError}</span>}
         {siteState === "loaded" && siteThin && (
           <span className="text-2xs" style={{ color: "var(--mute)", flexShrink: 0 }}>
             JS apps may stay blank without sign-in; try a public page

@@ -28,7 +28,7 @@ export default async function AskPage() {
       ) : (
         <Card>
           <div className="card-body col gap-2">
-            <p className="text-sm" style={{ margin: 0, lineHeight: 1.6, maxWidth: "62ch" }}>
+            <p className="text-sm note">
               {isCloud()
                 ? <>Ask your feedback is part of the AI features on the Team and Growth plans. Upgrade from <a href="/settings/billing" style={{ color: "var(--ink)" }}>Settings → Billing</a> to interrogate your whole corpus in seconds.</>
                 : <>Ask your feedback runs on Crumb Cloud (it needs the managed AI + embeddings stack). It's not available on self-host builds.</>}
