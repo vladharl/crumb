@@ -2,15 +2,17 @@ import "server-only";
 import { signState, verifyState } from "../integrations/state";
 
 // OAuth v2 — workspace-level install. We request the minimum scopes:
-//   chat:write       — post messages as the bot
-//   im:write         — open DMs with workspace members
-//   users:read       — list members
-//   users:read.email — resolve workspace_user.email → slack user_id
+//   chat:write        — post messages as the bot
+//   im:write          — open DMs with workspace members
+//   users:read        — list members
+//   users:read.email  — resolve workspace_user.email → slack user_id
+//   app_mentions:read — receive app_mention events (Phase-0 sizing bot)
 //
 // Self-host: vendor registers their own Slack app at api.slack.com and
 // sets SLACK_CLIENT_ID/SECRET + redirect URL to /api/integrations/slack/callback.
-// Cloud: we hold the creds; same code path.
-const BOT_SCOPES = "chat:write,im:write,users:read,users:read.email";
+// Cloud: we hold the creds; same code path. Adding a scope requires connected
+// workspaces to re-connect (the callback overwrites the token + scopes).
+const BOT_SCOPES = "chat:write,im:write,users:read,users:read.email,app_mentions:read";
 
 export function slackConfigured(): boolean {
   return !!process.env.SLACK_CLIENT_ID?.trim() && !!process.env.SLACK_CLIENT_SECRET?.trim();

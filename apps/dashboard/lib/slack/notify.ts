@@ -45,13 +45,15 @@ export async function resolveSlackUserId(opts: {
   }
 }
 
-// Single DM with text + a context line. Slack's Block Kit gives us a
-// title link + body; keep it tight so the unfurl is a single nudge.
+// Single Slack message with text + a context line. `slackUserId` is any
+// conversation id — a DM user id OR a channel id. Pass `threadTs` to reply in a
+// thread (the Phase-0 sizing bot replies under the @mention).
 export async function sendDirectMessage(opts: {
   botToken: string;
   slackUserId: string;
   text: string;
   blocks?: SlackBlock[];
+  threadTs?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   try {
     const resp = await fetch("https://slack.com/api/chat.postMessage", {
@@ -64,6 +66,7 @@ export async function sendDirectMessage(opts: {
         channel: opts.slackUserId,
         text: opts.text,
         blocks: opts.blocks,
+        thread_ts: opts.threadTs,
         // Suppress link unfurling — the dashboard link inside the message
         // expands to a giant unfurl card otherwise.
         unfurl_links: false,
@@ -75,6 +78,24 @@ export async function sendDirectMessage(opts: {
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "send_failed" };
+  }
+}
+
+// Slack "users.info" → the member's email. Used by the Phase-0 sizing bot to
+// map the person who @mentioned us to a customer account. Needs users:read +
+// users:read.email. Returns null on any failure or an email-less profile
+// (enterprise-restricted) — callers degrade gracefully.
+export async function getSlackUserEmail(botToken: string, slackUserId: string): Promise<string | null> {
+  try {
+    const params = new URLSearchParams({ user: slackUserId });
+    const resp = await fetch(`https://slack.com/api/users.info?${params.toString()}`, {
+      headers: { authorization: `Bearer ${botToken}` },
+    });
+    const data = await resp.json();
+    const email = data?.user?.profile?.email;
+    return typeof email === "string" && email ? email : null;
+  } catch {
+    return null;
   }
 }
 
@@ -125,7 +146,7 @@ export function buildCustomerReplyBlocks(opts: {
 // Slack mrkdwn escapes: just the three special chars. Keeping it simple
 // since we never render user-controlled HTML — the customer name and
 // item title flow through here.
-function escapeSlackText(s: string): string {
+export function escapeSlackText(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 

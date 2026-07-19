@@ -89,6 +89,13 @@ const nextConfig = {
           /^@\/lib\/ai\/match-account$/,
           resolve(__dirname, "lib/ai/match-account.community.ts"),
         ),
+        // Slack Phase-0 request sizing — cloud-only. The community stub returns
+        // null so the Slack events route compiles but posts the "needs Cloud
+        // AI" note instead of sizing.
+        new webpack.NormalModuleReplacementPlugin(
+          /^@\/lib\/ai\/size-request$/,
+          resolve(__dirname, "lib/ai/size-request.community.ts"),
+        ),
       );
       // Belt-and-suspenders: make the heavy Stripe SDK resolve to an empty
       // module so any stray/direct import (e.g. the webhook route's
