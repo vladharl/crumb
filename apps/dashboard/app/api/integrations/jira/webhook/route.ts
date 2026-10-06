@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
-import { db, items } from "@crumb/db";
+import { and, eq, inArray } from "drizzle-orm";
+import { db, items, workspaces } from "@crumb/db";
 import { verifyWebhook } from "@/lib/integrations/jira";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
@@ -14,11 +14,17 @@ export const runtime = "nodejs";
 // Atlassian fires `jira:issue_updated` on any field change. We filter to
 // status changes by inspecting the `changelog.items` array for an entry
 // whose `field` is "status".
+//
+// Project keys repeat across Jira sites and the signing secret is
+// deployment-wide, so updates are scoped to the workspace(s) connected to
+// the site the event came from: the origin of `issue.self`, which is the
+// same site URL stored as jiraSiteUrl at connect / token refresh.
 
 type JiraWebhookEvent = {
   webhookEvent: string;
   issue?: {
     key: string;
+    self?: string; // "https://<site>.atlassian.net/rest/api/2/issue/10002"
     fields?: { status?: { name?: string } };
   };
   changelog?: {
@@ -48,7 +54,9 @@ export async function POST(req: Request) {
   }
 
   const key = event.issue?.key;
-  if (!key) return NextResponse.json({ received: true });
+  const self = event.issue?.self;
+  if (!key || !self || !URL.canParse(self)) return NextResponse.json({ received: true });
+  const siteUrl = new URL(self).origin;
 
   // Pull the new status either from the changelog (preferred — it has the
   // actual transition) or fall back to issue.fields.status.name.
@@ -64,6 +72,10 @@ export async function POST(req: Request) {
         updatedAt: new Date(),
       })
       .where(and(
+        inArray(items.workspaceId, db
+          .select({ id: workspaces.id })
+          .from(workspaces)
+          .where(eq(workspaces.jiraSiteUrl, siteUrl))),
         eq(items.externalProvider, "jira"),
         eq(items.externalTicketId, key),
       ));

@@ -83,6 +83,10 @@ export const workspaces = pgTable("workspaces", {
   linearAccessToken: text("linear_access_token"),
   linearTeamId:      text("linear_team_id"),
   linearTeamName:    text("linear_team_name"),
+  // The Linear org the token belongs to. Inbound webhooks are scoped by it
+  // (identifiers like ENG-42 repeat across orgs). Null until resolved from
+  // the token on the first webhook after (re)connect.
+  linearOrganizationId: text("linear_organization_id"),
   linearInstalledAt: timestamp("linear_installed_at", { withTimezone: true }),
 
   // ── Jira install (Atlassian Cloud 3LO) ───────────────────────

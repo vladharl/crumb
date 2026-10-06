@@ -66,6 +66,7 @@ export async function disconnectLinear(): Promise<{ ok: true } | { ok: false; er
       linearAccessToken: null,
       linearTeamId:      null,
       linearTeamName:    null,
+      linearOrganizationId: null,
       linearInstalledAt: null,
     })
     .where(eq(workspaces.id, workspace.id));

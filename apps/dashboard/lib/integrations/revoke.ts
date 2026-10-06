@@ -27,7 +27,7 @@ export class IntegrationAuthError extends Error {
 // is what flips the UI to "not connected".
 const COLUMNS_BY_PROVIDER: Record<Provider, Partial<typeof workspaces.$inferInsert>> = {
   slack: { slackTeamId: null, slackTeamName: null, slackBotToken: null, slackBotUserId: null, slackInstalledAt: null },
-  linear: { linearAccessToken: null, linearTeamId: null, linearTeamName: null, linearInstalledAt: null },
+  linear: { linearAccessToken: null, linearTeamId: null, linearTeamName: null, linearOrganizationId: null, linearInstalledAt: null },
   jira: {
     jiraAccessToken: null, jiraRefreshToken: null, jiraTokenExpiresAt: null,
     jiraCloudId: null, jiraSiteUrl: null, jiraDefaultProjectKey: null, jiraInstalledAt: null,

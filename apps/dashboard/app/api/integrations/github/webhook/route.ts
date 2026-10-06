@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { db, items, workspaces } from "@crumb/db";
-import { verifyWebhook } from "@/lib/integrations/github";
+import { issueTicketRef, verifyWebhook } from "@/lib/integrations/github";
 import { clearProviderInstall } from "@/lib/integrations/revoke";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
@@ -25,6 +25,7 @@ type IssuesEvent = {
     labels?: Array<{ name: string }>;
   };
   repository: { full_name: string };
+  installation?: { id: number }; // on every delivery to a GitHub App webhook
 };
 
 export async function POST(req: Request) {
@@ -68,9 +69,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
-  // We track by externalTicketId, which we store as "#N" (matching the
-  // listRecentIssues format and conventional GitHub references).
-  const ticketRef = `#${event.issue.number}`;
+  // The webhook secret is shared by every installation of the App, so scope
+  // to the workspace(s) holding the installation that sent the event, then
+  // match the repo-qualified ref ("owner/repo#N").
+  const installationId = event.installation?.id;
+  if (installationId == null) return NextResponse.json({ received: true });
+  const ticketRef = issueTicketRef(event.repository.full_name, event.issue.number);
   const newStatus = event.issue.state; // "open" | "closed"
 
   try {
@@ -82,8 +86,20 @@ export async function POST(req: Request) {
         updatedAt:        new Date(),
       })
       .where(and(
+        inArray(items.workspaceId, db
+          .select({ id: workspaces.id })
+          .from(workspaces)
+          .where(eq(workspaces.githubAppInstallId, String(installationId)))),
         eq(items.externalProvider, "github"),
-        eq(items.externalTicketId, ticketRef),
+        or(
+          eq(items.externalTicketId, ticketRef),
+          // ponytail: rows linked before refs were repo-qualified hold a bare
+          // "#N"; their stored issue URL pins the repo. Drop once none remain.
+          and(
+            eq(items.externalTicketId, `#${event.issue.number}`),
+            eq(items.externalTicketUrl, event.issue.html_url),
+          ),
+        ),
       ));
   } catch (err) {
     log.error("github webhook DB update failed", { scope: "crumb/github", ticketRef, err });

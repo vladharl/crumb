@@ -70,6 +70,9 @@ export async function GET(req: Request) {
       linearAccessToken: seal(token.access_token),
       linearTeamId:      team?.id   ?? null,
       linearTeamName:    team?.name ?? null,
+      // A reconnect may point at a different Linear org; the webhook
+      // resolves the new one from this token (resolveOrganizationIds).
+      linearOrganizationId: null,
       linearInstalledAt: new Date(),
     })
     .where(eq(workspaces.id, ws.id));
