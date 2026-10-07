@@ -400,7 +400,7 @@ const STATUS_BLURBS: Record<string, string> = {
   planned:   "Work hasn't started yet.",
   progress:  "Work on it has started.",
   shipped:   "It's live now.",
-  declined:  "It isn't going to be built.",
+  declined:  "The team decided not to take this on.",
   deferred:  "It's on hold, with no decision yet.",
   duplicate: "It's tracked under another request.",
 };
@@ -721,7 +721,7 @@ export function renderShippedAnnouncementHtml(v: ShippedAnnouncementVars): strin
     unsubscribeUrl: v.unsubscribeUrl,
     rows: `
           <tr><td style="padding:0 8px">
-            <h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(`${v.workspaceName} shipped ${v.title}`)}</h1>
+            <h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(`Shipped: ${v.title}`)}</h1>
             ${paragraphsToHtml(shippedBody(v))}
           </td></tr>${v.productUrl ? `
           <tr><td style="padding:12px 8px 0">
@@ -732,7 +732,7 @@ export function renderShippedAnnouncementHtml(v: ShippedAnnouncementVars): strin
 
 export function renderShippedAnnouncementText(v: ShippedAnnouncementVars): string {
   return [
-    `${v.workspaceName} shipped ${v.title}`,
+    `Shipped: ${v.title}`,
     shippedBody(v),
     v.productUrl ? `Open ${v.workspaceName}: ${v.productUrl}` : "",
     customerFooterText(sentFor[v.reason](v.workspaceName), v.unsubscribeUrl),

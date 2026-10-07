@@ -147,7 +147,7 @@ describe("customer emails", () => {
   it("give shipped its own email with paragraphs and the right reason", async () => {
     const body = "Dark mode is here.\n\nFind it under Settings.";
     await sendShippedAnnouncement({ to: item.to, workspaceName: "Acme", initiativeName: "Dark mode", title: "Dark mode", body, reason: "asked", productUrl: "https://app.acme.test/" });
-    expect(last().html).toContain("Acme shipped Dark mode");
+    expect(last().html).toContain("Shipped: Dark mode");
     expect(last().html.match(/<p style="margin:0 0 12px/g)).toHaveLength(2);
     expect(last().text).toContain("because you asked Acme for this.");
     expect(last().text).toContain("Open Acme: https://app.acme.test/");
