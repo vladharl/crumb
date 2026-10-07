@@ -2,7 +2,7 @@
 
 import { cookies } from "next/headers";
 import { eq } from "drizzle-orm";
-import { db, workspaces, findValidSetupToken, consumeSetupToken } from "@crumb/db";
+import { db, workspaces, findValidSetupToken, claimSetupToken, releaseSetupToken } from "@crumb/db";
 import { SESSION_COOKIE, createSession } from "@/lib/auth";
 import { createWorkspaceWithAdmin } from "@/lib/provision";
 
@@ -32,13 +32,21 @@ export async function bootstrapWorkspace(formData: FormData): Promise<OnboardRes
   const [slugTaken] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.slug, slugRaw)).limit(1);
   if (slugTaken) return { ok: false, error: "That workspace slug is already taken." };
 
+  // Claim the link before creating anything; a racing second submission loses here.
+  if (!(await claimSetupToken(setup.id))) {
+    return { ok: false, error: "This setup link has expired. Reload the page to see how to get a fresh one." };
+  }
+
   const created = await createWorkspaceWithAdmin({
     name: workspaceName,
     slug: slugRaw,
     adminName,
     adminEmail,
-  });
-  if (!created) return { ok: false, error: "Could not create workspace." };
+  }).catch(() => null);
+  if (!created) {
+    await releaseSetupToken(setup.id);
+    return { ok: false, error: "Could not create workspace." };
+  }
   const { workspace: ws, user } = created;
 
   const { cookieValue, expiresAt } = await createSession(ws.id, user.id);
@@ -49,9 +57,6 @@ export async function bootstrapWorkspace(formData: FormData): Promise<OnboardRes
     expires: expiresAt,
     path: "/",
   });
-
-  // Burn the setup link now that the workspace exists — it's single-use.
-  await consumeSetupToken(setup.id);
 
   // Don't redirect server-side; let the client navigate so the Set-Cookie on
   // this action's response has actually settled in the browser before

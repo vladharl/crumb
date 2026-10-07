@@ -45,7 +45,23 @@ export async function findValidSetupToken(token: string): Promise<{ id: string }
   return row ?? null;
 }
 
-// Burn a token so its link can't be reused.
-export async function consumeSetupToken(id: string): Promise<void> {
-  await db.update(setupTokens).set({ consumedAt: new Date() }).where(eq(setupTokens.id, id));
+// Claim a token for its single use. Atomic: the guarded UPDATE lets only one of
+// two racing submissions win, so one link can never create two workspaces.
+export async function claimSetupToken(id: string): Promise<boolean> {
+  const rows = await db
+    .update(setupTokens)
+    .set({ consumedAt: new Date() })
+    .where(and(
+      eq(setupTokens.id, id),
+      isNull(setupTokens.consumedAt),
+      gt(setupTokens.expiresAt, new Date()),
+    ))
+    .returning({ id: setupTokens.id });
+  return rows.length > 0;
+}
+
+// Give a claimed token back when the workspace couldn't be created, so the
+// operator can retry with the same link.
+export async function releaseSetupToken(id: string): Promise<void> {
+  await db.update(setupTokens).set({ consumedAt: null }).where(eq(setupTokens.id, id));
 }
