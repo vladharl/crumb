@@ -256,6 +256,18 @@ export const accountUsers = pgTable("account_users", {
 }));
 
 // ─── items (feedback) ────────────────────────────────────────
+// Submission context the widget captures (items.context). Wire names, since
+// it is stored as the widget sent it (after validation).
+export type ItemContext = {
+  page_url?: string;
+  page_title?: string;
+  referrer?: string;
+  user_agent?: string;
+  viewport?: { w: number; h: number };
+  locale?: string;
+  app_version?: string;
+};
+
 export const items = pgTable("items", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
@@ -319,6 +331,10 @@ export const items = pgTable("items", {
   // freshchat, and source_url deep-links back to the originating call/ticket.
   source:    varchar("source", { length: 16 }),
   sourceUrl: text("source_url"),
+
+  // Where a widget submission was written: page, browser, app build. Null for
+  // every other path. Capped and secret-redacted in lib/validation.ts.
+  context: jsonb("context").$type<ItemContext>(),
 
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

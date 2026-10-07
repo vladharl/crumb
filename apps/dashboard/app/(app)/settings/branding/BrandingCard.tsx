@@ -5,7 +5,9 @@ import { Btn, Card, CardHead, Field, Pill } from "@crumb/ui";
 import { saveBranding, fetchSitePreview } from "./actions";
 
 type Edge = "right" | "left";
-type Visibility = "auto" | "always" | "hidden";
+// "auto" is Shown. The widget also accepts "always" (same behaviour), which
+// workspaces may have saved; page.tsx shows it as Shown and a save writes "auto".
+type Visibility = "auto" | "hidden";
 type PreviewState = "rest" | "news" | "peek";
 
 // WCAG-style relative-luminance contrast ratio between two hex colors.
@@ -441,8 +443,7 @@ export function BrandingCard({
           >
             <div className="seg" style={{ width: "100%" }}>
               {([
-                { k: "auto", label: "Auto" },
-                { k: "always", label: "Always" },
+                { k: "auto", label: "Shown" },
                 { k: "hidden", label: "Hidden" },
               ] as const).map(({ k, label }) => (
                 <button

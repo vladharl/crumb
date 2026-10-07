@@ -32,6 +32,21 @@ crumb.close();  crumb.toggle();
 
 // keep your launcher badged when crumb is hidden
 crumb.onUnread(function (count) { /* show your own dot */ });`,
+    // The refresh fetches the Next.js signing route below.
+    session: `// after your customer signs in (the tag can load before anyone has)
+crumb.identify({ jwt: token });
+
+// tokens last an hour: hand the widget a fresh one when it asks
+crumb.onTokenExpired(() =>
+  fetch("/api/crumb-token")
+    .then((r) => r.json())
+    .then(({ token }) => crumb.identify({ jwt: token })));
+
+// on sign-out: forget their feedback, drafts and unread state
+crumb.shutdown();
+
+// which build they're on (or data-app-version="4.2.1" on the tag)
+crumb.setContext({ app_version: "4.2.1" });`,
     intercom: `// hide Intercom's launcher and add a "Give feedback" item that opens crumb
 Intercom("update", { hide_default_launcher: true });
 document.querySelector("#your-feedback-link")

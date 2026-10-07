@@ -49,6 +49,14 @@ export default async function InstallPage() {
           </p>
           <SigningExamples examples={s.signing} />
 
+          <p className="text-sm muted note">
+            Customers who sign in or out without a page load, or stay longer than the token lasts? Drive it from <span className="mono">window.crumb</span>:
+          </p>
+          <Snippet title="Sign in, refresh, sign out" code={s.session} />
+          <p className="text-sm muted note">
+            Optional on the tag: <span className="mono">data-app-version</span> sends your build with each new request (it shows in the request&apos;s Details), and <span className="mono">data-locale</span> sets the widget&apos;s language, ahead of the page&apos;s and the browser&apos;s.
+          </p>
+
           <SecretReveal isAdmin={user.role === "admin"} />
         </div>
       </Card>

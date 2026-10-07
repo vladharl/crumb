@@ -121,6 +121,13 @@ export async function GET(req: Request, { params }: { params: { shortId: string 
     ...mappedEvents,
   ];
 
+  // The current status's reason (why it was declined / set aside / merged) and
+  // when, lifted out of the timeline so the widget can show them without the
+  // expanded rail. Only when the latest event IS the current status: a status
+  // written without an event (capture-time merges) must not borrow an older one.
+  const latest = timeline[timeline.length - 1]!;
+  const current = latest.to_status === item.status ? latest : null;
+
   // Attachment links are signed + short-lived: the widget opens them in a new
   // tab, which can't send the JWT, and the customer's email stays out of URLs.
   const origin = dashboardOriginFromHeaders(req) ?? "";
@@ -133,6 +140,8 @@ export async function GET(req: Request, { params }: { params: { shortId: string 
       status: item.status,
       created_at: item.createdAt,
       updated_at: item.updatedAt,
+      status_reason: current?.reason ?? null,
+      status_changed_at: current?.at ?? null,
     },
     workspace: {
       name: r.ctx.workspace.name,

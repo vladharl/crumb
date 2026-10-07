@@ -131,6 +131,15 @@ export type ThreadData = {
     // Where it came in (null for native items) and an http(s) link back to it.
     source: string | null;
     sourceUrl: string | null;
+    // Where the customer was when they wrote in (widget submissions): an
+    // http(s) page link and one device line. Null when nothing was captured.
+    context: {
+      pageUrl: string | null;
+      pageLabel: string | null;
+      pageTitle: string | null;
+      device: string | null;
+      userAgent: string | null;
+    } | null;
   };
   notifyPlan: ItemNotifyPlan;
   account: { id: string; name: string; arrCents: number };
@@ -463,7 +472,9 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
           </div>
         </Card>
 
-        <div className="col gap-4">
+        {/* minWidth 0: a 1fr grid track otherwise grows to its longest nowrap
+            line (a page or replay URL) instead of truncating it. */}
+        <div className="col gap-4" style={{ minWidth: 0 }}>
           {/* Details first: who this loop belongs to, what they're worth, and
               the item's editable properties (owner, type). */}
           <Card>
@@ -490,6 +501,25 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                   <span className="text-xs muted">via {sourceLabel(item.source)}</span>
                 ))}
               </div>
+              {item.context && (
+                <>
+                  <span className="eyebrow">Submitted from</span>
+                  <div className="col gap-1">
+                    {item.context.pageUrl && (
+                      <a href={item.context.pageUrl} target="_blank" rel="noopener noreferrer"
+                        className="text-sm truncate" style={{ color: "var(--accent-deep)" }} title={item.context.pageUrl}>
+                        {item.context.pageLabel}
+                      </a>
+                    )}
+                    {item.context.pageTitle && (
+                      <span className="text-xs muted truncate" title={item.context.pageTitle}>{item.context.pageTitle}</span>
+                    )}
+                    {item.context.device && (
+                      <span className="text-xs muted" title={item.context.userAgent ?? undefined}>{item.context.device}</span>
+                    )}
+                  </div>
+                </>
+              )}
               <span className="eyebrow">Assignee</span>
               {canWrite ? (
                 <Dropdown

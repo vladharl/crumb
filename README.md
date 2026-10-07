@@ -348,6 +348,8 @@ To embed it in your own product:
 
 (For trusted identity, pass a signed `data-user-jwt` instead of the plain `data-*` attributes; the API then trusts only the JWT's claims. **On Cloud the signed JWT is required** — the API rejects plain `data-*` identity with `401 jwt_required`; self-host still accepts plain attributes as a fallback.)
 
+In a single-page app, drive identity from JavaScript: `crumb.identify({ jwt })` after sign-in, `crumb.shutdown()` on sign-out, and `crumb.onTokenExpired(cb)` to hand the widget a fresh token when one expires. `data-app-version` (or `crumb.setContext({ app_version })`) sends your build with each new request, and `data-locale` sets the widget's language. **Settings → Install** has copy-paste snippets for these and for `crumb.open()` and `crumb.onUnread()`.
+
 ### Public API
 
 | Method | Path                                  | What it does                                     |

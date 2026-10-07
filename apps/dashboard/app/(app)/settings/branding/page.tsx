@@ -12,7 +12,8 @@ export default async function BrandingPage() {
       initialAccent={ws.accent}
       initialLauncherBg={ws.launcherBg}
       initialEdge={(["right", "left"].includes(ws.launcherEdge) ? ws.launcherEdge : "right") as "right" | "left"}
-      initialVisibility={(["auto", "always", "hidden"].includes(ws.launcherVisibility) ? ws.launcherVisibility : "auto") as "auto" | "always" | "hidden"}
+      // A saved "always" behaves as "auto" in the widget: both read as Shown.
+      initialVisibility={ws.launcherVisibility === "hidden" ? "hidden" : "auto"}
       initialOffsetY={ws.launcherOffsetY ?? 0}
       initialProductUrl={ws.productUrl}
     />

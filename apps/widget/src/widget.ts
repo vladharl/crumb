@@ -7,7 +7,12 @@
 //           data-account-name="Acme Co"
 //           defer></script>
 
-import { css } from "./styles";
+import { css } from "./styles"; // minified at build time (build.mjs)
+import { en, pickLocale, timeFormat, type Strings } from "./strings";
+
+// The customer's words, in the widget's language (init() picks it; English
+// until then, and in unit tests).
+let t: Strings = en;
 
 type ItemType = "bug" | "idea" | "question";
 
@@ -17,6 +22,9 @@ type Status =
   // Set when the customer closes their own request from this widget.
   | "resolved";
 
+// "auto" and "always" are one behaviour, Shown: the widget has no rule that
+// would hide the tab on its own, so both paint it. Both values stay valid
+// because workspaces have them saved; only "hidden" changes anything.
 type LauncherVisibility = "auto" | "always" | "hidden";
 
 type Config = {
@@ -40,6 +48,11 @@ type Config = {
   /** `data-record-network-bodies="true"`: session record also keeps request
    *  and response bodies (secrets redacted). Off unless the host sets it. */
   recordNetworkBodies: boolean;
+  /** `data-app-version`: the host app's build, sent with each new request. */
+  appVersion?: string;
+  /** `data-locale`: the widget's language (BCP 47), ahead of the page's
+   *  <html lang> and the browser's. */
+  locale?: string;
 };
 
 // ─── public JS API ─────────────────────────────────────────
@@ -58,6 +71,20 @@ type CrumbApi = {
   /** Fires with the unread-reply count whenever it changes — lets a host
    *  badge their own launcher when crumb's is hidden. */
   onUnread: (cb: (count: number) => void) => void;
+  /** Sign a customer in, or swap in a fresh token, without a page reload.
+   *  Reloads their data in place; a different customer replaces the last
+   *  one's state entirely. Works before mount (the script can run before
+   *  login) and after. */
+  identify: (opts: { jwt: string }) => void;
+  /** Sign out: forget the customer's data, drafts and unread state, and hide
+   *  the launcher until the next identify(). */
+  shutdown: () => void;
+  /** Fires when the API says the identity token expired, so the host can
+   *  mint a new one and call identify(). Once per token. */
+  onTokenExpired: (cb: () => void) => void;
+  /** Which build of your app the customer is on (same as data-app-version);
+   *  sent with each new request. The page and browser are read for you. */
+  setContext: (ctx: { app_version?: string | null }) => void;
   /** Internal: queued calls awaiting mount; drained by init(). */
   q?: Array<[keyof CrumbApi, unknown[]]>;
   /** Internal: guards against a double-injected snippet. */
@@ -86,6 +113,10 @@ function installApiStub(): void {
     track: enqueue("track"),
     onReady: enqueue("onReady"),
     onUnread: enqueue("onUnread"),
+    identify: enqueue("identify"),
+    shutdown: enqueue("shutdown"),
+    onTokenExpired: enqueue("onTokenExpired"),
+    setContext: enqueue("setContext"),
     q,
   };
 }
@@ -111,6 +142,12 @@ type ItemSummary = {
   last_reply_side?: "vendor" | "customer" | null;
   turn?: LoopTurn;
   last_event?: LastEvent | null;
+  // List only: replies the vendor wrote (never the customer's own), for unread.
+  vendor_reply_count?: number;
+  last_vendor_reply_at?: string | null;
+  // Thread only: why the current status was set, if the vendor said, and when.
+  status_reason?: string | null;
+  status_changed_at?: string | null;
 };
 
 type ThreadAttachment = {
@@ -174,10 +211,12 @@ type Me = {
   members: Array<{ id: string; name: string; email: string; initials: string; role: string; item_count: number }>;
 };
 
+// `message` is always customer copy (see friendlyError); `code` is the API's
+// raw code, kept only to pick the way forward, never shown.
 type AsyncState =
   | { kind: "idle" }
   | { kind: "loading" }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; code?: string };
 
 // ─── config ────────────────────────────────────────────────
 function readConfig(): Config | null {
@@ -193,10 +232,9 @@ function readConfig(): Config | null {
   const accountName = d("accountName");
   const missing: string[] = [];
   if (!workspace) missing.push("data-workspace");
-  if (!jwt) {
-    if (!userEmail)   missing.push("data-user-email");
-    if (!accountName) missing.push("data-account-name");
-  }
+  // No identity at all is fine: the script may run before login, and the
+  // widget waits for crumb.identify({ jwt }). Half an email identity isn't.
+  if (!jwt && userEmail && !accountName) missing.push("data-account-name");
   if (missing.length) {
     console.warn(
       `[crumb] widget did not mount: missing required attribute${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}. ` +
@@ -233,6 +271,8 @@ function readConfig(): Config | null {
     launcherOverride,
     offsetY,
     recordNetworkBodies: d("recordNetworkBodies") === "true",
+    appVersion: d("appVersion") || undefined,
+    locale: d("locale") || undefined,
   };
 }
 
@@ -273,27 +313,13 @@ const ICONS = {
   expand:   `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h4v4M13 3l-5 5M7 13H3v-4M3 13l5-5"/></svg>`,
   collapse: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 7H9V3M9 7l4-4M3 9h4v4M7 9l-4 4"/></svg>`,
   attach:   `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 7L7.5 12.5a3 3 0 0 1-4.24-4.24L9 2.5a2 2 0 0 1 2.83 2.83L6 10.78"/></svg>`,
+  screen:   `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.75" y="2.75" width="12.5" height="8.5" rx="1.5"/><path d="M5.5 14h5M8 11.25V14"/></svg>`,
   gear:     `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.4v1.7M8 12.9v1.7M14.6 8h-1.7M3.1 8H1.4M12.66 3.34l-1.2 1.2M4.54 11.46l-1.2 1.2M12.66 12.66l-1.2-1.2M4.54 4.54l-1.2-1.2"/></svg>`,
   trash:    `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M5 4.5l.5 8h5l.5-8"/></svg>`,
+  alert:    `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.75v4M8 11.25v.01"/></svg>`,
 };
 
-const TYPES: Array<{ key: ItemType; label: string; icon: string }> = [
-  { key: "bug",      label: "Bug",      icon: ICONS.bug },
-  { key: "idea",     label: "Idea",     icon: ICONS.idea },
-  { key: "question", label: "Question", icon: ICONS.question },
-];
-
-const STATUS_LABEL: Record<Status, string> = {
-  open:      "Open",
-  review:    "In review",
-  planned:   "Planned",
-  progress:  "In progress",
-  shipped:   "Shipped",
-  declined:  "Won’t ship",
-  deferred:  "Set aside",
-  duplicate: "Duplicate",
-  resolved:  "Resolved",
-};
+const TYPES: ItemType[] = ["bug", "idea", "question"];
 
 // Statuses worth interrupting the customer for: their loop moved somewhere
 // meaningful (committed, in motion, or closed with an outcome). open/review/
@@ -304,22 +330,151 @@ const NEWS_STATUSES = new Set<Status>(["planned", "progress", "shipped", "declin
 // do, so the "close this request" affordance is hidden.
 const CLOSED_STATUSES = new Set<Status>(["shipped", "declined", "duplicate", "resolved"]);
 
-// ─── time helper ──────────────────────────────────────────
-function ageFrom(iso: string): string {
-  const d = Date.now() - new Date(iso).getTime();
-  if (d < 60_000) return "just now";
-  const units: Array<[string, number]> = [
-    ["w", 1000 * 60 * 60 * 24 * 7],
-    ["d", 1000 * 60 * 60 * 24],
-    ["h", 1000 * 60 * 60],
-    ["m", 1000 * 60],
-  ];
-  for (const [u, ms] of units) if (d >= ms) return `${Math.floor(d / ms)}${u}`;
-  return "just now";
+// Text and double-quoted attribute values alike: a teammate named
+// `x" onfocus="…` must not break out of aria-label="Remove ${name}".
+export function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// ─── errors, limits, identity (pure; unit-tested) ─────────
+// Field caps: LIMITS in apps/dashboard/lib/validation.ts (a unit test pins
+// them together), so the box stops taking text before the API would refuse it.
+export const MAX_LEN = { title: 300, body: 20_000, reply: 20_000 } as const;
+
+// Customer copy for an API error code, or the HTTP status when the body had
+// none. The code itself never reaches the screen.
+export function friendlyError(code: string, status = 0): string {
+  switch (code) {
+    case "jwt_expired":    return t.errExpired;
+    case "network":        return t.errOffline;
+    case "not_your_item":  return t.errNotYours;
+    case "item_not_found": return t.errNotFound;
+    case "missing_title":  return t.errNoTitle;
+    case "missing_body":   return t.errNoBody;
+    case "empty_file":     return t.errEmptyFile;
+  }
+  if (code === "rate_limited" || status === 429) return t.errTooMany;
+  if (code === "file_too_large" || status === 413) return t.errTooBig;
+  if (code === "unsupported_type" || status === 415) return t.errFileType;
+  if (/_too_long$/.test(code)) return t.errTooLong;
+  if (status === 401 || /^(jwt_|invalid_token|missing_(email|workspace)|user_not_found)/.test(code)) return t.errSignIn;
+  return t.errServer;
+}
+
+// Cmd/Ctrl+Enter sends; plain Enter is a newline. Never mid-IME: Chinese and
+// Japanese input confirm a candidate with Enter (Safari reports that keydown
+// as keyCode 229 with isComposing already false).
+export function isSendShortcut(e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "isComposing" | "keyCode">): boolean {
+  return e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing && e.keyCode !== 229;
+}
+
+// The customer a token names (`sub`, their email), read unverified: it only
+// keys this tab's drafts and spots a user switch. The API does the verifying.
+export function jwtSub(jwt: string): string {
+  try {
+    const sub = JSON.parse(atob(jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).sub;
+    return typeof sub === "string" ? sub : "";
+  } catch {
+    return "";
+  }
+}
+
+// Grow a textarea with its text up to its CSS max-height, where it scrolls.
+function autoGrow(el: HTMLTextAreaElement): void {
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight + 2}px`; // + the 1px borders (border-box)
+}
+
+// ─── accessibility (pure; unit-tested) ────────────────────
+// The launcher's accessible name: its visible label plus the unread count.
+export function launcherLabel(unread: number): string {
+  return unread > 0 ? `${t.feedback}, ${t.updates(unread)}` : t.feedback;
+}
+
+// Arrow keys move along the tablist (wrapping), Home/End jump to its ends.
+// -1: a key the tablist leaves alone.
+export function tabStep(key: string, i: number, n: number): number {
+  switch (key) {
+    case "ArrowRight": return (i + 1) % n;
+    case "ArrowLeft":  return (i - 1 + n) % n;
+    case "Home":       return 0;
+    case "End":        return n - 1;
+  }
+  return -1;
+}
+
+// ─── the customer's loop (pure; unit-tested) ──────────────
+// What's new on one request since the customer last looked: a vendor reply
+// they haven't opened, or a status move worth interrupting them for. Only the
+// vendor's replies count; the customer's own messages are never news.
+export function itemNews(it: ItemSummary, seenReplies = 0, seenStatus?: string): { reply: boolean; status: boolean } {
+  return {
+    reply: (it.vendor_reply_count ?? 0) > seenReplies,
+    status: NEWS_STATUSES.has(it.status) && seenStatus !== it.status,
+  };
+}
+
+// The old unread map (crumb_seen:) held every message seen, the customer's own
+// too. A thread whose every message had been seen keeps its vendor replies
+// read; any other thread's vendor replies stay news, as they were.
+export function legacySeen(old: Record<string, number>, list: ItemSummary[]): Record<string, number> {
+  const seen: Record<string, number> = {};
+  for (const it of list) {
+    if ((old[it.short_id] ?? -1) >= it.reply_count) seen[it.short_id] = it.vendor_reply_count ?? 0;
+  }
+  return seen;
+}
+
+// The launcher's words for it: "Sam replied" / "Shipped: Dark mode". The
+// latest event is the vendor's reply only when its time is their last
+// reply's; otherwise the customer wrote last and has no name to show.
+export function newsPhrase(it: ItemSummary, news: { reply: boolean; status: boolean }): string {
+  const e = it.last_event;
+  if (news.reply && !(news.status && e?.kind === "status")) {
+    return e?.kind === "reply" && e.at === it.last_vendor_reply_at && e.author_name ? t.replied(e.author_name) : t.newReply;
+  }
+  return t.statusNews(t.statuses[it.status], it.title);
+}
+
+// The vendor's reason for where a request stands, shown in plain words atop
+// the thread. Not for "open" (a reopen reads "Unmerged") or "resolved" (the
+// customer's own close note).
+export function statusReason(it: ItemSummary): string {
+  return it.status === "open" || it.status === "resolved" ? "" : it.status_reason?.trim() ?? "";
+}
+
+// Secret-looking key=value pairs (query, #fragment, ;matrix) and user:pass@
+// come out of a URL before it leaves the page. Same names as the server's
+// redactContextUrl in lib/validation.ts, which a unit test holds it to.
+const SECRET_PARAM = /pass|pwd|secret|token|auth|key$|code$|credential|signature|session|cookie|jwt|csrf|xsrf|otp|verifier|cvv|cvc|ssn|cardnumber|^(sig|sid|pin)$/;
+export function redactUrl(url: string): string {
+  return url
+    .replace(/^(https?:\/\/)[^/?#@]*@/i, "$1")
+    .replace(/(^|[?#&;])([^=&#;?]*)=([^&#;?]*)/g, (m, sep: string, k: string) => {
+      let name = k;
+      try { name = decodeURIComponent(k.replace(/\+/g, " ")); } catch { /* malformed escape: match it raw */ }
+      return SECRET_PARAM.test(name.toLowerCase().replace(/[^a-z0-9]/g, "")) ? `${sep}${k}=[redacted]` : m;
+    });
+}
+
+// The vendor's accent, when white text on it reads at 4.5:1 (it fills the
+// primary button and draws the focus ring); null keeps the panel's own ink.
+export function readableAccent(color: string | null | undefined): string | null {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color?.trim() ?? "");
+  if (!m) return null;
+  const hex = m[1]!.length === 3 ? m[1]!.replace(/./g, "$&$&") : m[1]!;
+  const lum = [0.2126, 0.7152, 0.0722].reduce((sum, w, i) => {
+    const v = parseInt(hex.slice(i * 2, i * 2 + 2), 16) / 255;
+    return sum + w * (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+  }, 0);
+  return 1.05 / (lum + 0.05) >= 4.5 ? `#${hex}` : null;
+}
+
+// A control's identity across a re-render (render() rebuilds the panel's
+// markup): its action plus the item, tab, type or setting it acts on.
+function controlKey(el: HTMLElement): string {
+  const d = el.dataset;
+  return d.act ? [d.act, d.short, d.id, d.tab, d.type, d.key].join("|") : "";
 }
 
 // ─── fuzzy search ─────────────────────────────────────────
@@ -405,7 +560,8 @@ function ensureRecorder(apiBase: string, workspaceSlug: string, sessionToken: st
   if (recorderInjected) return;
   recorderInjected = true;
   const startIfReady = () => {
-    if (window.__crumbRecord__) {
+    // Consent can be withdrawn (or the customer signed out) while the bundle loads.
+    if (window.__crumbRecord__ && hasRecordConsent()) {
       window.__crumbRecord__.start({ apiBase, workspaceSlug, sessionToken, captureBodies });
     }
   };
@@ -425,6 +581,11 @@ function init(config: Config) {
   // first mount owns window.crumb; later calls would double the launcher.
   if (window.crumb?.__mounted) return;
 
+  // The widget's language: data-locale, else the page's, else the browser's.
+  const lc = pickLocale([config.locale, document.documentElement.lang, navigator.language]);
+  t = lc.t;
+  const when = timeFormat(lc.locale);
+
   // host element
   const host = document.createElement("div");
   host.id = "crumb-widget";
@@ -432,6 +593,9 @@ function init(config: Config) {
   // the widget out of any session recording it's about to start, so we
   // don't end up with recursive UI playback inside the player.
   host.className = "crumb-block";
+  // Screen readers speak the widget in its own language, which can differ
+  // from the page around it (an English widget on a German page).
+  host.lang = lc.locale;
   host.style.cssText = "position: fixed; inset: auto 0 0 auto; pointer-events: none; z-index: 2147483647;";
   document.body.appendChild(host);
 
@@ -450,21 +614,45 @@ function init(config: Config) {
   const launcher = document.createElement("button");
   launcher.className = "launcher";
   launcher.dataset.state = "rest";
-  launcher.setAttribute("aria-label", "Open Crumb feedback");
+  // Name: "Feedback" plus the unread count (render() keeps it current). The
+  // flag's event text ("Maya replied") is its description.
+  launcher.setAttribute("aria-label", launcherLabel(0));
+  launcher.setAttribute("aria-expanded", "false");
+  launcher.setAttribute("aria-controls", "crumb-panel");
+  launcher.setAttribute("aria-describedby", "crumb-flag");
   launcher.style.pointerEvents = "none";
   launcher.style.opacity = "0";
   launcher.innerHTML = `
     <span class="l-mark">${LOOP_LAUNCHER}</span>
-    <span class="l-label">Feedback</span>
+    <span class="l-label">${t.feedback}</span>
     <span class="l-dot" hidden></span>
-    <span class="l-flag" aria-hidden="true"><span class="l-flag-text"></span><span class="l-flag-count"></span></span>`;
+    <span class="l-flag" aria-hidden="true"><span class="l-flag-text" id="crumb-flag"></span><span class="l-flag-count"></span></span>`;
   shadow.appendChild(launcher);
   const flagTextEl = launcher.querySelector(".l-flag-text") as HTMLSpanElement;
   const flagCountEl = launcher.querySelector(".l-flag-count") as HTMLSpanElement;
   const newsDotEl = launcher.querySelector(".l-dot") as HTMLSpanElement;
 
+  // One polite live region for everything worth hearing: sends, errors, loop
+  // news. It sits outside the panel, so re-renders don't reset it and it can
+  // speak while the panel is closed.
+  const live = document.createElement("div");
+  live.className = "sr-only";
+  live.setAttribute("role", "status");
+  live.setAttribute("aria-live", "polite");
+  shadow.appendChild(live);
+  let liveTimer: ReturnType<typeof setTimeout> | undefined;
+  function say(msg: string) {
+    live.textContent = "";
+    clearTimeout(liveTimer);
+    // A beat after clearing, so the same words twice are still read twice.
+    liveTimer = setTimeout(() => { live.textContent = msg; }, 100);
+  }
+
   const reducedMotion = (typeof window !== "undefined")
     && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  // Touch screens: never focus a text box the customer didn't tap. The
+  // keyboard would pop up over the thread they came to read.
+  const coarse = window.matchMedia?.("(pointer: coarse)").matches;
 
   // Vertical nudge along the edge (workspace setting or per-embed
   // data-offset), composed onto a host CSS var that both the launcher and
@@ -478,8 +666,11 @@ function init(config: Config) {
   // wins over the workspace setting (so one page can hide the tab while
   // others keep it). Defaults to "auto" (= shown).
   let brandVisibility: LauncherVisibility = "auto";
+  // No customer yet (the script ran before login, or after shutdown()):
+  // nothing to show until identify().
+  function identified(): boolean { return !!(config.jwt || config.userEmail); }
   function launcherHidden(): boolean {
-    return (config.launcherOverride ?? brandVisibility) === "hidden";
+    return !identified() || (config.launcherOverride ?? brandVisibility) === "hidden";
   }
   function applyVisibility() {
     launcher.style.display = launcherHidden() ? "none" : "";
@@ -502,7 +693,20 @@ function init(config: Config) {
     visibility?: LauncherVisibility | null;
     offsetY?: number | null;
   }) {
-    if (opts.dot) launcher.style.setProperty("--crumb-accent", opts.dot);
+    if (opts.dot) {
+      launcher.style.setProperty("--crumb-accent", opts.dot);
+      // Inside the panel the accent fills the primary button and draws the
+      // focus ring, unless white on it would fail 4.5:1 (then the panel's ink).
+      const brand = readableAccent(opts.dot);
+      panel.classList.toggle("branded", !!brand); // hover darkens it a step
+      if (brand) {
+        panel.style.setProperty("--c-brand", brand);
+        panel.style.setProperty("--c-brand-soft", `${brand}24`); // 14% alpha
+      } else {
+        panel.style.removeProperty("--c-brand");
+        panel.style.removeProperty("--c-brand-soft");
+      }
+    }
     if (opts.bg)  launcher.style.setProperty("--crumb-launcher-bg", opts.bg);
     if (opts.edge === "right" || opts.edge === "left") {
       host.setAttribute("data-edge", opts.edge);
@@ -544,20 +748,32 @@ function init(config: Config) {
   scrim.className = "scrim";
   shadow.appendChild(scrim);
 
-  // panel
+  // panel: a modal dialog named by its header title (each view's own).
+  // render() makes it inert while closed and moves focus in and back out.
   const panel = document.createElement("div");
   panel.className = "panel";
+  panel.id = "crumb-panel";
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-modal", "true");
+  panel.setAttribute("aria-labelledby", "crumb-title");
   shadow.appendChild(panel);
 
   // state
   let open = false;
   let expanded = false;
   let items: ItemSummary[] | null = null; // null = not yet loaded
-  // Pending attachments for the active reply composer. Cleared on view
-  // change or successful send.
+  // Pending attachments for one composer: "compose" or a thread's short id
+  // (attachFor). Cleared when another composer opens or on a successful send.
   let pendingAttachments: ThreadAttachment[] = [];
+  let attachFor = "";
   let uploadingAttachment = false;
   let attachmentError: string | null = null;
+  // The browser can capture a screen, window or tab (desktop, https, and not
+  // blocked by the host page's display-capture policy).
+  const canCapture = typeof navigator.mediaDevices?.getDisplayMedia === "function"
+    && (document as Document & { featurePolicy?: { allowsFeature(f: string): boolean } }).featurePolicy?.allowsFeature("display-capture") !== false;
+  // The host app's build: data-app-version, or crumb.setContext().
+  let appVersion = config.appVersion ?? "";
   let listState: AsyncState = { kind: "idle" };
   let view: View = { kind: "list" };
   let thread: ThreadData | null = null;
@@ -576,11 +792,47 @@ function init(config: Config) {
   let meState: AsyncState = { kind: "idle" };
   let memberMsg: string | null = null;
   let channelMsg: string | null = null;
+  // The account's Slack/Teams channels as the server reports them (masked).
+  let channels: Record<"slack" | "teams", { connected: boolean; masked_url: string | null }> | null = null;
+  let channelsState: AsyncState = { kind: "idle" };
+  // A removal waiting on its inline confirm: a member id, "slack" or "teams".
+  let askRemove: string | null = null;
+  // A Follow that failed and was rolled back; cleared on the next try or view.
+  let followMsg: string | null = null;
+  // Identity generation: bumped whenever the customer changes, so a response
+  // still in flight for the previous one is dropped (see call()).
+  let epoch = 0;
+  // crumb_open deep link that arrived before anyone was signed in.
+  let pendingOpen: string | null = null;
+  // The token the API last reported expired, so onTokenExpired fires once per token.
+  let expiredJwt: string | undefined;
+  const expiredListeners: Array<() => void> = [];
+  // Set once a sign-out stopped the recorder: it can't restart in this tab,
+  // so its session (the previous customer's) must never be linked again.
+  let replayRetired = false;
+  // Where the next render() puts focus: true = the view's first sensible
+  // control, a selector = that control. False = keep it where it is.
+  let moveFocus: boolean | string = false;
+  // What had focus when the panel opened (a host button), to return it on close.
+  let opener: HTMLElement | null = null;
+  let lastSaid = "";  // [data-live] text already announced
+  let prevNews = -1;  // unread count at the last render; -1 = list not loaded
 
-  const setView = (v: View) => {
+  // Every navigation moves focus to the new view; `focus` names a control
+  // (a selector) or opts out (false) when the view only changes in place.
+  const setView = (v: View, focus: boolean | string = true) => {
     // Leaving the feedback list drops any active search so a return starts clean.
-    if (v.kind !== "list") searchQuery = "";
+    if (v.kind !== "list") {
+      searchQuery = "";
+      if (view.kind === "list") markAllStatusesSeen();
+    }
+    // Files belong to the composer they were attached in.
+    const box = v.kind === "compose" ? "compose" : v.kind === "thread" ? v.shortId : attachFor;
+    if (box !== attachFor) { attachFor = box; pendingAttachments = []; attachmentError = null; }
+    followMsg = null;
+    askRemove = null;
     view = v;
+    moveFocus = focus;
     render();
   };
 
@@ -597,15 +849,16 @@ function init(config: Config) {
   }
 
   // ── unread watermark (vendor → customer reply signal) ──────
-  // localStorage map { short_id: lastSeenReplyCount } per workspace+user. An
-  // item is "unread" when its reply_count grew since the customer last opened
-  // its thread — i.e. the vendor (or an inbound email) replied while they were
-  // away. Drives the launcher badge so a reply is visible on next page load
-  // without reopening every thread. Best-effort: if storage is blocked
-  // (incognito), getSeen() returns {} and the badge falls back to "any item
-  // with replies" — the prior behavior.
+  // localStorage map { short_id: vendor replies seen } per workspace+user. An
+  // item is "unread" when its vendor_reply_count grew since the customer last
+  // opened its thread, so their own messages (the request body, a reply, an
+  // email) never light it. Drives the launcher badge and the row dots so a
+  // reply is visible on next page load without reopening every thread.
+  // Best-effort: blocked storage (incognito) means {} and every vendor reply
+  // reads as new. ponytail: per device; a server-side read mark if customers
+  // move between devices a lot. (crumb_seen: held total message counts.)
   function seenKey(): string {
-    return `crumb_seen:${config.workspace}:${config.userEmail || "jwt"}`;
+    return `crumb_seen_vendor:${config.workspace}:${userKey()}`;
   }
   // Cached so render() (called on every interaction/animation tick) doesn't
   // re-parse localStorage each time. The cache holds the live object; writes
@@ -618,8 +871,8 @@ function init(config: Config) {
     seenCache = m;
     return m;
   }
-  // Record the count seen for a thread. Pass the freshly-loaded thread's
-  // message count — not the (possibly-unloaded) list — so deep-link / boot
+  // Record the vendor replies seen for a thread. Pass the freshly-loaded
+  // thread's count, not the (possibly-unloaded) list's, so deep-link and boot
   // opens clear the badge correctly.
   function markThreadSeen(shortId: string, count: number) {
     const m = getSeen();
@@ -634,7 +887,7 @@ function init(config: Config) {
   // outcome lights the launcher even when no reply was written. Same
   // best-effort storage posture as the reply watermark above.
   function statusSeenKey(): string {
-    return `crumb_status_seen:${config.workspace}:${config.userEmail || "jwt"}`;
+    return `crumb_status_seen:${config.workspace}:${userKey()}`;
   }
   let statusSeenCache: Record<string, string> | null = null;
   function getStatusSeen(): Record<string, string> {
@@ -652,13 +905,52 @@ function init(config: Config) {
     m[shortId] = status;
     writeStatusSeen(m);
   }
-  // The list view shows every item's status pill, so rendering it counts as
-  // "seen" for all of them.
+  const newsOf = (it: ItemSummary) => itemNews(it, getSeen()[it.short_id], getStatusSeen()[it.short_id]);
+  // The list shows every item's status pill, so leaving it counts as "seen"
+  // for all of them (setView, closeApi). Not on render: the rows keep their
+  // news dots while the customer is looking.
   function markAllStatusesSeen() {
     if (!items) return;
     const m = getStatusSeen();
     for (const it of items) m[it.short_id] = it.status;
     writeStatusSeen(m);
+  }
+
+  // Carry the marks over from the keys before this one, once, so an update
+  // doesn't light every thread already read: crumb_seen: counted every
+  // message seen, and status marks filed every token customer under ":jwt".
+  function adoptLegacyMarks(list: ItemSummary[]) {
+    const oldSeen = `crumb_seen:${config.workspace}:${config.userEmail || "jwt"}`;
+    const oldStatus = `crumb_status_seen:${config.workspace}:jwt`;
+    try {
+      const msgs = JSON.parse(localStorage.getItem(oldSeen) || "null");
+      if (msgs) {
+        seenCache = { ...legacySeen(msgs, list), ...getSeen() };
+        localStorage.setItem(seenKey(), JSON.stringify(seenCache));
+        localStorage.removeItem(oldSeen);
+      }
+      const statuses = config.jwt ? JSON.parse(localStorage.getItem(oldStatus) || "null") : null;
+      if (statuses) {
+        statusSeenCache = { ...statuses, ...getStatusSeen() };
+        localStorage.setItem(statusSeenKey(), JSON.stringify(statusSeenCache));
+        localStorage.removeItem(oldStatus);
+      }
+    } catch { /* storage blocked or unreadable: nothing to carry */ }
+  }
+
+  // ── drafts (outlive a reload, an expired session, a Back tap) ──
+  // sessionStorage per workspace + customer: the compose form and each reply
+  // box, until that send succeeds. A sign-out or user switch drops them.
+  type Drafts = { compose?: { type: ItemType; title: string; body: string }; replies?: Record<string, string> };
+  function userKey(): string { return config.jwt ? jwtSub(config.jwt) : config.userEmail; }
+  function draftKey(): string { return `crumb_draft:${config.workspace}:${userKey()}`; }
+  function readDrafts(): Drafts {
+    try { return JSON.parse(sessionStorage.getItem(draftKey()) || "{}") || {}; } catch { return {}; }
+  }
+  function editDrafts(fn: (d: Drafts) => void): void {
+    const d = readDrafts();
+    fn(d);
+    try { sessionStorage.setItem(draftKey(), JSON.stringify(d)); } catch { /* storage blocked: the draft lives in memory only */ }
   }
 
   // ── network ────────────────────────────────────────────
@@ -688,6 +980,53 @@ function init(config: Config) {
     });
   }
 
+  // One door for every API call: identity on the wire, JSON back, and on
+  // failure an Error whose message is customer copy (`code` keeps the raw one).
+  type ApiError = Error & { code?: string };
+  async function call(path: string, method = "GET", body?: string | FormData): Promise<any> {
+    const gen = epoch;
+    const jwt = config.jwt;
+    const u = new URL(`${config.apiBase}/api/v1/${path}`);
+    if (method === "GET") withAuthParams(u);
+    const headers = authHeaders();
+    if (typeof body === "string") headers["Content-Type"] = "application/json";
+    let res: Response | undefined;
+    let data: any = {};
+    try {
+      res = await fetch(u.toString(), { method, headers, body });
+      data = await res.json().catch(() => ({}));
+    } catch { /* offline, DNS, CORS: no response at all */ }
+    // The customer changed mid-flight: never settle, so the last customer's
+    // data (or error) can't paint the new one's panel. ponytail: the caller's
+    // `finally` never runs either, so forgetUser() resets that state itself;
+    // an AbortController per identity if a caller ever needs cleanup.
+    if (gen !== epoch) return new Promise(() => {});
+    if (res?.ok) return data;
+    const code = !res ? "network" : typeof data?.error === "string" ? data.error : "";
+    if (code === "jwt_expired" && jwt) tokenExpired(jwt);
+    throw Object.assign(new Error(friendlyError(code, res?.status)), { code });
+  }
+
+  // Error state for a failed call. Anything that isn't an API error (a bug)
+  // still gets plain copy.
+  function failed(err: unknown): Extract<AsyncState, { kind: "error" }> {
+    const code = (err as ApiError)?.code;
+    return { kind: "error", code, message: code === undefined ? friendlyError("") : (err as Error).message };
+  }
+
+  function tokenExpired(jwt: string) {
+    // A late answer for an older token, or the host already heard about this one.
+    if (jwt !== config.jwt || expiredJwt === jwt) return;
+    expiredJwt = jwt;
+    for (const cb of expiredListeners) { try { cb(); } catch { /* host cb */ } }
+  }
+
+  // The replay session to link, only while this customer's consent stands. A
+  // sign-out clears consent, so the next customer never inherits a recording.
+  function replayToken(): string | undefined {
+    return !replayRetired && hasRecordConsent() ? window.__crumbRecord__?.getSessionToken?.() ?? undefined : undefined;
+  }
+
   // ── usage events (crumb.track) ─────────────────────────────
   // Buffered and flushed in batches — same philosophy as the recorder's chunk
   // flushing (timer + on unload). Dropped past a cap so a chatty host can't
@@ -705,7 +1044,7 @@ function init(config: Config) {
       name: name.slice(0, 64),
       props: props && typeof props === "object" && !Array.isArray(props) ? props : {},
       ts: new Date().toISOString(),
-      page_url: location.href,
+      page_url: redactUrl(location.href),
     };
     if (usageBuffer.length >= USAGE_MAX_BUFFER) usageBuffer.shift(); // drop oldest
     usageBuffer.push(ev);
@@ -727,8 +1066,7 @@ function init(config: Config) {
     usageBuffer = [];
     // Tie to a replay session only when one exists (recorder running) — mirrors
     // how submitNew links the session token. Null otherwise.
-    const sessionToken = window.__crumbRecord__?.getSessionToken?.() ?? undefined;
-    const body = authBody({ events: batch, session_token: sessionToken });
+    const body = authBody({ events: batch, session_token: replayToken() });
     try {
       // keepalive so an unload-time flush still lands.
       fetch(`${config.apiBase}/api/v1/usage-events`, {
@@ -744,31 +1082,49 @@ function init(config: Config) {
     listState = { kind: "loading" };
     render();
     try {
-      const u = withAuthParams(new URL(`${config.apiBase}/api/v1/items`));
-      const res = await fetch(u.toString(), { headers: authHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      items = data.items as ItemSummary[];
+      items = (await call("items")).items as ItemSummary[];
+      adoptLegacyMarks(items);
       listState = { kind: "idle" };
     } catch (err) {
-      listState = { kind: "error", message: err instanceof Error ? err.message : "Could not load" };
+      listState = failed(err);
     }
     render();
   }
 
   async function fetchMe() {
     meState = { kind: "loading" };
+    render();
     try {
-      const u = withAuthParams(new URL(`${config.apiBase}/api/v1/me`));
-      const res = await fetch(u.toString(), { headers: authHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      me = data as Me;
+      me = await call("me") as Me;
       meState = { kind: "idle" };
+      // Refresh the launcher's colors/edge in place (revealing it if a stale
+      // cache had it hidden), and cache them so the next visit paints them
+      // before /me answers.
+      const w = me.workspace;
+      settleLauncher({
+        dot: w.accent ?? null,
+        bg: w.launcher_bg ?? null,
+        edge: w.launcher_edge ?? null,
+        visibility: w.launcher_visibility ?? null,
+        offsetY: w.launcher_offset_y ?? null,
+      });
+      writeCachedBrand({
+        accent: w.accent,
+        launcher_bg: w.launcher_bg,
+        launcher_edge: w.launcher_edge,
+        launcher_visibility: w.launcher_visibility,
+        launcher_offset_y: w.launcher_offset_y,
+      });
+      // Consent-gated: only (re)start recording if the customer already opted
+      // in earlier this tab. A fresh visitor records nothing until they tick
+      // the box in the compose form.
+      if (w.session_record_enabled && hasRecordConsent()) {
+        ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken(), config.recordNetworkBodies);
+      }
     } catch (err) {
-      meState = { kind: "error", message: err instanceof Error ? err.message : "Could not load" };
+      meState = failed(err);
     }
-    // No render here — the launcher handler awaits both before showing the panel.
+    render();
   }
 
   async function fetchThread(shortId: string) {
@@ -779,20 +1135,17 @@ function init(config: Config) {
     closeState = { kind: "idle" };
     render();
     try {
-      const u = withAuthParams(new URL(`${config.apiBase}/api/v1/items/${encodeURIComponent(shortId)}`));
-      const res = await fetch(u.toString(), { headers: authHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      thread = data as ThreadData;
+      thread = await call(`items/${encodeURIComponent(shortId)}`) as ThreadData;
       threadState = { kind: "idle" };
-      // Viewing the thread clears its unread state — snapshot the just-loaded
-      // message count (same units as the list's reply_count) so the launcher
-      // badge drops this item, even on a deep-link open before the list loads.
-      markThreadSeen(shortId, Array.isArray(thread.messages) ? thread.messages.length : 0);
+      // Viewing the thread clears its unread state: snapshot its vendor
+      // replies (the list's vendor_reply_count units) so the launcher badge
+      // drops this item, even on a deep-link open before the list loads.
+      markThreadSeen(shortId, (thread.messages ?? []).filter(m => m.kind === "vendor").length);
       // The thread shows its status too — clears this item's status news.
       if (thread.item?.status) markStatusSeen(shortId, thread.item.status);
     } catch (err) {
-      threadState = { kind: "error", message: err instanceof Error ? err.message : "Could not load" };
+      // A slow failure for a thread the customer already left can't cover the one they're on.
+      if (view.kind !== "thread" || view.shortId === shortId) threadState = failed(err);
     }
     render();
   }
@@ -801,36 +1154,31 @@ function init(config: Config) {
     roadmapState = { kind: "loading" };
     render();
     try {
-      const u = withAuthParams(new URL(`${config.apiBase}/api/v1/roadmap`));
-      const res = await fetch(u.toString(), { headers: authHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      roadmap = data as RoadmapData;
+      roadmap = await call("roadmap") as RoadmapData;
       roadmapState = { kind: "idle" };
     } catch (err) {
-      roadmapState = { kind: "error", message: err instanceof Error ? err.message : "Could not load" };
+      roadmapState = failed(err);
     }
     render();
   }
 
   async function toggleFollow(initiativeId: string, follow: boolean) {
-    // Optimistic flip in the cached roadmap, then persist.
-    if (roadmap) {
+    const flip = (on: boolean) => {
       for (const col of ["now", "next", "later"] as const) {
-        const e = roadmap.columns[col].find(x => x.id === initiativeId);
-        if (e) e.following = follow;
+        const e = roadmap?.columns[col].find(x => x.id === initiativeId);
+        if (e) e.following = on;
       }
-      render();
-    }
+    };
+    // Optimistic, and rolled back with a plain why when the server says no.
+    followMsg = null;
+    flip(follow);
+    render();
     try {
-      await fetch(`${config.apiBase}/api/v1/roadmap`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: authBody({ initiative_id: initiativeId, follow }),
-      });
-    } catch {
-      // Revert on failure.
-      void fetchRoadmap();
+      await call("roadmap", "POST", authBody({ initiative_id: initiativeId, follow }));
+    } catch (err) {
+      flip(!follow);
+      followMsg = failed(err).message;
+      render();
     }
   }
 
@@ -841,44 +1189,62 @@ function init(config: Config) {
     Object.assign(me.notifications, patch); // optimistic
     render();
     try {
-      const res = await fetch(`${config.apiBase}/api/v1/notifications`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: authBody(patch),
-      });
-      if (!res.ok) throw new Error();
+      await call("notifications", "POST", authBody(patch));
     } catch {
       void fetchMe(); // fall back to server truth
     }
   }
 
   // ── customer chat channel (account admins) ──
-  // Posts a Slack/Teams channel incoming-webhook URL to the account so vendor
-  // replies / status changes / roadmap updates also land in the customer's own
-  // workspace. Write-only (we never echo the sealed secret back); a transient
-  // message confirms the save. Reads the inputs from the admin card on submit.
-  async function saveChannels() {
-    const slackUrl = panel.querySelector<HTMLInputElement>('input[data-act="slack-webhook"]')?.value.trim() || "";
-    const teamsUrl = panel.querySelector<HTMLInputElement>('input[data-act="teams-webhook"]')?.value.trim() || "";
-    if (!slackUrl && !teamsUrl) { channelMsg = "Paste a Slack or Teams webhook URL."; render(); return; }
-    let ok = true, lastErr = "";
-    for (const [provider, url] of [["slack", slackUrl], ["teams", teamsUrl]] as const) {
-      if (!url) continue;
-      try {
-        const res = await fetch(`${config.apiBase}/api/v1/account/integrations/webhook`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: authBody({ provider, url }),
-        });
-        if (!res.ok) { ok = false; lastErr = (await res.json().catch(() => ({})))?.error || ""; }
-      } catch { ok = false; lastErr = "network"; }
-    }
-    channelMsg = ok
-      ? "Saved. Notifications will post to your channel."
-      : lastErr === "invalid_url" ? "That isn't a valid https webhook URL."
-      : lastErr === "forbidden" ? "Only account admins can set this."
-      : "Couldn't save. Try again.";
+  // A Slack/Teams channel incoming webhook on the account, so vendor replies,
+  // status changes and roadmap updates also land in the customer's own
+  // workspace. The server lists them masked (host/…last4), never the secret.
+  // JWT installs only: the endpoint has no trusted-email fallback.
+  const CHANNEL_LABEL = { slack: "Slack", teams: "Teams" } as const;
+  function channelError(err: unknown): string {
+    const code = (err as ApiError).code;
+    return code === "invalid_url" ? t.errWebhook
+      : code === "forbidden" ? t.errAdminOnly
+      : failed(err).message;
+  }
+
+  async function fetchChannels() {
+    channelsState = { kind: "loading" };
     render();
+    try {
+      channels = await call("account/integrations/webhook");
+      channelsState = { kind: "idle" };
+    } catch (err) {
+      channelsState = failed(err);
+    }
+    render();
+  }
+
+  // Reads the inputs (shown only for channels not yet connected) on submit.
+  async function saveChannels() {
+    const urls = (["slack", "teams"] as const)
+      .map(p => [p, panel.querySelector<HTMLInputElement>(`input[data-act="${p}-webhook"]`)?.value.trim() ?? ""] as const)
+      .filter(([, url]) => url);
+    if (!urls.length) { channelMsg = t.pasteWebhook; render(); return; }
+    channelMsg = t.channelSaved;
+    for (const [provider, url] of urls) {
+      try {
+        await call("account/integrations/webhook", "POST", authBody({ provider, url }));
+      } catch (err) {
+        channelMsg = channelError(err);
+      }
+    }
+    await fetchChannels();
+  }
+
+  async function removeChannel(provider: "slack" | "teams") {
+    try {
+      await call(`account/integrations/webhook?provider=${provider}`, "DELETE");
+      channelMsg = t.channelRemoved(CHANNEL_LABEL[provider]);
+    } catch (err) {
+      channelMsg = channelError(err);
+    }
+    await fetchChannels();
   }
 
   // ── account member management (admins) ──
@@ -889,19 +1255,11 @@ function init(config: Config) {
     const prev = m?.role;
     if (m) { m.role = role; render(); }
     try {
-      const res = await fetch(`${config.apiBase}/api/v1/members`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: authBody({ target_user_id: id, role }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        if (m && prev) m.role = prev;
-        memberMsg = data?.error === "last_admin" ? "An account needs at least one admin." : "Couldn't change that role.";
-        render();
-      }
-    } catch {
-      void fetchMe();
+      await call("members", "PATCH", authBody({ target_user_id: id, role }));
+    } catch (err) {
+      if (m && prev) m.role = prev;
+      memberMsg = (err as ApiError).code === "last_admin" ? t.errLastAdmin : t.errRole;
+      render();
     }
   }
 
@@ -915,30 +1273,36 @@ function init(config: Config) {
     me.account.member_count = Math.max(0, me.account.member_count - 1);
     render();
     try {
-      const res = await fetch(`${config.apiBase}/api/v1/members`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: authBody({ target_user_id: id }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        me.members.splice(idx, 0, removed);
-        me.account.member_count += 1;
-        memberMsg = data?.error === "has_items"
-          ? "This teammate has feedback on file and can't be removed."
-          : data?.error === "last_admin"
-            ? "An account needs at least one admin."
-            : "Couldn't remove that teammate.";
-        render();
-      }
-    } catch {
-      void fetchMe();
+      await call("members", "DELETE", authBody({ target_user_id: id }));
+      say(t.removed(removed.name));
+    } catch (err) {
+      const code = (err as ApiError).code;
+      me.members.splice(idx, 0, removed);
+      me.account.member_count += 1;
+      memberMsg = code === "has_items" ? t.errHasItems : code === "last_admin" ? t.errLastAdmin : t.errRemove;
+      render();
     }
   }
 
-  async function submitNew(t: Extract<View, { kind: "compose" }>) {
-    if (!t.title.trim()) {
-      submitState = { kind: "error", message: "Add a one-line title." };
+  // Where the customer was when they wrote in, so the vendor never has to ask
+  // (shown in the thread's Details card). Secrets come out of the URLs here
+  // and again on the server.
+  function submissionContext() {
+    return {
+      page_url: redactUrl(location.href),
+      page_title: document.title || undefined,
+      referrer: document.referrer ? redactUrl(document.referrer) : undefined,
+      user_agent: navigator.userAgent,
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+      locale: navigator.language,
+      app_version: appVersion || undefined,
+    };
+  }
+
+  async function submitNew(v: Extract<View, { kind: "compose" }>) {
+    if (submitState.kind === "loading" || uploadingAttachment) return; // a second Cmd+Enter mid-send
+    if (!v.title.trim()) {
+      submitState = { kind: "error", message: friendlyError("missing_title") };
       render();
       return;
     }
@@ -947,44 +1311,41 @@ function init(config: Config) {
     try {
       // Attach the recording session token if recording is active. The
       // server only links sessions that have ≥1 chunk flushed, so a token
-      // here doesn't imply a guaranteed link.
-      const sessionToken = window.__crumbRecord__?.getSessionToken?.() ?? undefined;
-      const res = await fetch(`${config.apiBase}/api/v1/items`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: authBody({ type: t.type, title: t.title.trim(), body: t.body.trim(), session_token: sessionToken }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      // here doesn't imply a guaranteed link. Files ride on the first message.
+      const data = await call("items", "POST", authBody({ type: v.type, title: v.title.trim(), body: v.body.trim(), session_token: replayToken(), context: submissionContext(), attachment_ids: pendingAttachments.map(a => a.id) }));
+      const sid: string = data.short_id;
       submitState = { kind: "idle" };
+      pendingAttachments = [];
+      attachmentError = null;
+      editDrafts(d => { delete d.compose; });
+      // Their own new request is not news to them.
+      markThreadSeen(sid, 0);
+      markStatusSeen(sid, "open");
       await fetchList();
-      setView({ kind: "confirm", shortId: data.short_id });
+      setView({ kind: "confirm", shortId: sid });
     } catch (err) {
-      submitState = { kind: "error", message: err instanceof Error ? err.message : "Could not send." };
+      submitState = failed(err);
       render();
     }
   }
 
-  async function submitReply(t: Extract<View, { kind: "thread" }>) {
-    if (!t.reply.trim() && pendingAttachments.length === 0) return;
+  async function submitReply(v: Extract<View, { kind: "thread" }>) {
+    if (submitState.kind === "loading" || uploadingAttachment) return;
+    if (!v.reply.trim() && pendingAttachments.length === 0) return;
     submitState = { kind: "loading" };
     render();
     try {
       const attachmentIds = pendingAttachments.map(a => a.id);
-      const res = await fetch(`${config.apiBase}/api/v1/items/${encodeURIComponent(t.shortId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: authBody({ body: t.reply.trim(), attachment_ids: attachmentIds }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      await call(`items/${encodeURIComponent(v.shortId)}`, "POST", authBody({ body: v.reply.trim(), attachment_ids: attachmentIds }));
       submitState = { kind: "idle" };
       pendingAttachments = [];
       attachmentError = null;
-      view = { kind: "thread", shortId: t.shortId, reply: "" };
-      await fetchThread(t.shortId);
+      editDrafts(d => { if (d.replies) delete d.replies[v.shortId]; });
+      view = { kind: "thread", shortId: v.shortId, reply: "" };
+      say(t.replySent);
+      await fetchThread(v.shortId);
     } catch (err) {
-      submitState = { kind: "error", message: err instanceof Error ? err.message : "Could not send." };
+      submitState = failed(err);
       render();
     }
   }
@@ -992,71 +1353,100 @@ function init(config: Config) {
   // Close ("resolve") the open request. The customer is telling us they're all
   // set; the server flips the item to "resolved" and notifies the vendor. We
   // refetch so the thread reflects the closed loop (and the affordance hides).
-  async function closeRequest(t: Extract<View, { kind: "thread" }>) {
+  async function closeRequest(v: Extract<View, { kind: "thread" }>) {
     closeConfirm = false;
     closeState = { kind: "loading" };
     render();
     try {
-      const res = await fetch(`${config.apiBase}/api/v1/items/${encodeURIComponent(t.shortId)}/close`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: authBody({}),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      await call(`items/${encodeURIComponent(v.shortId)}/close`, "POST", authBody({}));
       closeState = { kind: "idle" };
-      await fetchThread(t.shortId);
+      say(t.requestClosed);
+      await fetchThread(v.shortId);
     } catch (err) {
-      closeState = { kind: "error", message: err instanceof Error ? err.message : "Could not close." };
+      closeState = failed(err);
       render();
     }
   }
 
-  async function pickAndUploadAttachment() {
+  // One upload path (and the server's limits) for every composer's files.
+  async function uploadFile(file: File) {
+    const box = attachFor;
+    uploadingAttachment = true;
+    render();
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      // resolveCustomer on the upload endpoint reads from these form
+      // fields when no JWT is present — matches the existing widget
+      // trusted-email path.
+      if (!config.jwt) {
+        form.append("workspace_slug", config.workspace);
+        form.append("account_user_email", config.userEmail);
+      }
+      const data = await call("uploads", "POST", form);
+      // The customer may have moved to another composer while it uploaded.
+      if (attachFor === box) {
+        pendingAttachments.push({
+          id: data.id,
+          filename: data.filename,
+          content_type: data.content_type,
+          size_bytes: data.size_bytes,
+        });
+        say(t.attached(data.filename));
+      }
+    } catch (err) {
+      attachmentError = failed(err).message;
+    } finally {
+      uploadingAttachment = false;
+      render();
+    }
+  }
+
+  function pickAndUploadAttachment() {
     if (uploadingAttachment) return;
     attachmentError = null;
     const input = document.createElement("input");
     input.type = "file";
     input.style.display = "none";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      uploadingAttachment = true;
-      render();
-      try {
-        const form = new FormData();
-        form.append("file", file);
-        // resolveCustomer on the upload endpoint reads from these form
-        // fields when no JWT is present — matches the existing widget
-        // trusted-email path.
-        if (!config.jwt) {
-          form.append("workspace_slug", config.workspace);
-          form.append("account_user_email", config.userEmail);
-        }
-        const res = await fetch(`${config.apiBase}/api/v1/uploads`, {
-          method: "POST",
-          body: form,
-          headers: { ...authHeaders() },
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          attachmentError = data?.error || `Upload failed (${res.status})`;
-        } else {
-          pendingAttachments.push({
-            id: data.id,
-            filename: data.filename,
-            content_type: data.content_type,
-            size_bytes: data.size_bytes,
-          });
-        }
-      } catch (err) {
-        attachmentError = err instanceof Error ? err.message : "Upload failed";
-      } finally {
-        uploadingAttachment = false;
-        render();
-      }
-    };
+    input.onchange = () => { const file = input.files?.[0]; if (file) void uploadFile(file); };
     input.click();
+  }
+
+  // One frame of the screen, window or tab the customer picks, as a PNG. Only
+  // ever on their click, and the browser asks what to share every time. The
+  // widget steps out of the frame so it doesn't cover what they're showing.
+  async function captureScreenshot() {
+    if (uploadingAttachment) return;
+    attachmentError = null;
+    let stream: MediaStream | undefined;
+    let shot: Blob | null = null;
+    try {
+      // Offer this tab first where the browser can (Chrome); others ignore it.
+      const opts = { video: true, preferCurrentTab: true, selfBrowserSurface: "include" };
+      stream = await navigator.mediaDevices.getDisplayMedia(opts);
+      const video = document.createElement("video");
+      video.muted = true;
+      video.srcObject = stream;
+      await video.play();
+      host.style.opacity = "0";
+      await new Promise(r => setTimeout(r, 300)); // a few frames for the capture to catch up
+      // Capped at 2560px a side so a 5K screen stays under the upload limit.
+      const scale = Math.min(1, 2560 / Math.max(video.videoWidth, video.videoHeight, 1));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
+      canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+      shot = await new Promise<Blob | null>(r => canvas.toBlob(r, "image/png"));
+      if (!shot) throw new Error("no frame");
+    } catch (err) {
+      // Closing the picker isn't a failure worth a message.
+      if ((err as Error)?.name !== "NotAllowedError") attachmentError = t.errCapture;
+    } finally {
+      stream?.getTracks().forEach(t => t.stop());
+      host.style.opacity = "";
+    }
+    if (shot) await uploadFile(new File([shot], "screenshot.png", { type: "image/png" }));
+    else render();
   }
 
   function removePendingAttachment(id: string) {
@@ -1065,51 +1455,65 @@ function init(config: Config) {
   }
 
   function humanBytes(b: number): string {
-    if (b < 1024) return `${b} B`;
-    if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
-    return `${(b / 1024 / 1024).toFixed(1)} MB`;
+    const [B, KB, MB] = t.sizeUnits;
+    const n = (v: number, digits: number) => v.toLocaleString(lc.locale, { maximumFractionDigits: digits });
+    return b < 1024 ? `${n(b, 0)} ${B}` : b < 1048576 ? `${n(b / 1024, 0)} ${KB}` : `${n(b / 1048576, 1)} ${MB}`;
+  }
+
+  // "3 days ago", with the full date and time on hover.
+  function timeHtml(iso: string, cls: string): string {
+    return `<time class="${cls}" datetime="${escapeHtml(iso)}" title="${escapeHtml(when.exact(iso))}">${escapeHtml(when.ago(iso))}</time>`;
   }
 
   // ── render ─────────────────────────────────────────────
   function render() {
+    const opening = open && !panel.classList.contains("open");
     panel.classList.toggle("open", open);
     panel.classList.toggle("expanded", open && expanded);
     scrim.classList.toggle("show", open && expanded);
+    // Closed means gone for keyboards and screen readers too, not just see-through.
+    panel.inert = !open;
+    if (open) panel.removeAttribute("aria-hidden");
+    else panel.setAttribute("aria-hidden", "true");
+    launcher.setAttribute("aria-expanded", String(open));
 
-    // Loop news on the launcher: vendor replies the customer hasn't seen
-    // (reply_count grew since they last opened that thread) plus customer-
-    // meaningful status moves (planned/progress/shipped/declined) since they
-    // last saw the item. News = the ember dot + the hover flag's event text.
-    const seen = getSeen();
-    const statusSeen = getStatusSeen();
-    const replyNews = (it: ItemSummary) => it.reply_count > (seen[it.short_id] ?? 0);
-    const statusNews = (it: ItemSummary) => NEWS_STATUSES.has(it.status) && statusSeen[it.short_id] !== it.status;
-    const newsItems = (items ?? []).filter(it => replyNews(it) || statusNews(it));
-    notifyUnread(newsItems.length);
-    const hasNews = newsItems.length > 0 && !open;
-    launcher.dataset.state = hasNews ? "news" : "rest";
-    newsDotEl.hidden = !hasNews;
-    if (hasNews) {
-      // Phrase the most recent event: "Maya replied" / "Shipped: Dark mode".
+    // Loop news on the launcher: vendor replies the customer hasn't opened
+    // plus customer-meaningful status moves (planned/progress/shipped/
+    // declined) since they last saw the item. News = the ember dot + the
+    // hover flag's event text.
+    const newsItems = (items ?? []).filter(it => { const nw = newsOf(it); return nw.reply || nw.status; });
+    const n = newsItems.length;
+    notifyUnread(n);
+    // Phrase the most recent event: "Maya replied" / "Shipped: Dark mode"
+    // (the flag's CSS trims a long title; the spoken text keeps it whole).
+    let phrase = "";
+    if (n) {
       const eventAt = (it: ItemSummary) => new Date(it.last_event?.at ?? it.updated_at).getTime();
       const top = newsItems.reduce((a, b) => (eventAt(b) > eventAt(a) ? b : a));
-      let phrase: string;
-      if (replyNews(top) && top.last_event?.kind === "reply") {
-        phrase = top.last_event.author_name ? `${top.last_event.author_name} replied` : "New reply";
-      } else if (statusNews(top)) {
-        const t = top.title.length > 24 ? `${top.title.slice(0, 24).replace(/\s+$/, "")}…` : top.title;
-        phrase = `${STATUS_LABEL[top.status]}: ${t}`;
-      } else {
-        phrase = "New reply";
-      }
-      flagTextEl.textContent = phrase;
-      flagCountEl.textContent = newsItems.length > 1 ? `· ${newsItems.length}` : "";
-    } else {
-      flagTextEl.textContent = "Share feedback";
-      flagCountEl.textContent = "";
+      phrase = newsPhrase(top, newsOf(top));
     }
+    // News that arrived since the last look is read out; what was already
+    // waiting at load is in the launcher's name instead.
+    if (items && prevNews >= 0 && n > prevNews) say(n > 1 ? `${phrase}. ${t.updates(n)}.` : `${phrase}.`);
+    prevNews = items ? n : -1;
+    launcher.setAttribute("aria-label", launcherLabel(n));
+    const hasNews = n > 0 && !open;
+    launcher.dataset.state = hasNews ? "news" : "rest";
+    newsDotEl.hidden = !hasNews;
+    flagTextEl.textContent = hasNews ? phrase : t.shareFeedback;
+    flagCountEl.textContent = hasNews && n > 1 ? `· ${n}` : "";
 
     if (!open) return;
+    if (opening) lastSaid = ""; // reopened: say what's on screen again
+
+    // The rebuild below replaces every control. Note where focus was, to put
+    // it back on the same control (and caret) after. Focus the customer put on
+    // the host page stays there, except when the panel is just opening.
+    const prev = shadow.activeElement as HTMLInputElement | null;
+    const inPanel = !!prev && panel.contains(prev);
+    const key = inPanel ? controlKey(prev) : "";
+    const caret = [prev?.selectionStart ?? 0, prev?.selectionEnd ?? 0] as const;
+    const lost = !document.activeElement || document.activeElement === document.body;
 
     if (view.kind === "list") renderList();
     else if (view.kind === "admin") renderAdmin();
@@ -1118,55 +1522,131 @@ function init(config: Config) {
     else if (view.kind === "compose") renderCompose(view);
     else if (view.kind === "thread") renderThread(view);
     else if (view.kind === "confirm") renderConfirm(view);
+
+    // Errors and confirmations (marked data-live) are announced once, when they appear.
+    // Each part ends in a stop, so a heading and its line read as two sentences.
+    const said = Array.from(panel.querySelectorAll("[data-live]"), el => (el.textContent ?? "").trim())
+      .filter(Boolean).map(s => /[.!?…]$/.test(s) ? s : `${s}.`).join(" ");
+    if (said !== lastSaid) { lastSaid = said; if (said) say(said); }
+
+    const want = moveFocus;
+    moveFocus = false;
+    if (want ? opening || inPanel || lost : inPanel) {
+      const same = want || !key ? undefined
+        : Array.from(panel.querySelectorAll<HTMLInputElement>("[data-act]")).find(el => controlKey(el) === key);
+      if (same && !same.disabled) {
+        same.focus();
+        try { same.setSelectionRange(caret[0], caret[1]); } catch { /* not a text field */ }
+      } else {
+        focusView(typeof want === "string" ? want : undefined);
+      }
+    }
   }
 
-  function tabStripHtml(active: "feedback" | "roadmap" | "admin"): string {
-    const showRoadmap = !!me?.has_roadmap;
-    const showAdmin = !!me?.is_account_admin;
+  // The view's first sensible control: a named one, else the text box where
+  // typing is the point (the reply box only off touch screens), else the
+  // selected tab or first button, so focus never falls out of the dialog.
+  function focusView(sel?: string) {
+    const q = (s: string) => panel.querySelector<HTMLElement>(s);
+    const el = (sel && q(sel))
+      || (view.kind === "compose" && q('[data-act="title"]'))
+      || (view.kind === "thread" && q(coarse ? '[data-act="back"]' : '[data-act="reply"]'))
+      || q('.body button:not(:disabled):not([tabindex="-1"]), .foot button:not(:disabled)')
+      || q('[data-act="close"]');
+    el?.focus();
+  }
+
+  // Tab and Shift+Tab cycle inside the open panel (it's aria-modal). Focus
+  // the customer clicked out onto the host page is theirs; only focus in the
+  // panel, or dropped to <body>, is held.
+  function trapTab(e: KeyboardEvent) {
+    const a = shadow.activeElement as HTMLElement | null;
+    if (a ? !panel.contains(a) : document.activeElement !== document.body) return;
+    const all = Array.from(panel.querySelectorAll<HTMLButtonElement>("a[href], button, input, textarea, [tabindex]"))
+      .filter(el => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length > 0);
+    const i = a ? all.indexOf(a as HTMLButtonElement) : -1;
+    const to = e.shiftKey ? (i <= 0 ? all[all.length - 1] : null) : (i < 0 || i === all.length - 1 ? all[0] : null);
+    if (to) { e.preventDefault(); to.focus(); }
+  }
+
+  // The tab strip and its panel. Arrow keys move between tabs (panel keydown);
+  // only the selected tab is in the Tab order.
+  function tabbed(active: "feedback" | "roadmap" | "admin", inner: string): string {
+    const tabs: Array<[string, string]> = [["feedback", t.yourFeedback]];
+    if (me?.has_roadmap) tabs.push(["roadmap", t.roadmap]);
+    if (me?.is_account_admin) tabs.push(["admin", t.admin]);
     // No tabs when there's nothing beyond the feedback list.
-    if (!showRoadmap && !showAdmin) return "";
-    let tabs = `<button class="tab" data-act="tab" data-tab="feedback" aria-selected="${active === "feedback"}">Your feedback</button>`;
-    if (showRoadmap) tabs += `<button class="tab" data-act="tab" data-tab="roadmap" aria-selected="${active === "roadmap"}">Roadmap</button>`;
-    if (showAdmin) tabs += `<button class="tab" data-act="tab" data-tab="admin" aria-selected="${active === "admin"}">Admin</button>`;
-    return `<div class="tabs">${tabs}</div>`;
+    if (tabs.length === 1) return inner;
+    return `<div class="tabs" role="tablist">${tabs.map(([k, label]) =>
+        `<button class="tab" role="tab" id="crumb-tab-${k}" aria-controls="crumb-tabpanel" aria-selected="${k === active}" tabindex="${k === active ? 0 : -1}" data-act="tab" data-tab="${k}">${label}</button>`).join("")}</div>
+      <div class="tabpanel" role="tabpanel" id="crumb-tabpanel" aria-labelledby="crumb-tab-${active}">${inner}</div>`;
   }
 
   function header(title: string, sub?: string, withBack = false, expandable = false): string {
     return `
       <div class="head">
         ${withBack
-          ? `<button class="back" aria-label="Back" data-act="back">${ICONS.back}</button>`
+          ? `<button class="back" aria-label="${t.back}" data-act="back">${ICONS.back}</button>`
           : `<span class="brand-mark">${LOOP_HEAD}</span>`}
-        <div class="title">${escapeHtml(title)}${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ""}</div>
-        ${(!withBack && me?.email_enabled) ? `<button class="close" aria-label="Notification settings" data-act="open-settings">${ICONS.gear}</button>` : ""}
-        ${expandable ? `<button class="close" aria-label="${expanded ? "Collapse" : "Expand"}" data-act="toggle-expand">${expanded ? ICONS.collapse : ICONS.expand}</button>` : ""}
-        <button class="close" aria-label="Close" data-act="close">${ICONS.x}</button>
+        <div class="title"><span id="crumb-title">${escapeHtml(title)}</span>${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ""}</div>
+        ${(!withBack && me?.email_enabled) ? `<button class="close" aria-label="${t.notifSettings}" data-act="open-settings">${ICONS.gear}</button>` : ""}
+        ${expandable ? `<button class="close" aria-label="${expanded ? t.collapse : t.expand}" data-act="toggle-expand">${expanded ? ICONS.collapse : ICONS.expand}</button>` : ""}
+        <button class="close" aria-label="${t.close}" data-act="close">${ICONS.x}</button>
       </div>`;
   }
 
   function statusPillHtml(status: Status): string {
-    return `<span class="status-pill"><span class="status-dot ${status}"></span>${STATUS_LABEL[status]}</span>`;
+    return `<span class="status-pill"><span class="status-dot ${status}"></span>${t.statuses[status]}</span>`;
+  }
+
+  // Header subtitle: /me once it answers, the embed's data-* attributes until
+  // then (identify() clears those, so a switch never shows the last customer).
+  function accountName(): string { return me?.account.name || config.accountName; }
+
+  // A load that failed: plain copy and a way forward. Retrying can't fix a
+  // request that isn't theirs (a forwarded link) or that's gone, so those
+  // offer the customer's own list instead.
+  function errorStateHtml(s: { message: string; code?: string }): string {
+    const dead = s.code === "not_your_item" || s.code === "item_not_found";
+    return `
+      <div class="empty">
+        <span class="icon warn">${ICONS.alert}</span>
+        <p data-live>${escapeHtml(s.message)}</p>
+        ${dead
+          ? `<button class="outline" data-act="see-list">${t.seeYourFeedback}</button>`
+          : `<button class="outline" data-act="retry">${t.tryAgain}</button>`}
+      </div>`;
+  }
+
+  // The inline version, when older data is still worth showing below it.
+  function errBannerHtml(message: string): string {
+    return `<div class="err"><span data-live>${escapeHtml(message)}</span> <button class="err-retry" data-act="retry">${t.tryAgain}</button></div>`;
   }
 
   function feedbackRowHtml(it: ItemSummary): string {
+    // A dot for news, said first: "New reply. FB-12, In progress…"
+    const nw = newsOf(it);
+    const news = nw.reply ? t.newReply : nw.status ? t.statusUpdate : "";
     return `
       <button class="item-row" data-act="open-thread" data-short="${escapeHtml(it.short_id)}">
         <div class="top">
+          ${news ? `<span class="news-dot" aria-hidden="true"></span><span class="sr-only">${news}.</span>` : ""}
           <span class="short">${escapeHtml(it.short_id)}</span>
           ${statusPillHtml(it.status)}
-          <span class="age">${ageFrom(it.updated_at)}</span>
+          ${timeHtml(it.updated_at, "age")}
         </div>
         <div class="title">${escapeHtml(it.title)}</div>
-        ${it.reply_count > 1 ? `<div class="bottom">${it.reply_count - 1} ${it.reply_count - 1 === 1 ? "reply" : "replies"}</div>` : ""}
+        ${it.reply_count > 1 ? `<div class="bottom">${t.replies(it.reply_count - 1)}</div>` : ""}
       </button>`;
   }
 
-  function roadmapResultHtml(e: RoadmapEntry): string {
+  // A public roadmap initiative, on the Roadmap tab and in search results.
+  function roadmapCardHtml(e: RoadmapEntry): string {
     return `
       <div class="rm-card">
         <div class="rm-card-top">
           <span class="rm-name">${escapeHtml(e.name)}</span>
-          <button class="rm-follow${e.following ? " on" : ""}" data-act="follow" data-id="${escapeHtml(e.id)}" data-following="${e.following ? "1" : "0"}">${e.following ? "Following" : "Follow"}</button>
+          <button class="rm-follow${e.following ? " on" : ""}" data-act="follow" data-id="${escapeHtml(e.id)}" data-following="${e.following ? "1" : "0"}">${e.following ? t.following : t.follow}</button>
         </div>
         ${e.description ? `<p class="rm-desc">${escapeHtml(e.description)}</p>` : ""}
       </div>`;
@@ -1179,10 +1659,7 @@ function init(config: Config) {
   function buildResultsHtml(): string {
     const list = items ?? [];
     const q = searchQuery.trim().toLowerCase();
-    if (!q) {
-      return `<div class="items-list">${list.map(feedbackRowHtml).join("")}</div>`
-        + (listState.kind === "error" ? `<div class="err">${escapeHtml(listState.message)}</div>` : "");
-    }
+    if (!q) return `<div class="items-list">${list.map(feedbackRowHtml).join("")}</div>`;
 
     const matched = list
       .map(it => ({ it, s: scoreItem(q, it) }))
@@ -1198,15 +1675,16 @@ function init(config: Config) {
       .sort((a, b) => b.s - a.s);
 
     if (matched.length === 0 && rmMatched.length === 0) {
-      return `<div class="empty"><p>No matches for “${escapeHtml(searchQuery.trim())}”.</p></div>`;
+      return `<div class="empty"><p>${t.noMatches(escapeHtml(searchQuery.trim()))}</p></div>`;
     }
 
     let html = "";
     if (matched.length) html += `<div class="items-list">${matched.map(x => feedbackRowHtml(x.it)).join("")}</div>`;
     if (rmMatched.length) {
       html += `<div class="results-section">
-        <div class="results-head">From the roadmap</div>
-        <div class="rm-results">${rmMatched.map(x => roadmapResultHtml(x.e)).join("")}</div>
+        <div class="results-head">${t.fromRoadmap}</div>
+        ${followMsg ? `<div class="err" data-live>${escapeHtml(followMsg)}</div>` : ""}
+        <div class="rm-results">${rmMatched.map(x => roadmapCardHtml(x.e)).join("")}</div>
       </div>`;
     }
     return html;
@@ -1214,78 +1692,80 @@ function init(config: Config) {
 
   function renderList() {
     const isLoading = listState.kind === "loading" && items === null;
-    // The customer is looking at every status pill right now — that clears
-    // status news (reply news still clears per-thread, on open).
-    markAllStatusesSeen();
-    let bodyHtml = tabStripHtml("feedback");
+    let bodyHtml = "";
 
     if (isLoading) {
       bodyHtml += `<div class="skeleton">${`<div class="skel row"></div>`.repeat(4)}</div>`;
+    } else if (listState.kind === "error" && !items) {
+      // Never loaded: a failure, not an empty inbox.
+      bodyHtml += errorStateHtml(listState);
     } else if (!items || items.length === 0) {
+      if (listState.kind === "error") bodyHtml += errBannerHtml(listState.message);
       bodyHtml += `
         <div class="empty">
           <span class="icon">${ICONS.chat}</span>
-          <h2>Got something to share?</h2>
-          <p>Drop us a crumb: bug, idea, question. We read every one.</p>
+          <h2>${t.emptyTitle}</h2>
+          <p>${t.emptyBody}</p>
           <button class="primary" data-act="new" style="margin-top:8px">
-            ${ICONS.plus}<span>Share feedback</span>
+            ${ICONS.plus}<span>${t.shareFeedback}</span>
           </button>
         </div>`;
     } else {
+      if (listState.kind === "error") bodyHtml += errBannerHtml(listState.message);
       bodyHtml += `
-        <input class="field search-input" data-act="search" type="text" placeholder="Search feedback…" aria-label="Search feedback" />
+        <input class="field search-input" data-act="search" type="text" placeholder="${t.searchFeedback}…" aria-label="${t.searchFeedback}" />
         <div class="results" data-results>${buildResultsHtml()}</div>`;
     }
 
     panel.innerHTML = `
-      ${header("Your feedback", config.accountName)}
-      <div class="body">${bodyHtml}</div>
+      ${header(t.yourFeedback, accountName())}
+      <div class="body">${tabbed("feedback", bodyHtml)}</div>
       <div class="foot">
         <div class="row">
-          <span class="meta">via Crumb</span>
-          <button class="primary" data-act="new">${ICONS.plus}<span>Share feedback</span></button>
+          <span class="meta">${t.viaCrumb}</span>
+          <button class="primary" data-act="new">${ICONS.plus}<span>${t.shareFeedback}</span></button>
         </div>
       </div>`;
 
-    // A full re-render (roadmap arrival, follow toggle) rebuilds the input.
-    // Set its value via property (no HTML-escaping pitfalls) and, when a search
-    // is active, restore focus + caret-to-end so it stays usable. Keystroke
-    // updates take the partial path in the input handler and never reach here.
+    // A full re-render (roadmap arrival, follow toggle) rebuilds the input:
+    // set its value via property (no HTML-escaping pitfalls); render() puts
+    // focus and caret back if it had them. Keystroke updates take the partial
+    // path in the input handler and never reach here.
     const searchEl = panel.querySelector<HTMLInputElement>('input[data-act="search"]');
-    if (searchEl) {
-      searchEl.value = searchQuery;
-      if (searchQuery && shadow.activeElement !== searchEl) {
-        searchEl.focus();
-        const n = searchEl.value.length;
-        try { searchEl.setSelectionRange(n, n); } catch { /* ignore */ }
-      }
-    }
+    if (searchEl) searchEl.value = searchQuery;
   }
 
   function renderAdmin() {
     if (!me) {
       panel.innerHTML = `
-        ${header(config.accountName)}
-        ${tabStripHtml("admin")}
-        <div class="body"><div class="skeleton"><div class="skel row"></div><div class="skel row"></div></div></div>`;
+        ${header(accountName())}
+        <div class="body">${meState.kind === "error"
+          ? errorStateHtml(meState)
+          : `<div class="skeleton"><div class="skel row"></div><div class="skel row"></div></div>`}</div>`;
       return;
     }
 
     const isAdmin = me.is_account_admin;
+    // A removal asks once, in place: Cancel (focused first) or Remove.
+    const askHtml = (id: string, what: string, act: string) => `
+      <div class="member-actions" role="group" aria-label="${escapeHtml(t.removeAsk(what))}">
+        <button class="member-role" data-act="ask-cancel" data-id="${escapeHtml(id)}">${t.cancel}</button>
+        <button class="member-role danger" data-act="${act}" data-id="${escapeHtml(id)}">${t.remove}</button>
+      </div>`;
     const membersHtml = me.members.length === 0
-      ? `<p class="text-sm muted" style="margin:0">No teammates yet.</p>`
+      ? `<p class="text-sm muted" style="margin:0">${t.noTeammates}</p>`
       : `<div class="members">${me.members.map(m => {
           const self = m.id === me!.user.id;
           const controls = (isAdmin && !self)
-            ? `<div class="member-actions">
-                 <button class="member-role" data-act="member-role" data-id="${escapeHtml(m.id)}" data-next="${m.role === "admin" ? "member" : "admin"}" title="Change role">${m.role === "admin" ? "Admin" : "Member"}</button>
-                 <button class="member-remove" data-act="member-remove" data-id="${escapeHtml(m.id)}" aria-label="Remove ${escapeHtml(m.name)}">${ICONS.trash}</button>
+            ? askRemove === m.id ? askHtml(m.id, m.name, "member-remove") : `<div class="member-actions">
+                 <button class="member-role" data-act="member-role" data-id="${escapeHtml(m.id)}" data-next="${m.role === "admin" ? "member" : "admin"}" title="${t.changeRole}">${m.role === "admin" ? t.roleAdmin : t.roleMember}</button>
+                 <button class="member-remove" data-act="remove-ask" data-id="${escapeHtml(m.id)}" aria-label="${escapeHtml(t.removeName(m.name))}">${ICONS.trash}</button>
                </div>`
-            : (m.role === "admin" ? `<span class="role-pill">admin</span>` : `<span class="member-count">${m.item_count}</span>`);
+            : (m.role === "admin" ? `<span class="role-pill">${t.roleAdmin}</span>` : `<span class="member-count">${m.item_count}</span>`);
           return `<div class="member-row">
             <span class="member-avatar">${escapeHtml(m.initials)}</span>
             <div class="member-meta">
-              <span class="member-name">${escapeHtml(m.name)}${self ? ` <span class="member-you">you</span>` : ""}</span>
+              <span class="member-name">${escapeHtml(m.name)}${self ? ` <span class="member-you">${t.you}</span>` : ""}</span>
               <span class="member-email">${escapeHtml(m.email)}</span>
             </div>
             ${controls}
@@ -1293,150 +1773,176 @@ function init(config: Config) {
         }).join("")}
         </div>`;
 
-    panel.innerHTML = `
-      ${header(me.account.name, `${me.account.member_count} on ${me.account.name}`)}
-      <div class="body">
-        ${tabStripHtml("admin")}
+    // A connected channel shows masked, with Remove; one that isn't takes a URL.
+    const example = { slack: "https://hooks.slack.com/…", teams: "https://…webhook.office.com/…" };
+    const channelRow = (p: "slack" | "teams", c: { connected: boolean; masked_url: string | null }) => c.connected ? `
+      <div class="channel-row">
+        <span class="channel-name">${CHANNEL_LABEL[p]}</span>
+        <span class="channel-url">${escapeHtml(c.masked_url ?? t.connected)}</span>
+        ${askRemove === p ? askHtml(p, t.channel(CHANNEL_LABEL[p]), "channel-remove")
+          : `<button class="member-role" data-act="remove-ask" data-id="${p}" aria-label="${t.removeName(t.channel(CHANNEL_LABEL[p]))}">${t.remove}</button>`}
+      </div>`
+      : `<input class="field" data-act="${p}-webhook" aria-label="${t.webhookUrl(CHANNEL_LABEL[p])}" placeholder="${t.webhookHint(CHANNEL_LABEL[p], example[p])}" />`;
+    let channelsHtml = channelsState.kind === "error" ? errBannerHtml(channelsState.message) : "";
+    if (channels) {
+      channelsHtml += channelRow("slack", channels.slack) + channelRow("teams", channels.teams);
+      if (!channels.slack.connected || !channels.teams.connected) channelsHtml += `<button class="primary" data-act="save-channels">${t.saveChannel}</button>`;
+    } else if (channelsState.kind !== "error") {
+      channelsHtml += `<div class="skel row"></div>`;
+    }
 
+    const count = t.memberCount(me.account.member_count, me.account.name);
+    panel.innerHTML = `
+      ${header(me.account.name, count)}
+      <div class="body">${tabbed("admin", `
         <section class="admin-card">
           <div class="admin-card-head">
-            <span class="admin-card-title">Members</span>
-            <span class="admin-card-sub">${me.account.member_count} on ${escapeHtml(me.account.name)}</span>
+            <span class="admin-card-title">${t.members}</span>
+            <span class="admin-card-sub">${escapeHtml(count)}</span>
           </div>
-          ${memberMsg ? `<div class="err" style="margin-bottom:10px">${escapeHtml(memberMsg)}</div>` : ""}
+          ${memberMsg ? `<div class="err" data-live style="margin-bottom:10px">${escapeHtml(memberMsg)}</div>` : ""}
           ${membersHtml}
-          ${isAdmin ? `<p class="set-sub" style="margin:12px 2px 0">Teammates appear here automatically when they open the widget. Change a role or remove someone above.</p>` : ""}
+          ${isAdmin ? `<p class="set-sub" style="margin:12px 2px 0">${t.membersHelp}</p>` : ""}
         </section>
-        ${isAdmin ? `
+        ${isAdmin && config.jwt ? `
         <section class="admin-card">
           <div class="admin-card-head">
-            <span class="admin-card-title">Notify a channel</span>
+            <span class="admin-card-title">${t.notifyChannel}</span>
             <span class="admin-card-sub">Slack / Teams</span>
           </div>
-          <p class="set-sub" style="margin:0 2px 8px">Get replies, status changes, and roadmap updates in your own Slack or Teams channel. Paste a channel incoming-webhook URL.</p>
-          ${channelMsg ? `<div class="set-sub" style="margin:0 2px 8px">${escapeHtml(channelMsg)}</div>` : ""}
-          <input class="field" data-act="slack-webhook" placeholder="Slack webhook (https://hooks.slack.com/…)" style="margin-bottom:8px" />
-          <input class="field" data-act="teams-webhook" placeholder="Teams webhook (https://…webhook.office.com/…)" style="margin-bottom:8px" />
-          <button class="primary" data-act="save-channels">Save channel</button>
-        </section>` : ""}
+          <p class="set-sub" style="margin:0 2px">${t.channelHelp}</p>
+          ${channelMsg ? `<div class="set-sub" data-live style="margin:0 2px">${escapeHtml(channelMsg)}</div>` : ""}
+          ${channelsHtml}
+        </section>` : ""}`)}
       </div>`;
   }
 
   function renderSettings() {
     const n: NotifPrefs = me?.notifications ?? { replies: true, status: true, roadmap: true, unsubscribed_all: false };
     const paused = n.unsubscribed_all;
-    const toggleRow = (key: "replies" | "status" | "roadmap", label: string, sub: string) => {
-      const on = n[key] && !paused;
-      return `<div class="set-row${paused ? " disabled" : ""}">
-        <div class="set-meta"><span class="set-label">${label}</span><span class="set-sub">${sub}</span></div>
-        <button class="sw ${on ? "on" : ""}" role="switch" aria-checked="${on}" data-act="notif-toggle" data-key="${key}"${paused ? " disabled" : ""}></button>
+    // Each switch is named by its label and described by its hint.
+    const row = (id: string, label: string, sub: string, on: boolean, act: string, off = false) => `
+      <div class="set-row${off ? " disabled" : ""}">
+        <div class="set-meta"><span class="set-label" id="crumb-${id}">${label}</span><span class="set-sub" id="crumb-${id}-sub">${sub}</span></div>
+        <button class="sw${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-labelledby="crumb-${id}" aria-describedby="crumb-${id}-sub" ${act}${off ? " disabled" : ""}></button>
       </div>`;
-    };
+    const toggleRow = (key: "replies" | "status" | "roadmap", label: string, sub: string) =>
+      row(key, label, sub, n[key] && !paused, `data-act="notif-toggle" data-key="${key}"`, paused);
     panel.innerHTML = `
-      ${header("Notifications", config.accountName, true)}
+      ${header(t.notifications, accountName(), true)}
       <div class="body">
-        <p class="lede" style="margin:0 0 14px">Choose which emails ${escapeHtml(me?.workspace.name ?? "we")} sends you about your feedback.</p>
-        ${toggleRow("replies", "Replies", "When the team replies on your feedback")}
-        ${toggleRow("status", "Status changes", "When your feedback moves (planned, shipped…)")}
-        ${toggleRow("roadmap", "Roadmap updates", "When a roadmap item you follow changes")}
+        <p class="lede" style="margin:0 0 14px">${t.notifLede(escapeHtml(me?.workspace.name ?? ""))}</p>
+        ${toggleRow("replies", t.notifReplies, t.notifRepliesHint)}
+        ${toggleRow("status", t.notifStatus, t.notifStatusHint)}
+        ${toggleRow("roadmap", t.notifRoadmap, t.notifRoadmapHint)}
         <div class="set-divider"></div>
-        <div class="set-row">
-          <div class="set-meta"><span class="set-label">Pause all email</span><span class="set-sub">Mute every notification above</span></div>
-          <button class="sw ${paused ? "on" : ""}" role="switch" aria-checked="${paused}" data-act="notif-pause"></button>
-        </div>
+        ${row("pause", t.pauseAll, t.pauseAllHint, paused, 'data-act="notif-pause"')}
       </div>`;
   }
 
   function renderRoadmap() {
     const isLoading = roadmapState.kind === "loading" && roadmap === null;
-    let bodyHtml = tabStripHtml("roadmap");
+    let bodyHtml = "";
 
     if (isLoading) {
       bodyHtml += `<div class="skeleton"><div class="skel row"></div><div class="skel row"></div></div>`;
-    } else if (roadmapState.kind === "error") {
-      bodyHtml += `<div class="err">${escapeHtml(roadmapState.message)}</div>`;
+    } else if (roadmapState.kind === "error" && !roadmap) {
+      bodyHtml += errorStateHtml(roadmapState);
     } else if (roadmap) {
-      const cols = [["now", "Now"], ["next", "Next"], ["later", "Later"]] as const;
-      const total = cols.reduce((n, [k]) => n + roadmap!.columns[k].length, 0);
+      if (followMsg) bodyHtml += `<div class="err" data-live>${escapeHtml(followMsg)}</div>`;
+      const cols = ["now", "next", "later"] as const;
+      const total = cols.reduce((n, k) => n + roadmap!.columns[k].length, 0);
       if (total === 0) {
         bodyHtml += `
           <div class="empty">
             <span class="icon">${ICONS.idea}</span>
-            <h2>Nothing here yet</h2>
-            <p>This team hasn't shared a public roadmap yet. Check back soon.</p>
+            <h2>${t.roadmapEmpty}</h2>
+            <p>${t.roadmapEmptyBody}</p>
           </div>`;
       } else {
-        bodyHtml += `<div class="rm-board">` + cols.map(([key, label]) => {
+        bodyHtml += `<div class="rm-board">` + cols.map(key => {
           const entries = roadmap!.columns[key];
           if (entries.length === 0) return "";
           return `
             <div class="rm-col">
-              <div class="rm-col-head">${label}</div>
-              ${entries.map(e => `
-                <div class="rm-card">
-                  <div class="rm-card-top">
-                    <span class="rm-name">${escapeHtml(e.name)}</span>
-                    <button class="rm-follow${e.following ? " on" : ""}" data-act="follow" data-id="${escapeHtml(e.id)}" data-following="${e.following ? "1" : "0"}">${e.following ? "Following" : "Follow"}</button>
-                  </div>
-                  ${e.description ? `<p class="rm-desc">${escapeHtml(e.description)}</p>` : ""}
-                </div>`).join("")}
+              <div class="rm-col-head">${t.columns[key]}</div>
+              ${entries.map(roadmapCardHtml).join("")}
             </div>`;
         }).join("") + `</div>`;
       }
     }
 
     panel.innerHTML = `
-      ${header("Roadmap", config.accountName)}
-      <div class="body">${bodyHtml}</div>`;
+      ${header(t.roadmap, accountName())}
+      <div class="body">${tabbed("roadmap", bodyHtml)}</div>`;
+  }
+
+  // Files waiting to go out with the next send, and why the last one didn't.
+  function pendingHtml(): string {
+    return `${attachmentError ? `<div class="err" data-live>${escapeHtml(attachmentError)}</div>` : ""}
+      ${pendingAttachments.length ? `<div class="pending-attachments">${pendingAttachments.map(a => `
+        <span class="pending-attachment">
+          ${ICONS.attach}
+          <span class="filename">${escapeHtml(a.filename)}</span>
+          <span class="size">${humanBytes(a.size_bytes)}</span>
+          <button data-act="remove-attachment" data-id="${escapeHtml(a.id)}" aria-label="${escapeHtml(t.removeName(a.filename))}">${ICONS.x}</button>
+        </span>`).join("")}</div>` : ""}`;
   }
 
   function renderCompose(v: Extract<View, { kind: "compose" }>) {
     const submitting = submitState.kind === "loading";
     const err = submitState.kind === "error" ? submitState.message : "";
+    // Who and which account the request goes in as: /me on JWT installs.
+    const who = me?.user.name || config.userName;
+    // aria-disabled, not disabled, so focus stays put while a file uploads.
+    const busy = uploadingAttachment ? ` aria-disabled="true"` : "";
     panel.innerHTML = `
-      ${header("Share feedback", undefined, true)}
+      ${header(t.shareFeedback, undefined, true)}
       <div class="body">
-        <p class="lede">Bug, idea, question. We read every one.</p>
-
         <div>
-          <span class="field-label">Type</span>
-          <div class="types">
-            ${TYPES.map(t => `
-              <button class="type-btn" data-act="type" data-type="${t.key}" aria-pressed="${v.type === t.key}">
-                ${t.icon}
-                <span>${t.label}</span>
+          <span class="field-label" id="crumb-type-label">${t.type}</span>
+          <div class="types" role="group" aria-labelledby="crumb-type-label">
+            ${TYPES.map(k => `
+              <button class="type-btn" data-act="type" data-type="${k}" aria-pressed="${v.type === k}">
+                ${ICONS[k]}
+                <span>${t.types[k]}</span>
               </button>`).join("")}
           </div>
         </div>
 
-        <div>
-          <span class="field-label">Title</span>
-          <input class="field" data-act="title" placeholder="One line: what's the gist?" />
-        </div>
+        <label>
+          <span class="field-label">${t.title}</span>
+          <input class="field" data-act="title" maxlength="${MAX_LEN.title}" placeholder="${t.titleHint}" />
+        </label>
 
-        <div>
-          <span class="field-label">Details (optional)</span>
-          <textarea class="field" data-act="body" placeholder="Anything else we should know?"></textarea>
+        <label>
+          <span class="field-label">${t.details}</span>
+          <textarea class="field" data-act="body" maxlength="${MAX_LEN.body}" placeholder="${t.detailsHint}"></textarea>
+        </label>
+
+        <div class="attach-row">
+          <button class="outline" data-act="pick-attachment"${busy}>${ICONS.attach}<span>${t.attachFile}</span></button>
+          ${canCapture ? `<button class="outline" data-act="capture"${busy}>${ICONS.screen}<span>${t.capture}</span></button>` : ""}
+          ${uploadingAttachment ? `<span class="attach-note">${t.uploading}</span>` : ""}
         </div>
+        ${pendingHtml()}
 
         ${me?.workspace.session_record_enabled ? `
         <label data-act="record-consent-row" style="display:flex;gap:8px;align-items:flex-start;margin-top:2px;cursor:pointer">
           <input type="checkbox" data-act="record-consent" ${hasRecordConsent() ? "checked" : ""} style="margin-top:2px;flex:none" />
           <span style="display:flex;flex-direction:column;gap:2px">
-            <span style="font-size:13px;font-weight:600">Record my session to help us reproduce this</span>
-            <span style="font-size:11px;opacity:.65;line-height:1.45">${config.recordNetworkBodies
-              ? "Captures this page as you see it, your clicks and scrolling, and the page's network requests including their contents, with secret-looking values such as passwords and tokens removed."
-              : "Captures this page as you see it, your clicks and scrolling, and the address, status and timing of the page's network requests, but not their contents."} Text you type into standard form fields is masked; rich-text editors may be recorded. You can turn this off anytime.</span>
+            <span style="font-size:13px;font-weight:600">${t.recordConsent}</span>
+            <span style="font-size:11px;color:var(--c-ink-2);line-height:1.45">${config.recordNetworkBodies ? t.recordBodies : t.recordNoBodies} ${t.recordMasking}</span>
           </span>
         </label>` : ""}
 
-        ${err ? `<div class="err">${escapeHtml(err)}</div>` : ""}
+        ${err ? `<div class="err" data-live>${escapeHtml(err)}</div>` : ""}
       </div>
       <div class="foot">
         <div class="row">
-          <span class="meta">${escapeHtml(config.userName ? `Posting as ${config.userName} · ${config.accountName}` : config.accountName)}</span>
-          <button class="primary" data-act="submit" ${submitting ? "disabled" : ""}>
-            ${ICONS.send}<span>${submitting ? "Sending…" : "Send"}</span>
+          <span class="meta">${escapeHtml(who ? t.postingAs(who, accountName()) : accountName())}</span>
+          <button class="primary" data-act="submit" ${submitting || uploadingAttachment ? "disabled" : ""}>
+            ${ICONS.send}<span>${submitting ? t.sending : t.send}</span>
           </button>
         </div>
       </div>`;
@@ -1449,15 +1955,14 @@ function init(config: Config) {
   }
 
   function renderThread(v: Extract<View, { kind: "thread" }>) {
-    const isLoading = threadState.kind === "loading" || thread === null || thread.item.short_id !== v.shortId;
     let body = "";
     let footMeta = "";
 
-    if (isLoading) {
+    if (threadState.kind === "error") {
+      body = errorStateHtml(threadState);
+    } else if (threadState.kind === "loading" || thread === null || thread.item.short_id !== v.shortId) {
       body = `<div class="skeleton"><div class="skel row"></div><div class="skel row" style="height:96px"></div><div class="skel row" style="height:64px"></div></div>`;
-    } else if (threadState.kind === "error") {
-      body = `<div class="err">${escapeHtml(threadState.message)}</div>`;
-    } else if (thread) {
+    } else {
       const msgs = thread.messages.map(m => {
         // Signed link: a new tab sends no credentials, so the bare path 403s.
         const atts = (m.attachments ?? []).map(a => `
@@ -1471,7 +1976,7 @@ function init(config: Config) {
             <div class="meta">
               <span class="avatar">${escapeHtml(m.author_initials)}</span>
               <span>${escapeHtml(m.author_name)}</span>
-              <span class="when">${ageFrom(m.created_at)}</span>
+              ${timeHtml(m.created_at, "when")}
             </div>
             ${m.body ? `<p>${escapeHtml(m.body)}</p>` : ""}
             ${atts ? `<div class="attachments">${atts}</div>` : ""}
@@ -1481,14 +1986,14 @@ function init(config: Config) {
       // Status timeline — visible in the expanded side rail, hidden when collapsed.
       const eventsHtml = thread.events.map(e => {
         const isInitial = e.from_status === null;
-        const label = isInitial ? "Submitted" : (STATUS_LABEL[e.to_status as Status] ?? e.to_status);
+        const label = isInitial ? t.submitted : (t.statuses[e.to_status as Status] ?? e.to_status);
         const reasonHtml = e.reason
           ? `<div class="event-reason">${escapeHtml(e.reason)}</div>`
           : "";
         return `<div class="event">
           <span class="event-dot status-dot ${e.to_status}"></span>
           <span class="event-label">${escapeHtml(label)}</span>
-          <span class="event-age">${ageFrom(e.at)}</span>
+          ${timeHtml(e.at, "event-age")}
           ${reasonHtml}
         </div>`;
       }).join("");
@@ -1501,21 +2006,25 @@ function init(config: Config) {
       const closeErr = closeState.kind === "error" ? closeState.message : "";
       const closeHtml = canClose ? `
         <div class="rail-close">
-          ${closeErr ? `<div class="err">${escapeHtml(closeErr)}</div>` : ""}
+          ${closeErr ? `<div class="err" data-live>${escapeHtml(closeErr)}</div>` : ""}
           ${closeConfirm ? `
-            <p class="lede" style="margin:0 0 8px">Close this request? We’ll let the team know you’re all set.</p>
+            <p class="lede" style="margin:0 0 8px">${t.closeAsk}</p>
             <div class="row">
-              <button class="outline" data-act="close-request-cancel" ${closing ? "disabled" : ""}>Cancel</button>
-              <button class="primary" data-act="close-request" ${closing ? "disabled" : ""}>${closing ? "Closing…" : "Close request"}</button>
+              <button class="outline" data-act="close-request-cancel" ${closing ? "disabled" : ""}>${t.cancel}</button>
+              <button class="primary" data-act="close-request" ${closing ? "disabled" : ""}>${closing ? t.closing : t.closeRequest}</button>
             </div>
           ` : `
             <button class="outline rail-close-btn" data-act="close-request-ask" ${closing ? "disabled" : ""}>
-              ${ICONS.check}<span>${closing ? "Closing…" : "Close this request"}</span>
+              ${ICONS.check}<span>${closing ? t.closing : t.closeThis}</span>
             </button>
           `}
         </div>
       ` : "";
 
+      // Where it stands, why and since when, in plain words, without opening
+      // the rail: "Won't ship. Not in v2: the upkeep outweighs the use. 3 days ago"
+      const reason = statusReason(thread.item);
+      const since = thread.item.status_changed_at;
       body = `
         <div class="thread-grid">
           <div class="thread-messages">
@@ -1523,12 +2032,13 @@ function init(config: Config) {
               <span class="short-id">${escapeHtml(thread.item.short_id)}</span>
               ${statusPillHtml(thread.item.status)}
             </div>
-            ${msgs || `<p class="lede">No messages yet.</p>`}
+            ${reason ? `<p class="status-note"><strong>${t.statuses[thread.item.status]}.</strong> ${escapeHtml(reason)}${since ? ` ${timeHtml(since, "event-age")}` : ""}</p>` : ""}
+            ${msgs || `<p class="lede">${t.noMessages}</p>`}
             ${closeHtml}
           </div>
           <aside class="status-rail">
-            <div class="rail-heading">Status</div>
-            ${eventsHtml || `<p class="lede" style="margin:0">No history yet.</p>`}
+            <div class="rail-heading">${t.statusHeading}</div>
+            ${eventsHtml || `<p class="lede" style="margin:0">${t.noHistory}</p>`}
           </aside>
         </div>
       `;
@@ -1542,57 +2052,52 @@ function init(config: Config) {
     // /thread is fetching); last resort is the shortId.
     const listRowTitle = items?.find(it => it.short_id === v.shortId)?.title;
     const headerTitle = thread?.item.title ?? listRowTitle ?? v.shortId;
+    // No reply box under a thread that didn't load (it may not be theirs).
     panel.innerHTML = `
       ${header(headerTitle, footMeta || undefined, true, true)}
       <div class="body">${body}</div>
-      <div class="foot">
-        ${submitErr ? `<div class="err">${escapeHtml(submitErr)}</div>` : ""}
-        ${attachmentError ? `<div class="err">${escapeHtml(attachmentError)}</div>` : ""}
-        ${pendingAttachments.length > 0 ? `
-          <div class="pending-attachments">
-            ${pendingAttachments.map(a => `
-              <span class="pending-attachment">
-                ${ICONS.attach}
-                <span class="filename">${escapeHtml(a.filename)}</span>
-                <span class="size">${humanBytes(a.size_bytes)}</span>
-                <button data-act="remove-attachment" data-id="${escapeHtml(a.id)}" aria-label="Remove">${ICONS.x}</button>
-              </span>`).join("")}
-          </div>
-        ` : ""}
-        <div class="row">
-          <button class="ghost" data-act="pick-attachment" aria-label="Attach file" ${uploadingAttachment ? "disabled" : ""}>
+      ${threadState.kind === "error" ? "" : `<div class="foot">
+        ${submitErr ? `<div class="err" data-live>${escapeHtml(submitErr)}</div>` : ""}
+        ${pendingHtml()}
+        <div class="row reply-row">
+          <button class="ghost" data-act="pick-attachment" aria-label="${t.attachFile}" ${uploadingAttachment ? "disabled" : ""}>
             ${ICONS.attach}
           </button>
-          <input class="field" data-act="reply" placeholder="${uploadingAttachment ? "Uploading…" : "Reply…"}" style="flex:1" />
+          <textarea class="field reply-box" data-act="reply" rows="1" maxlength="${MAX_LEN.reply}" aria-label="${t.yourReply}" placeholder="${uploadingAttachment ? t.uploading : t.replyHint}"></textarea>
           <button class="primary" data-act="send-reply" ${submitting || uploadingAttachment ? "disabled" : ""}>
-            ${ICONS.send}<span>${submitting ? "…" : "Send"}</span>
+            ${ICONS.send}<span>${submitting ? "…" : t.send}</span>
           </button>
         </div>
-      </div>`;
-    const replyEl = panel.querySelector<HTMLInputElement>('input[data-act="reply"]');
+      </div>`}`;
+    // Focus lands here once, when the thread opens (setView); render() keeps
+    // it wherever the customer moved it after that.
+    const replyEl = panel.querySelector<HTMLTextAreaElement>('textarea[data-act="reply"]');
     if (replyEl) {
       replyEl.value = v.reply;
-      // re-focus after re-render so typing isn't interrupted
-      if (document.activeElement !== replyEl) replyEl.focus();
+      autoGrow(replyEl);
     }
   }
 
   function renderConfirm(v: Extract<View, { kind: "confirm" }>) {
+    // In the vendor's name, promising only what will happen: replies land
+    // here, and by email when this deployment sends it and they haven't muted it.
+    const n = me?.notifications;
+    const byEmail = me?.email_enabled && n?.replies && !n.unsubscribed_all;
     panel.innerHTML = `
-      ${header("Crumb received", undefined, false)}
+      ${header(t.shareFeedback, undefined, false)}
       <div class="body">
         <div class="empty">
           <span class="icon">${ICONS.check}</span>
-          <h2>Crumb received.</h2>
-          <p>We’ll be in touch, usually a reply within a day.</p>
+          <h2 data-live>${t.feedbackSent}</h2>
+          <p data-live>${t.willReply(escapeHtml(me?.workspace.name ?? ""), !!byEmail)}</p>
           <span class="short-id">${escapeHtml(v.shortId)}</span>
         </div>
       </div>
       <div class="foot">
         <div class="row">
-          <button class="outline" data-act="see-list">See your feedback</button>
+          <button class="outline" data-act="see-list">${t.seeYourFeedback}</button>
           <div class="spacer"></div>
-          <button class="primary" data-act="new">${ICONS.plus}<span>Send another</span></button>
+          <button class="primary" data-act="new">${ICONS.plus}<span>${t.sendAnother}</span></button>
         </div>
       </div>`;
   }
@@ -1603,19 +2108,23 @@ function init(config: Config) {
     if (!target) return;
     const act = target.dataset.act;
 
-    if (act === "close") { open = false; expanded = false; searchQuery = ""; render(); return; }
+    if (act === "close") { searchQuery = ""; closeApi(); return; }
     if (act === "toggle-expand") { expanded = !expanded; render(); return; }
     if (act === "back") {
       submitState = { kind: "idle" };
       memberMsg = null;
       expanded = false;
-      setView({ kind: "list" });
+      // Back from a thread lands on its row, so a keyboard keeps its place.
+      setView({ kind: "list" }, view.kind === "thread" ? `[data-short="${CSS.escape(view.shortId)}"]` : true);
       return;
     }
     if (act === "tab") {
       const t = target.dataset.tab;
-      memberMsg = null;
-      if (t === "admin") setView({ kind: "admin" });
+      memberMsg = channelMsg = null;
+      if (t === "admin") {
+        setView({ kind: "admin" });
+        if (config.jwt && me?.is_account_admin && !channels && channelsState.kind !== "loading") fetchChannels();
+      }
       else if (t === "feedback") setView({ kind: "list" });
       else if (t === "roadmap") { setView({ kind: "roadmap" }); if (roadmap === null) fetchRoadmap(); }
       return;
@@ -1638,12 +2147,40 @@ function init(config: Config) {
       if (id && (next === "admin" || next === "member")) setMemberRole(id, next);
       return;
     }
+    // Removing a teammate or a channel asks first, in place; focus goes to
+    // Cancel, and Cancel hands it back to the button that asked.
+    if (act === "remove-ask") {
+      askRemove = target.dataset.id ?? null;
+      moveFocus = '[data-act="ask-cancel"]';
+      render();
+      return;
+    }
+    if (act === "ask-cancel") {
+      moveFocus = `[data-act="remove-ask"][data-id="${CSS.escape(askRemove ?? "")}"]`;
+      askRemove = null;
+      render();
+      return;
+    }
     if (act === "member-remove") {
       const id = target.dataset.id;
+      askRemove = null;
       if (id) removeMember(id);
       return;
     }
+    if (act === "channel-remove") {
+      const p = target.dataset.id;
+      askRemove = null;
+      if (p === "slack" || p === "teams") void removeChannel(p);
+      return;
+    }
     if (act === "save-channels") { void saveChannels(); return; }
+    if (act === "retry") {
+      if (view.kind === "thread") fetchThread(view.shortId);
+      else if (view.kind === "roadmap") fetchRoadmap();
+      else if (view.kind === "admin") void (me ? fetchChannels() : fetchMe());
+      else fetchList();
+      return;
+    }
     if (act === "follow") {
       const id = target.dataset.id;
       if (id) toggleFollow(id, target.dataset.following !== "1");
@@ -1651,7 +2188,8 @@ function init(config: Config) {
     }
     if (act === "new") {
       submitState = { kind: "idle" };
-      setView({ kind: "compose", type: "idea", title: "", body: "" });
+      const c = readDrafts().compose; // pick up an unsent draft
+      setView({ kind: "compose", type: c?.type ?? "idea", title: c?.title ?? "", body: c?.body ?? "" });
       return;
     }
     if (act === "see-list") {
@@ -1660,16 +2198,18 @@ function init(config: Config) {
     }
     if (act === "open-thread") {
       const sid = target.dataset.short;
-      if (!sid) return;
-      submitState = { kind: "idle" };
-      setView({ kind: "thread", shortId: sid, reply: "" });
-      fetchThread(sid);
+      if (sid) openThread(sid);
       return;
     }
     if (act === "type" && view.kind === "compose") {
       const t = target.dataset.type as ItemType | undefined;
-      if (t) setView({ ...view, type: t });
       submitState = { kind: "idle" };
+      if (t) {
+        const { title, body } = view;
+        editDrafts(d => { d.compose = { type: t, title, body }; });
+        view = { ...view, type: t }; // same view: focus stays on the picked type
+        render();
+      }
       return;
     }
     if (act === "record-consent") {
@@ -1692,11 +2232,13 @@ function init(config: Config) {
     if (act === "close-request-ask" && view.kind === "thread") {
       closeConfirm = true;
       closeState = { kind: "idle" };
+      moveFocus = '[data-act="close-request-cancel"]'; // the safe choice
       render();
       return;
     }
     if (act === "close-request-cancel") {
       closeConfirm = false;
+      moveFocus = '[data-act="close-request-ask"]';
       render();
       return;
     }
@@ -1706,6 +2248,10 @@ function init(config: Config) {
     }
     if (act === "pick-attachment") {
       pickAndUploadAttachment();
+      return;
+    }
+    if (act === "capture") {
+      void captureScreenshot();
       return;
     }
     if (act === "remove-attachment") {
@@ -1733,37 +2279,38 @@ function init(config: Config) {
       if (act === "title") { view = { ...view, title: (target as HTMLInputElement).value }; }
       if (act === "body")  { view = { ...view, body:  (target as HTMLTextAreaElement).value }; }
       submitState = { kind: "idle" };
+      const { type, title, body } = view;
+      editDrafts(d => { d.compose = { type, title, body }; });
     } else if (view.kind === "thread" && act === "reply") {
-      view = { ...view, reply: (target as HTMLInputElement).value };
+      const reply = (target as HTMLTextAreaElement).value;
+      const sid = view.shortId;
+      view = { ...view, reply };
+      autoGrow(target as HTMLTextAreaElement);
+      editDrafts(d => { d.replies = { ...d.replies, [sid]: reply }; });
     }
   });
 
   panel.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && view.kind === "thread") {
-      const target = e.target as HTMLElement;
-      if ((target as HTMLInputElement).dataset?.act === "reply" && !e.shiftKey) {
-        e.preventDefault();
-        submitReply(view);
-      }
+    const t = e.target as HTMLElement;
+    if (t.getAttribute("role") === "tab") {
+      const tabs = Array.from(panel.querySelectorAll<HTMLElement>('[role="tab"]'));
+      const to = tabs[tabStep(e.key, tabs.indexOf(t), tabs.length)];
+      // Selection follows focus: the click switches views, and render()
+      // focuses the newly selected tab.
+      if (to) { e.preventDefault(); to.click(); }
+      return;
     }
+    if (!isSendShortcut(e)) return;
+    const act = (e.target as HTMLElement).dataset?.act;
+    if (view.kind === "thread" && act === "reply") { e.preventDefault(); submitReply(view); }
+    else if (view.kind === "compose" && (act === "title" || act === "body")) { e.preventDefault(); submitNew(view); }
   });
 
   scrim.addEventListener("click", () => {
     if (expanded) { expanded = false; render(); }
   });
 
-  launcher.addEventListener("click", () => {
-    open = !open;
-    if (open) {
-      // Always refresh on open so the list (and any new vendor replies) is
-      // current. render() inside fetchList shows the panel once items arrive;
-      // /me has usually already finished from the init kickoff.
-      if (me === null && meState.kind !== "loading") fetchMe();
-      fetchList();
-    } else {
-      render();
-    }
-  });
+  launcher.addEventListener("click", () => { if (open) closeApi(); else openApi(); });
 
   // First paint must NOT wait on the /me round-trip (which can be 1–3s on a
   // cold serverless function or dev compile). We reveal the launcher
@@ -1779,60 +2326,47 @@ function init(config: Config) {
     offsetY: cachedBrand?.launcher_offset_y ?? null,
   });
 
-  fetchMe().then(() => {
-    if (me) {
-      applyBranding({
-        dot: me.workspace.accent ?? null,
-        bg: me.workspace.launcher_bg ?? null,
-        edge: me.workspace.launcher_edge ?? null,
-        visibility: me.workspace.launcher_visibility ?? null,
-        offsetY: me.workspace.launcher_offset_y ?? null,
-      });
-      writeCachedBrand({
-        accent: me.workspace.accent,
-        launcher_bg: me.workspace.launcher_bg,
-        launcher_edge: me.workspace.launcher_edge,
-        launcher_visibility: me.workspace.launcher_visibility,
-        launcher_offset_y: me.workspace.launcher_offset_y,
-      });
-      // Consent-gated: only (re)start recording if the customer already opted
-      // in earlier this tab. A fresh visitor records nothing until they tick
-      // the box in the compose form.
-      if (me.workspace.session_record_enabled && hasRecordConsent()) {
-        ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken(), config.recordNetworkBodies);
-      }
-    }
-  });
+  // Load (or, after identify(), reload in place) what the launcher and the
+  // open view need. The list loads before the panel is ever opened so the
+  // launcher can surface replies that arrived while the customer was away;
+  // a failure there stays quiet until they open the panel.
+  function boot() {
+    void fetchMe();
+    fetchList();
+    if (!open) return;
+    if (view.kind === "thread" && threadState.kind === "error") fetchThread(view.shortId);
+    else if (view.kind === "roadmap" && roadmapState.kind === "error") fetchRoadmap();
+  }
+  if (identified()) boot();
 
-  // Background-load the list once on boot so the launcher can surface an
-  // unread badge for replies that arrived while the customer was away —
-  // before they ever open the panel. Cheap single GET; failures are silent.
-  fetchList();
-
-  // Honor `?crumb_open=FB-N` on initial load — the deep-link target in
-  // customer notification emails. Pops the panel straight to that thread.
+  // Honor `?crumb_open=FB-N`, the deep link in customer notification emails:
+  // pop the panel straight to that thread, once. Held until identify() when
+  // nobody's signed in yet, and stripped from the URL so a reload doesn't
+  // reopen it (history.state kept for the host's router).
   function maybeAutoOpen() {
     try {
-      const q = new URLSearchParams(location.search);
-      const sid = q.get("crumb_open");
+      const url = new URL(location.href);
+      const sid = url.searchParams.get("crumb_open");
       if (!sid) return;
-      open = true;
-      fetchMe();
-      fetchList();
-      view = { kind: "thread", shortId: sid, reply: "" };
-      fetchThread(sid);
+      if (identified()) openApi(sid);
+      else pendingOpen = sid;
+      url.searchParams.delete("crumb_open");
+      history.replaceState(history.state, "", url.href);
     } catch {
-      /* host page may sandbox URLSearchParams; ignore */
+      /* sandboxed host without history access: ignore */
     }
   }
   maybeAutoOpen();
 
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !open) return;
-    // Two-stage: collapse first, then close. Mirrors the way most modals
-    // dismiss a deeper layer before closing the whole thing.
-    if (expanded) { expanded = false; render(); }
-    else { open = false; render(); }
+    if (!open) return;
+    if (e.key === "Tab") trapTab(e);
+    else if (e.key === "Escape" && !e.isComposing) {
+      // Two-stage: collapse first, then close. Mirrors the way most modals
+      // dismiss a deeper layer before closing the whole thing.
+      if (expanded) { expanded = false; render(); }
+      else closeApi();
+    }
   });
 
   // Last-chance flush of buffered usage events when the page goes away.
@@ -1840,13 +2374,95 @@ function init(config: Config) {
 
   // ── public API: replace the queuing stub and drain it ──────
   function openApi(shortId?: string) {
+    if (!identified()) return; // nobody signed in: nothing to show yet
+    if (!open) {
+      // Closing hands focus back to what opened us: the host's own button,
+      // else (focus was on our launcher, or nowhere) the launcher.
+      const a = document.activeElement;
+      opener = a instanceof HTMLElement && a !== document.body && a !== host ? a : null;
+      moveFocus = true;
+    }
     open = true;
-    if (me === null && meState.kind !== "loading") fetchMe();
-    fetchList();
-    if (shortId) { view = { kind: "thread", shortId, reply: "" }; fetchThread(shortId); }
-    render();
+    if (me === null && meState.kind !== "loading") void fetchMe();
+    // Refresh on every open so new vendor replies show (unless one's in flight).
+    if (listState.kind !== "loading") fetchList();
+    if (shortId) openThread(shortId);
+    else render();
   }
-  function closeApi() { open = false; expanded = false; render(); }
+  function closeApi() {
+    const a = shadow.activeElement;
+    const ours = a ? panel.contains(a) : document.activeElement === document.body;
+    if (open && view.kind === "list") markAllStatusesSeen();
+    open = false;
+    expanded = false;
+    render();
+    // Focus that was in the panel goes back to the opener; focus out on the
+    // host page (or already on the launcher) stays put.
+    if (ours) (opener?.isConnected ? opener : launcher).focus();
+  }
+
+  function openThread(sid: string) {
+    submitState = { kind: "idle" };
+    setView({ kind: "thread", shortId: sid, reply: readDrafts().replies?.[sid] ?? "" });
+    fetchThread(sid);
+  }
+
+  // Forget the signed-in customer: their data, drafts, unread caches and
+  // recording consent. Shared by shutdown() and a user switch in identify().
+  function forgetUser() {
+    flushUsage(); // their buffered events still go out as them
+    usageBuffer = [];
+    try { sessionStorage.removeItem(draftKey()); } catch { /* storage blocked */ }
+    // Their consent can't carry over to whoever signs in next.
+    try { window.__crumbRecord__?.stop(); } catch { /* ignore */ }
+    if (window.__crumbRecord__) replayRetired = true;
+    writeRecordConsent(false);
+    epoch++;
+    me = null; items = null; thread = null; roadmap = null;
+    meState = listState = threadState = roadmapState = submitState = closeState = { kind: "idle" };
+    view = { kind: "list" };
+    searchQuery = "";
+    closeConfirm = false;
+    pendingAttachments = [];
+    attachFor = "";
+    uploadingAttachment = false;
+    attachmentError = memberMsg = channelMsg = followMsg = askRemove = null;
+    channels = null;
+    channelsState = { kind: "idle" };
+    seenCache = statusSeenCache = null;
+  }
+
+  function identify(opts?: { jwt?: unknown }) {
+    const jwt = typeof opts?.jwt === "string" ? opts.jwt.trim() : "";
+    if (!jwt) { console.warn("[crumb] identify() needs { jwt } with a signed identity token."); return; }
+    if (jwt === config.jwt) return;
+    // Someone else (or a token we can't read): nothing of the last customer stays.
+    const sub = jwtSub(jwt);
+    if (identified() && (!sub || sub !== userKey())) forgetUser();
+    config.jwt = jwt;
+    config.userEmail = "";
+    config.userName = undefined;
+    config.accountName = "";
+    // A fresh token clears notes that said the old one had expired.
+    if (submitState.kind === "error") submitState = { kind: "idle" };
+    if (closeState.kind === "error") closeState = { kind: "idle" };
+    attachmentError = null;
+    settleLauncher({});
+    boot();
+    if (pendingOpen) { const sid = pendingOpen; pendingOpen = null; openApi(sid); }
+  }
+
+  function shutdown() {
+    if (identified()) forgetUser();
+    config.jwt = undefined;
+    config.userEmail = "";
+    config.userName = undefined;
+    config.accountName = "";
+    pendingOpen = null;
+    applyVisibility();
+    closeApi();
+    panel.innerHTML = ""; // nothing of theirs left in the page
+  }
 
   const queued = window.crumb?.q ?? [];
   const api: CrumbApi = {
@@ -1859,6 +2475,18 @@ function init(config: Config) {
       unreadListeners.push(cb);
       if (lastUnread >= 0) { try { cb(lastUnread); } catch { /* host cb */ } }
     },
+    identify,
+    shutdown,
+    onTokenExpired: (cb) => {
+      expiredListeners.push(cb);
+      // Registered after this token already expired: tell them now.
+      if (config.jwt && expiredJwt === config.jwt) { try { cb(); } catch { /* host cb */ } }
+    },
+    // The server caps and checks it; null or "" clears it.
+    setContext: (ctx) => {
+      const v = ctx?.app_version;
+      if (typeof v === "string" || v === null) appVersion = v?.trim() ?? "";
+    },
     __mounted: true,
   };
   window.crumb = api;
@@ -1868,6 +2496,7 @@ function init(config: Config) {
       try { (fn as (...a: unknown[]) => void)(...args); } catch { /* host call */ }
     }
   }
+  if (!identified()) console.info("[crumb] No signed-in customer yet. The launcher appears after crumb.identify({ jwt }).");
 
   render();
 }
