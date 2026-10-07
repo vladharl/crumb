@@ -48,15 +48,19 @@ export function FeatureList({ items }: { items: FeatureLine[] }) {
   );
 }
 
-// Plan + interval picker for workspaces without an active subscription. The
-// interval toggle drives which Stripe price each card shows and checks out;
-// `initialPlan` / `initialInterval` carry the visitor's pick from the URL
-// (signup, or a canceled checkout) so it isn't lost.
-export function PlanPicker({ plans, initialPlan, initialInterval, canBuy }: {
+// Plan + interval picker. Without an active subscription it checks out; with
+// one (`upgrade`) it lists the plans above the current one and each opens the
+// Stripe portal's plan change for the existing subscription, so a subscriber
+// never starts a second one. The interval toggle drives which Stripe price
+// each card shows and checks out; `initialPlan` / `initialInterval` carry the
+// visitor's pick from the URL (signup, a canceled checkout, an upgrade notice)
+// so it isn't lost.
+export function PlanPicker({ plans, initialPlan, initialInterval, canBuy, upgrade = false }: {
   plans: PlanCard[];
   initialPlan: PaidPlan | null;
   initialInterval: BillingInterval;
   canBuy: boolean;
+  upgrade?: boolean;
 }) {
   const [interval, pickInterval] = useState<BillingInterval>(initialInterval);
   const [busyPlan, setBusyPlan] = useState<PaidPlan | null>(null);
@@ -69,7 +73,7 @@ export function PlanPicker({ plans, initialPlan, initialInterval, canBuy }: {
     setError(null);
     setBusyPlan(plan);
     startTransition(async () => {
-      const r = await createCheckoutSession(plan, interval);
+      const r = upgrade ? await createPortalSession(true) : await createCheckoutSession(plan, interval);
       if (r.ok) { window.location.href = r.url; return; }
       setError(r.error);
       setBusyPlan(null);
@@ -131,7 +135,9 @@ export function PlanPicker({ plans, initialPlan, initialInterval, canBuy }: {
                   onClick={() => choose(p.id)}
                   style={{ marginTop: "auto" }}
                 >
-                  {busyPlan === p.id ? "Opening checkout…" : `Choose ${p.name}`}
+                  {busyPlan === p.id
+                    ? (upgrade ? "Opening portal…" : "Opening checkout…")
+                    : `${upgrade ? "Upgrade to" : "Choose"} ${p.name}`}
                 </Btn>
               )}
             </div>

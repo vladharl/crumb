@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Btn, Card, CardHead, Ic, Pill } from "@crumb/ui";
 import { useToast } from "@/components/toast";
+import { cancelWaitingMove } from "@/components/ReplyComposer";
 import { errorMessage } from "@/lib/action-error";
 import {
   mergeItems,
@@ -52,7 +53,10 @@ export function MergePanel({
 
   const fail = (code: string) => toast.show({ message: errorMessage(code), tone: "error" });
 
+  // Merging and unmerging change the item's status, so either wins over a
+  // status move still waiting out its undo window.
   function doMerge(sourceShortId: string, targetShortId: string) {
+    cancelWaitingMove(sourceShortId);
     startTransition(async () => {
       const r = await mergeItems(sourceShortId, targetShortId);
       if (r.ok) router.refresh();
@@ -60,6 +64,7 @@ export function MergePanel({
     });
   }
   function doUnmerge() {
+    cancelWaitingMove(itemShortId);
     startTransition(async () => {
       const r = await unmergeItem(itemShortId);
       if (r.ok) router.refresh();

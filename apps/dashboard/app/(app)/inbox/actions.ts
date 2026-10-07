@@ -24,12 +24,18 @@ function validIds(ids: unknown): ids is string[] {
   return Array.isArray(ids) && ids.length > 0 && ids.every(i => typeof i === "string");
 }
 
+// One status request runs each item's full pipeline, customer email included,
+// so it stays small enough to finish inside a request.
+const BULK_STATUS_MAX = 50;
+const BULK_STATUS_CONCURRENCY = 4;
+
 // Each item goes through the same status core as the thread, so a bulk change
 // writes status_events, fires webhooks + chat cards and emails the customer
 // exactly like a single one. Items already in `status` count as affected (the
 // core no-ops without re-notifying); ids outside this workspace count as failed.
 export async function bulkUpdateStatus(itemIds: string[], status: string, reason?: string): Promise<BulkStatusResult> {
   if (!validIds(itemIds)) return { ok: false, error: "no_items" };
+  if (new Set(itemIds).size > BULK_STATUS_MAX) return { ok: false, error: "too_many_items" };
   if (!VENDOR_STATUSES.includes(status as VendorStatus)) return { ok: false, error: "bad_status" };
   const why = reason?.trim() || undefined;
   if (REASON_REQUIRED.has(status) && !why) return { ok: false, error: "reason_required" };
@@ -48,18 +54,22 @@ export async function bulkUpdateStatus(itemIds: string[], status: string, reason
   let affected = 0;
   let failed = ids.length - rows.length;
   let firstError: string | undefined = failed > 0 ? "not_found" : undefined;
-  // ponytail: sequential, so customer emails go out one at a time (provider
-  // rate limits); N round trips is fine for inbox-sized selections. Queue the
-  // sends if bulk selections get large.
-  for (const { shortId } of rows) {
-    const r = await updateItemStatus(actor, { itemShortId: shortId, status: status as VendorStatus, reason: why, origin })
-      .catch((err: unknown) => {
-        log.error("bulk status update failed", { scope: "crumb/inbox", shortId, err });
-        return { ok: false as const, error: "update_failed" };
-      });
-    if (r.ok) affected++;
-    else { failed++; firstError ??= r.error; }
-  }
+  // ponytail: a few items at a time, so a full selection finishes in one
+  // request without bursting the email provider's rate limit. Queue the sends
+  // in a background job if selections need to grow past BULK_STATUS_MAX.
+  const queue = [...rows];
+  await Promise.all(Array.from({ length: Math.min(BULK_STATUS_CONCURRENCY, queue.length) }, async () => {
+    for (let row = queue.shift(); row; row = queue.shift()) {
+      const { shortId } = row;
+      const r = await updateItemStatus(actor, { itemShortId: shortId, status: status as VendorStatus, reason: why, origin })
+        .catch((err: unknown) => {
+          log.error("bulk status update failed", { scope: "crumb/inbox", shortId, err });
+          return { ok: false as const, error: "update_failed" };
+        });
+      if (r.ok) affected++;
+      else { failed++; firstError ??= r.error; }
+    }
+  }));
 
   revalidatePath("/inbox");
   return firstError ? { ok: true, affected, failed, firstError } : { ok: true, affected, failed };

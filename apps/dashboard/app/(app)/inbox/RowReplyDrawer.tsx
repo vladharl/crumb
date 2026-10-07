@@ -242,8 +242,8 @@ export function RowReplyDrawer({
         )}
       </div>
 
-      {/* The tabs above only filter the conversation; who a message reaches
-          is the composer's own Reply / Internal note switch. */}
+      {/* Who a message reaches is the composer's Reply / Internal note
+          switch; switching the tabs above flips it to match. */}
       {ctx && (
         <ReplyComposer
           itemShortId={row.shortId}
@@ -260,6 +260,7 @@ export function RowReplyDrawer({
           defaultDraft={draft}
           onDraftChange={onDraftChange}
           framed={false}
+          tabMode={tab === "internal" ? "note" : "reply"}
         />
       )}
 

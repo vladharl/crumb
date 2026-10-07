@@ -61,7 +61,10 @@ export async function loadHostedThread(shortId: string, token: string) {
     .where(inArray(attachments.replyId, messages.map(m => m.id)));
 
   return {
-    item,
+    // Creating an item seeds its thread with the customer's own words as the
+    // first message (with their name and date), so the body is shown on its
+    // own only for an item without that message.
+    item: messages[0]?.customerName != null && messages[0].body.trim() === item.body.trim() ? { ...item, body: "" } : item,
     messages: messages.map(m => ({
       id: m.id,
       body: m.body,

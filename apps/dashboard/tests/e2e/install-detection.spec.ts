@@ -79,3 +79,28 @@ test("the status turns connected on a real widget's first ping, never the test c
   // The page polls every 5s while visible.
   await expect(page.getByText("Widget connected")).toBeVisible({ timeout: 15_000 });
 });
+
+// The widget boots /api/v1/me and /api/v1/items at once, and both create a
+// brand-new customer on first contact: the Try-it preview's first load, or
+// any new customer's. However they race, that's one account, one user, and
+// every request answered.
+test("a brand-new customer's first boot makes one account and one user, with no 500", async ({ request }) => {
+  // A workspace's first Try it: no test customer yet.
+  psql(`DELETE FROM accounts WHERE name = '${TEST_CUSTOMER_ACCOUNT}' AND workspace_id = (SELECT id FROM workspaces WHERE slug = '${SLUG}')`);
+  const sub = `preview+boot-${Date.now()}@${SLUG}.invalid`;
+  const headers = { authorization: `Bearer ${mintWidgetJwt(SLUG, { sub, name: "Lina Park", account_name: TEST_CUSTOMER_ACCOUNT })}` };
+
+  // One boot's pair, and a reload's racing in behind it.
+  const boots = await Promise.all(
+    ["/api/v1/me", "/api/v1/items", "/api/v1/me", "/api/v1/items"].map((path) => request.get(path, { headers })),
+  );
+  expect(boots.map((r) => r.status())).toEqual([200, 200, 200, 200]);
+
+  const counts = psql(
+    `SELECT (SELECT count(*) FROM accounts WHERE workspace_id = w.id AND name = '${TEST_CUSTOMER_ACCOUNT}'),
+            (SELECT count(*) FROM account_users WHERE workspace_id = w.id AND email = '${sub}'),
+            (SELECT role FROM account_users WHERE workspace_id = w.id AND email = '${sub}')
+     FROM workspaces w WHERE w.slug = '${SLUG}'`,
+  );
+  expect(counts).toBe("1|1|admin");
+});

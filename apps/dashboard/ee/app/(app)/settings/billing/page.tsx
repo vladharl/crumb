@@ -121,10 +121,13 @@ export default async function BillingPage({ searchParams }: {
   const pickedPlan: PaidPlan | null = searchParams.plan === "team" || searchParams.plan === "growth" ? searchParams.plan : null;
   const pickedInterval: BillingInterval = searchParams.interval === "month" ? "month" : "year";
 
+  // A subscriber is offered the plans above theirs and moves up in the Stripe
+  // portal (Upgrade), never by checking out a second subscription.
+  const offered = showPicker ? UPGRADES : active ? UPGRADES.slice(UPGRADES.findIndex(u => u.id === plan) + 1) : [];
   let planCards: PlanCard[] = [];
-  if (showPicker) {
+  if (offered.length > 0) {
     const prices = await planPrices();
-    planCards = UPGRADES.map(({ id, over }) => ({
+    planCards = offered.map(({ id, over }) => ({
       id,
       name: planDisplayName(id),
       intro: `Everything in ${planDisplayName(over)}, plus:`,
@@ -240,6 +243,23 @@ export default async function BillingPage({ searchParams }: {
               initialPlan={pickedPlan}
               initialInterval={pickedInterval}
               canBuy={isAdmin && configured}
+            />
+          </>
+        )}
+
+        {active && planCards.length > 0 && (
+          <>
+            {isAdmin && (
+              <p className="text-sm muted note">
+                Move up a plan any time. You'll review and confirm the change in the Stripe billing portal.
+              </p>
+            )}
+            <PlanPicker
+              plans={planCards}
+              initialPlan={pickedPlan}
+              initialInterval={pickedInterval}
+              canBuy={isAdmin && configured}
+              upgrade
             />
           </>
         )}

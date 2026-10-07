@@ -83,4 +83,28 @@ describe.skipIf(!reachable && !process.env.CI)("loadHostedThread", () => {
     expect(await loadHostedThread(shortId, tokenOf(hostedThreadPath(shortId, "attacker-secret")))).toBeNull();
     expect(await loadHostedThread(shortId, tokenOf(hostedThreadPath(`FB-${seq + 1}`, globex)))).toBeNull();
   });
+
+  it("shows the customer's original message once", async () => {
+    // Creating an item seeds its thread with the body as the first message.
+    const seq = randomInt(1_000_000, 2_000_000_000);
+    const shortId = `FB-${seq}`;
+    const [ws] = await db.insert(workspaces).values({ slug: `hosted-${randomUUID().slice(0, 8)}`, name: "Initrode" })
+      .returning({ id: workspaces.id, secret: workspaces.signingSecret });
+    created.push(ws.id);
+    const [acct] = await db.insert(accounts).values({ workspaceId: ws.id, name: "Initech" }).returning({ id: accounts.id });
+    const [pat] = await db.insert(accountUsers)
+      .values({ workspaceId: ws.id, accountId: acct.id, email: "pat@initech.test", name: "Pat", initials: "P" })
+      .returning({ id: accountUsers.id });
+    const [item] = await db.insert(items)
+      .values({ workspaceId: ws.id, accountId: acct.id, submitterId: pat.id, seq, shortId, title: "Exports", body: "Exports drop the last row", type: "bug" })
+      .returning({ id: items.id });
+    await db.insert(replies).values([
+      { itemId: item.id, accountUserId: pat.id, body: "Exports drop the last row", createdAt: new Date(Date.UTC(2026, 9, 1, 12)) },
+      { itemId: item.id, accountUserId: pat.id, body: "Still happening", createdAt: new Date(Date.UTC(2026, 9, 2, 12)) },
+    ]);
+
+    const thread = await loadHostedThread(shortId, tokenOf(hostedThreadPath(shortId, ws.secret)));
+    expect(thread?.item.body).toBe("");
+    expect(thread?.messages.map(m => [m.author, m.body])).toEqual([["Pat", "Exports drop the last row"], ["Pat", "Still happening"]]);
+  });
 });

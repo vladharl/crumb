@@ -442,8 +442,9 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
             )}
           </div>
 
-          {/* The tabs only filter the conversation; who a message reaches is
-              the composer's own Reply / Internal note switch. It's hidden (not
+          {/* Who a message reaches is the composer's Reply / Internal note
+              switch; switching to the Internal tab flips it to a note, and
+              back to Customer flips it to a reply. It's hidden (not
               unmounted) on the Trail, so a draft survives a look at it. */}
           <div hidden={tab === "trail"}>
             <ReplyComposer
@@ -457,6 +458,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
               aiReplyAvailable={aiReplyAvailable}
               canWrite={canWrite}
               onSent={() => router.refresh()}
+              tabMode={tab === "internal" ? "note" : tab === "customer" ? "reply" : undefined}
             />
           </div>
         </Card>

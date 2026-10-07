@@ -29,12 +29,20 @@ describe("upgrade notice by role", () => {
       text: "The Team plan adds the AI suite: clustering, Ask, ticket and reply drafts.",
       hint: null,
       href: "/settings/billing?plan=team",
+      action: "See plans",
     });
     expect(upgradeNoticeCopy("session_record", true).href).toBe("/settings/billing?plan=growth");
   });
 
+  it("says Change plan to a subscribed admin, whose billing page offers the plans above theirs", () => {
+    expect(upgradeNoticeCopy("session_record", true, true)).toMatchObject({
+      href: "/settings/billing?plan=growth",
+      action: "Change plan",
+    });
+  });
+
   it("points everyone else at an admin, with no billing link", () => {
-    expect(upgradeNoticeCopy("integrations", false)).toEqual({
+    expect(upgradeNoticeCopy("integrations", false)).toMatchObject({
       text: "The Team plan adds one-click Slack, Linear, Jira and GitHub, plus CRM sync and feedback connectors.",
       hint: "Ask an admin to upgrade.",
       href: null,
@@ -62,10 +70,19 @@ describe("AI usage notice", () => {
   });
 
   it("gives Team admins the upgrade path, and nobody else", () => {
-    expect(aiUsageCopy(100, resets, true, "team")?.href).toBe("/settings/billing");
+    expect(aiUsageCopy(100, resets, true, "team")).toMatchObject({ href: "/settings/billing", action: "Change plan" });
     expect(aiUsageCopy(85, resets, true, "team")?.href).toBe("/settings/billing");
     expect(aiUsageCopy(100, resets, false, "team")?.href).toBeNull();
-    // Growth is the top plan: no plan to buy, so no link.
-    expect(aiUsageCopy(100, resets, true, "growth")?.href).toBeNull();
+    expect(aiUsageCopy(100, resets, false, "growth")).toMatchObject({ hint: null, href: null });
+  });
+
+  it("points Growth admins at a person for higher limits, never at billing", () => {
+    // Growth is the top plan: no plan to buy, so no billing link.
+    expect(aiUsageCopy(100, resets, true, "growth", "help@crumb.test")).toMatchObject({
+      hint: null,
+      href: "mailto:help@crumb.test",
+      action: "Contact us for higher limits",
+    });
+    expect(aiUsageCopy(85, resets, true, "growth", null)).toMatchObject({ hint: "Contact us for higher limits.", href: null });
   });
 });

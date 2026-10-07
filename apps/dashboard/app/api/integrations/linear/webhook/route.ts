@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import { db, items, workspaces } from "@crumb/db";
-import { resolveOrganizationIds, verifyWebhook } from "@/lib/integrations/linear";
+import { verifyWebhook } from "@/lib/integrations/linear";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
 
@@ -21,14 +21,19 @@ export const runtime = "nodejs";
 //   {
 //     "action": "update",
 //     "type": "Issue",
-//     "data": { "id": "<uuid>", "identifier": "ENG-42", "state": { "name": "In Progress" }, "url": "..." },
+//     "data": { "id": "<uuid>", "identifier": "ENG-42", "state": { "name": "In Progress" },
+//               "url": "https://linear.app/<org url key>/issue/ENG-42/..." },
 //     "updatedFrom": { "stateId": "..." },  // present when state changed
 //     "organizationId": "<uuid>"            // the Linear org that sent it
 //   }
 //
 // The signing secret is deployment-wide (on Cloud every org's events share
 // it) and identifiers like ENG-42 repeat across orgs, so updates are scoped
-// to the workspace(s) whose install belongs to `organizationId`.
+// to the workspace(s) whose install belongs to `organizationId`, recorded by
+// the OAuth callback. An install connected before the callback recorded it
+// has no org id; its items match only when their own stored issue URL is in
+// the org the event's issue URL names (the org's URL key). Nothing here calls
+// Linear, so an expired install token never stops the sync.
 //
 // Other event types (Comment, Project, etc.) return 200 ok — we never
 // trigger Linear retries for events we don't model.
@@ -45,6 +50,19 @@ type LinearWebhookEvent = {
   };
   updatedFrom?: Record<string, unknown>;
 };
+
+// The org's URL key in a Linear issue URL (https://linear.app/<key>/issue/...).
+function orgUrlKey(issueUrl: string | undefined): string | null {
+  try {
+    const url = new URL(issueUrl ?? "");
+    const [key, kind] = url.pathname.split("/").filter(Boolean);
+    return url.protocol === "https:" && url.hostname === "linear.app" && kind === "issue" && key ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+const installs = (where: SQL | undefined) => db.select({ id: workspaces.id }).from(workspaces).where(where);
 
 export async function POST(req: Request) {
   const rl = await checkRateLimitAsync(`linear-webhook:${callerIpFromRequest(req)}`);
@@ -75,9 +93,9 @@ export async function POST(req: Request) {
   if (!identifier || !organizationId) return NextResponse.json({ received: true });
 
   const newStatus = event.data.state?.name ?? null;
+  const urlKey = orgUrlKey(event.data.url);
 
   try {
-    await resolveOrganizationIds();
     await db
       .update(items)
       .set({
@@ -86,12 +104,15 @@ export async function POST(req: Request) {
         updatedAt: new Date(),
       })
       .where(and(
-        inArray(items.workspaceId, db
-          .select({ id: workspaces.id })
-          .from(workspaces)
-          .where(eq(workspaces.linearOrganizationId, organizationId))),
         eq(items.externalProvider, "linear"),
         eq(items.externalTicketId, identifier),
+        or(
+          inArray(items.workspaceId, installs(eq(workspaces.linearOrganizationId, organizationId))),
+          urlKey ? and(
+            inArray(items.workspaceId, installs(and(isNotNull(workspaces.linearAccessToken), isNull(workspaces.linearOrganizationId)))),
+            sql`starts_with(${items.externalTicketUrl}, ${`https://linear.app/${urlKey}/issue/`})`,
+          ) : undefined,
+        ),
       ));
   } catch (err) {
     log.error("linear webhook DB update failed", { scope: "crumb/linear", identifier, err });

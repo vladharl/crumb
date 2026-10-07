@@ -17,6 +17,7 @@ import { errorMessage } from "@/lib/action-error";
 import { statusEmailsCustomer } from "@/lib/notify/customer-plan";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm";
+import { cancelWaitingMove } from "@/components/ReplyComposer";
 import { bulkAssign, bulkUpdateStatus, acceptTriageAssignee, dismissTriage } from "./actions";
 import { bulkSetInitiative, clusterItems, acceptSuggestion, dismissSuggestion } from "../initiatives/actions";
 import { InitiativeChip } from "../initiatives/InitiativeChip";
@@ -556,6 +557,8 @@ export function InboxTable({
   // nothing written snaps the rows back now; a partial failure lets the
   // refreshed server rows decide (see `unsettled`).
   async function writeStatus(ids: string[], status: string, reason?: string) {
+    // This write wins over a drawer move still waiting out its undo window.
+    for (const r of rows) if (ids.includes(r.id)) cancelWaitingMove(r.shortId);
     const res = await bulkUpdateStatus(ids, status, reason);
     if (!res.ok) setOptimisticStatus(ids, null);
     else if (res.failed > 0) for (const id of ids) unsettled.current.add(id);

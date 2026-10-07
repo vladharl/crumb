@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { db, workspaces, type Workspace } from "@crumb/db";
 import { signState } from "../integrations/state";
 import { log } from "../log";
@@ -75,12 +75,15 @@ export async function exchangeCode(code: string, redirectUrl: string): Promise<S
 }
 
 // Slack team → the Crumb workspace that installed it, for the events, commands
-// and interactivity routes. The callback keeps a team to one workspace, but
-// rows from before that guard (or two claims racing it) can still share one;
-// such a team routes nowhere rather than to whichever tenant Postgres returns
-// first.
+// and interactivity routes. Only a live install (one still holding its bot
+// token) counts, as in the callback's one-workspace-per-team check. The
+// callback keeps a team to one workspace, but rows from before that guard (or
+// two claims racing it) can still share one; such a team routes nowhere rather
+// than to whichever tenant Postgres returns first.
 export async function workspaceForSlackTeam(teamId: string): Promise<Workspace | null> {
-  const rows = await db.select().from(workspaces).where(eq(workspaces.slackTeamId, teamId)).limit(2);
+  const rows = await db.select().from(workspaces)
+    .where(and(eq(workspaces.slackTeamId, teamId), isNotNull(workspaces.slackBotToken)))
+    .limit(2);
   if (rows.length > 1) log.warn("slack team held by more than one workspace", { scope: "crumb/slack", teamId });
   return rows.length === 1 ? rows[0] : null;
 }

@@ -106,22 +106,44 @@ export async function runAction<R extends { ok: boolean }>(
 export const STATUS_EMAIL_DELAY_MS = 6000;
 
 // Calls `send` after `ms` unless undone first; undo() says whether it stopped
-// the send in time. While it waits, leaving the page asks first, since that
-// would drop the send.
-export function sendAfterDelay(send: () => void, ms: number): { undo: () => boolean } {
+// the send in time, flush() sends now if it's still waiting. Hiding or leaving
+// the page sends at once: a background tab may never run the timer, and a
+// closed one drops it.
+export function sendAfterDelay(send: () => void, ms: number): { undo: () => boolean; flush: () => void } {
   let waiting = true;
-  const guard = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
-  const stop = () => { waiting = false; window.removeEventListener("beforeunload", guard); };
-  window.addEventListener("beforeunload", guard);
-  const timer = setTimeout(() => { stop(); send(); }, ms);
+  const onHide = () => { if (document.visibilityState === "hidden") flush(); };
+  const stop = () => {
+    waiting = false;
+    clearTimeout(timer);
+    window.removeEventListener("pagehide", flush);
+    document.removeEventListener("visibilitychange", onHide);
+  };
+  function flush() {
+    if (!waiting) return;
+    stop();
+    send();
+  }
+  window.addEventListener("pagehide", flush);
+  document.addEventListener("visibilitychange", onHide);
+  const timer = setTimeout(flush, ms);
   return {
     undo: () => {
       if (!waiting) return false;
-      clearTimeout(timer);
       stop();
       return true;
     },
+    flush,
   };
+}
+
+// Moves still inside their undo window, by item. Every other status change
+// for the item drops the waiting one first (cancelWaitingMove), so a late
+// commit never overwrites a status set meanwhile with another control.
+const waitingMoves = new Map<string, () => void>();
+
+/** Drops the item's status move still waiting to send, if any. */
+export function cancelWaitingMove(itemShortId: string): void {
+  waitingMoves.get(itemShortId)?.();
 }
 
 /**
@@ -129,8 +151,9 @@ export function sendAfterDelay(send: () => void, ms: number): { undo: () => bool
  * drawer. A move that will email the customer shows at once but waits
  * STATUS_EMAIL_DELAY_MS behind an Undo toast before anything is sent, and
  * Shipped asks first. Other moves apply right away. A failed write rolls the
- * shown status back and says why. The wait isn't tied to the component, so a
- * move still sends (or undoes from its toast) after navigating away.
+ * shown status back and says why. A waiting move sends at once when the page
+ * is hidden or this component unmounts, and never once another status change
+ * for the item has started.
  */
 export function useStatusMove({ itemShortId, status, first, source, plan, onMoved }: {
   itemShortId: string;
@@ -145,18 +168,23 @@ export function useStatusMove({ itemShortId, status, first, source, plan, onMove
   const confirm = useConfirm();
   const [optimistic, setOptimistic] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const waiting = useRef<{ undo: () => boolean; toastId: number } | null>(null);
+  const waiting = useRef<{ undo: () => boolean; flush: () => void; toastId: number } | null>(null);
   const movedRef = useRef(onMoved);
   movedRef.current = onMoved;
 
   // The refreshed server status caught up: retire the overlay.
   useEffect(() => { setOptimistic(o => (o === status ? null : o)); }, [status]);
 
+  // Leaving (another page, a collapsed drawer) sends a waiting move now,
+  // rather than on a timer nothing is left to undo it from.
+  useEffect(() => () => waiting.current?.flush(), [itemShortId]);
+
   // Drops the move waiting to send, if any; true when it stopped in time.
   function dropWaiting(): boolean {
     const w = waiting.current;
     if (!w) return false;
     waiting.current = null;
+    waitingMoves.delete(itemShortId);
     toast.dismiss(w.toastId);
     return w.undo();
   }
@@ -185,13 +213,18 @@ export function useStatusMove({ itemShortId, status, first, source, plan, onMove
       body: emails ? `${first} will get an email saying it shipped.` : noEmailNote(plan, "status", first, source),
       confirmLabel: "Mark Shipped",
     }))) return;
-    // The latest choice wins: an earlier move still waiting never sends.
-    dropWaiting();
+    // The latest choice wins: an earlier move still waiting, from here or
+    // another control, never sends.
+    cancelWaitingMove(itemShortId);
     setOptimistic(next);
     if (!emails) { await commit(next, reason); return; }
 
     const pending = sendAfterDelay(() => {
+      // Sending, on time or early (page hidden or left): Undo is over.
+      const w = waiting.current;
       waiting.current = null;
+      waitingMoves.delete(itemShortId);
+      if (w) toast.dismiss(w.toastId);
       void commit(next, reason);
     }, STATUS_EMAIL_DELAY_MS);
     const toastId = toast.show({
@@ -206,7 +239,8 @@ export function useStatusMove({ itemShortId, status, first, source, plan, onMove
         },
       },
     });
-    waiting.current = { undo: pending.undo, toastId };
+    waiting.current = { ...pending, toastId };
+    waitingMoves.set(itemShortId, () => { if (dropWaiting()) setOptimistic(null); });
   }
 
   return { shown: optimistic ?? status, saving, move };
@@ -217,12 +251,22 @@ export function useStatusMove({ itemShortId, status, first, source, plan, onMove
 // drafts themselves are kept by the inbox.
 const draftModes = new Map<string, Mode>();
 
+// The mode a switch of the conversation's tab selects (Internal picks a note,
+// Customer a reply, or a note for viewers, who can't reply), or null when the
+// tab didn't change, so a restored draft keeps its audience.
+export function modeForTabChange(prev: Mode | undefined, next: Mode | undefined, canWrite: boolean): Mode | null {
+  if (!next || next === prev) return null;
+  return canWrite ? next : "note";
+}
+
 /**
  * The reply / internal-note composer, shared by the thread and the inbox's
  * reply-in-place drawer (same @-mention autocomplete, attachments, AI draft,
- * and send semantics). Who a message reaches is chosen right here, by the
- * Reply / Internal note switch (Reply by default), and the send button says
- * the consequence: "Send to Maya", or "Add note". The line beside the switch
+ * and send semantics). Who a message reaches is the Reply / Internal note
+ * switch (Reply by default). Switching the conversation to its Internal tab
+ * flips it to Internal note, and back to Customer flips it to Reply (tabMode);
+ * the switch can still be flipped by hand. The send button says the
+ * consequence: "Send to Maya", or "Add note". The line beside the switch
  * says whether the customer will actually be emailed, from the same plan the
  * server sends by. Owns its draft + send state and toasts the outcome; the
  * parent is told when something lands (onSent, with the status it closed as).
@@ -245,6 +289,7 @@ export function ReplyComposer({
   defaultDraft = "",
   onDraftChange,
   framed = true,
+  tabMode,
 }: {
   itemShortId: string;
   // The item's status as shown; reply-and-close is offered only while open.
@@ -263,14 +308,18 @@ export function ReplyComposer({
   // `framed` (default) gives the thread's card-foot treatment; the inbox drawer
   // passes false for a borderless inset that the drawer's own padding frames.
   framed?: boolean;
+  // The mode the conversation's active tab stands for ("note" on Internal,
+  // "reply" on Customer, undefined on a tab without a composer).
+  tabMode?: Mode;
 }) {
   const toast = useToast();
   const confirm = useConfirm();
   const noteId = useId();
   const first = firstName(submitterName);
-  // Viewers can only post notes, so they start there.
+  // Viewers can only post notes, so they start there, as does a composer that
+  // opens on the Internal tab.
   const [mode, setModeState] = useState<Mode>(
-    () => (defaultDraft && draftModes.get(itemShortId)) || (canWrite ? "reply" : "note"),
+    () => (!canWrite || tabMode === "note" ? "note" : (defaultDraft && draftModes.get(itemShortId)) || "reply"),
   );
   const isNote = mode === "note";
   const [draft, setDraftState] = useState(defaultDraft);
@@ -297,6 +346,14 @@ export function ReplyComposer({
     setModeState(m);
     setMention(null);
   };
+
+  // Follow the conversation's tab when it changes (see modeForTabChange).
+  const lastTab = useRef(tabMode);
+  useEffect(() => {
+    const next = modeForTabChange(lastTab.current, tabMode, canWrite);
+    if (tabMode) lastTab.current = tabMode;
+    if (next) setMode(next);
+  }, [tabMode, canWrite]);
 
   // Keep the mode next to the inbox's persisted draft (see draftModes).
   const persisted = !!onDraftChange;
@@ -439,6 +496,8 @@ export function ReplyComposer({
       });
       if (!ok) return;
     }
+    // This status wins over one still waiting out its undo window.
+    cancelWaitingMove(itemShortId);
     setSending(true);
     const res = await runAction(toast, () => replyAndSetStatus({
       itemShortId,

@@ -35,7 +35,7 @@ export async function verifyCallback(
   req: Request,
   provider: Provider,
   state: string,
-): Promise<{ ok: true; workspaceId: string; userId: string } | { ok: false; redirect: Response }> {
+): Promise<{ ok: true; workspaceId: string; userId: string; data?: string } | { ok: false; redirect: Response }> {
   const v = verifyState(provider, state);
   if (!v.ok) return { ok: false, redirect: redirectToSettings(req, provider, "error_bad_state") };
 
@@ -48,5 +48,5 @@ export async function verifyCallback(
   if (session.user.role !== "admin") {
     return { ok: false, redirect: redirectToSettings(req, provider, "error_forbidden") };
   }
-  return { ok: true, workspaceId: v.workspaceId, userId: session.user.id };
+  return { ok: true, workspaceId: v.workspaceId, userId: session.user.id, data: v.data };
 }

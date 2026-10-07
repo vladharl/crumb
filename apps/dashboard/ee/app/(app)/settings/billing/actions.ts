@@ -19,6 +19,7 @@ export type CheckoutResult =
 
 const PAID_PLANS = new Set<PaidPlan>(["team", "growth"]);
 const INTERVALS = new Set<BillingInterval>(["month", "year"]);
+const STRIPE_UNREACHABLE = "Couldn't reach Stripe just now. Try again in a moment.";
 
 // Vendor admin picks a plan + interval. We ensure a Stripe customer exists for
 // the workspace (creates one on first run, stores the id), then mint a Checkout
@@ -47,64 +48,74 @@ export async function createCheckoutSession(
       interval,
     });
   }
-  const priceId = await priceIdForPlan(plan, interval);
-  if (!priceId) {
-    return { ok: false, error: `No Stripe price found for ${planDisplayName(plan)} (${interval === "year" ? "annual" : "monthly"}).` };
-  }
-
   const origin = originFromHeaders(headers());
   if (!origin) return { ok: false, error: "Could not determine host." };
 
-  // Reuse the workspace's customer if we've created one before; otherwise
-  // create now and persist so future portal/checkout sessions hit the
-  // same Stripe customer record.
-  let customerId = workspace.stripeCustomerId;
-  if (customerId) {
-    // The webhook can lag the redirect back from Checkout, so the page may
-    // still look unpaid. Ask Stripe directly so a second click (stale tab,
-    // back button) can't start a second subscription.
-    const subs = await stripe.subscriptions.list({ customer: customerId, limit: 10 });
-    if (subs.data.some(sub => isActiveStatus(sub.status))) {
-      return { ok: false, error: "This workspace already has a subscription. It can take a minute to show here, so refresh shortly." };
+  // A Stripe error (outage, network, a rejected call) comes back as a result
+  // the picker shows, never as a throw that leaves it stuck.
+  try {
+    const priceId = await priceIdForPlan(plan, interval);
+    if (!priceId) {
+      return { ok: false, error: `No Stripe price found for ${planDisplayName(plan)} (${interval === "year" ? "annual" : "monthly"}).` };
     }
-  } else {
-    const customer = await stripe.customers.create({
-      email: user.email,
-      name: workspace.name,
-      metadata: { workspace_id: workspace.id, workspace_slug: workspace.slug },
+
+    // Reuse the workspace's customer if we've created one before; otherwise
+    // create now and persist so future portal/checkout sessions hit the
+    // same Stripe customer record.
+    let customerId = workspace.stripeCustomerId;
+    if (customerId) {
+      // The webhook can lag the redirect back from Checkout, so the page may
+      // still look unpaid. Ask Stripe directly so a second click (stale tab,
+      // back button) can't start a second subscription. If Stripe can't say,
+      // this stops at the catch below rather than risk one.
+      const subs = await stripe.subscriptions.list({ customer: customerId, limit: 10 });
+      if (subs.data.some(sub => isActiveStatus(sub.status))) {
+        return { ok: false, error: "This workspace already has a subscription. It can take a minute to show here, so refresh shortly." };
+      }
+    } else {
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: workspace.name,
+        metadata: { workspace_id: workspace.id, workspace_slug: workspace.slug },
+      });
+      customerId = customer.id;
+      await db.update(workspaces)
+        .set({ stripeCustomerId: customerId })
+        .where(eq(workspaces.id, workspace.id));
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${origin}/settings/billing?stripe=success`,
+      cancel_url:  `${origin}/settings/billing?stripe=cancel&plan=${plan}&interval=${interval}`,
+      allow_promotion_codes: true,
+      // We're the merchant of record (Stripe-direct), so charge the right
+      // VAT/sales tax. automatic_tax needs the customer's address, so collect it at
+      // checkout and persist it onto the customer for the portal + invoices.
+      automatic_tax: { enabled: true },
+      billing_address_collection: "required",
+      customer_update: { address: "auto", name: "auto" },
+      tax_id_collection: { enabled: true },
+      metadata: { workspace_id: workspace.id, workspace_slug: workspace.slug, plan },
+      subscription_data: { metadata: { workspace_id: workspace.id, plan } },
     });
-    customerId = customer.id;
-    await db.update(workspaces)
-      .set({ stripeCustomerId: customerId })
-      .where(eq(workspaces.id, workspace.id));
+
+    if (!session.url) return { ok: false, error: "Stripe did not return a checkout URL." };
+    return { ok: true, url: session.url };
+  } catch (err) {
+    log.error("stripe checkout failed", { scope: "crumb/stripe", workspaceId: workspace.id, err });
+    return { ok: false, error: STRIPE_UNREACHABLE };
   }
-
-  const session = await stripe.checkout.sessions.create({
-    customer: customerId,
-    mode: "subscription",
-    line_items: [{ price: priceId, quantity: 1 }],
-    success_url: `${origin}/settings/billing?stripe=success`,
-    cancel_url:  `${origin}/settings/billing?stripe=cancel&plan=${plan}&interval=${interval}`,
-    allow_promotion_codes: true,
-    // We're the merchant of record (Stripe-direct), so charge the right
-    // VAT/sales tax. automatic_tax needs the customer's address, so collect it at
-    // checkout and persist it onto the customer for the portal + invoices.
-    automatic_tax: { enabled: true },
-    billing_address_collection: "required",
-    customer_update: { address: "auto", name: "auto" },
-    tax_id_collection: { enabled: true },
-    metadata: { workspace_id: workspace.id, workspace_slug: workspace.slug, plan },
-    subscription_data: { metadata: { workspace_id: workspace.id, plan } },
-  });
-
-  if (!session.url) return { ok: false, error: "Stripe did not return a checkout URL." };
-  return { ok: true, url: session.url };
 }
 
-// Active subscribers click "Manage" to open the Stripe Customer Portal
-// (handles invoices, payment method, cancellation). Return URL brings
-// them back to /settings/billing.
-export async function createPortalSession(): Promise<CheckoutResult> {
+// Active subscribers open the Stripe Customer Portal: "Manage" for invoices,
+// payment method and cancellation, and "Upgrade" (changePlan) straight into
+// its plan-change flow for the current subscription, so a subscriber moves
+// plans instead of buying a second one. Return URL brings them back to
+// /settings/billing.
+export async function createPortalSession(changePlan?: boolean): Promise<CheckoutResult> {
   if (!isCloud()) return { ok: false, error: "Billing is a Cloud-only feature." };
   const { workspace, user } = await requireSession();
   if (user.role !== "admin") return { ok: false, error: "Only admins can manage billing." };
@@ -118,10 +129,26 @@ export async function createPortalSession(): Promise<CheckoutResult> {
   const origin = originFromHeaders(headers());
   if (!origin) return { ok: false, error: "Could not determine host." };
 
-  const session = await stripe.billingPortal.sessions.create({
-    customer: workspace.stripeCustomerId,
-    return_url: STRIPE_PORTAL_RETURN_URL(`${origin}/settings/billing`),
-  });
+  const portal = { customer: workspace.stripeCustomerId, return_url: STRIPE_PORTAL_RETURN_URL(`${origin}/settings/billing`) };
+  if (changePlan === true && workspace.stripeSubscriptionId) {
+    // Stripe refuses the flow when the portal's settings don't allow plan
+    // changes; the portal itself opens instead.
+    try {
+      const flow = await stripe.billingPortal.sessions.create({
+        ...portal,
+        flow_data: { type: "subscription_update", subscription_update: { subscription: workspace.stripeSubscriptionId } },
+      });
+      return { ok: true, url: flow.url };
+    } catch (err) {
+      log.warn("stripe plan-change flow unavailable, opening the portal", { scope: "crumb/stripe", workspaceId: workspace.id, err });
+    }
+  }
 
-  return { ok: true, url: session.url };
+  try {
+    const session = await stripe.billingPortal.sessions.create(portal);
+    return { ok: true, url: session.url };
+  } catch (err) {
+    log.error("stripe portal session failed", { scope: "crumb/stripe", workspaceId: workspace.id, err });
+    return { ok: false, error: STRIPE_UNREACHABLE };
+  }
 }

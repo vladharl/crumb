@@ -4,9 +4,11 @@ import { errorMessage } from "@/lib/action-error";
 import { emailNote, statusToast } from "@/app/(app)/inbox/RowActionMenu";
 
 // RowActionMenu.tsx is a client component that also imports the inbox server
-// actions; stub those so its status helpers load under node.
+// actions (and, through the composer, the thread's); stub those so its status
+// helpers load under node.
 vi.mock("@/app/(app)/inbox/actions", () => ({}));
 vi.mock("@/app/(app)/initiatives/actions", () => ({}));
+vi.mock("@/app/(app)/thread/[shortId]/actions", () => ({}));
 
 describe("inbox status writes", () => {
   it("toasts what the write actually did", () => {

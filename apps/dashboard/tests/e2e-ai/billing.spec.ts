@@ -114,3 +114,17 @@ test("integrations shows the admin a neutral upgrade notice with See plans", asy
     page.getByRole("note").filter({ hasText: "The Growth plan adds session replay." }).getByRole("link", { name: "See plans" }),
   ).toHaveAttribute("href", "/settings/billing?plan=growth");
 });
+
+test("a Team subscriber's notice says Change plan, and billing offers Growth above it", async ({ page }) => {
+  psql(`UPDATE workspaces SET plan_id = 'team', subscription_status = 'active' WHERE ${WS}`);
+  await page.goto("/settings/integrations");
+  await page.getByRole("note").filter({ hasText: "The Growth plan adds session replay." })
+    .getByRole("link", { name: "Change plan" }).click();
+
+  await expect(page).toHaveURL(/\/settings\/billing\?plan=growth$/);
+  // Only the plan above Team, preselected. (Its Upgrade button opens the Stripe
+  // portal, so it shows only where Stripe is configured; not in e2e.)
+  await expect(planCard(page, "Growth")).toBeVisible();
+  await expect(planCard(page, "Team")).toHaveCount(0);
+  expect(await picked(planCard(page, "Growth"))).toBe(true);
+});
