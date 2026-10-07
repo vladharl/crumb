@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { createServer, type Server } from "node:http";
+import { psql } from "./helpers/mint";
 
 // End-to-end for the MCP server + the central event system. We:
 //   1. Mint an API key through the settings UI (capturing the once-shown raw key).
@@ -97,4 +98,8 @@ test("MCP key mints, tools work, and a status write fans out an event", async ({
   await expect
     .poll(() => received.find((r) => r.event === "item.status_changed")?.body ?? "", { timeout: 15_000 })
     .toContain("FB-247");
+
+  // Remove the receiver's endpoint so later status changes in this run don't
+  // fail against a closed port.
+  psql("DELETE FROM webhook_endpoints WHERE url LIKE 'http://localhost:3941%'");
 });

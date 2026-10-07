@@ -45,6 +45,9 @@ export default defineConfig({
       CRUMB_INBOUND_DOMAIN: "crumb.test",
       CRUMB_WEBHOOK_ALLOW_ANY: "1",
       SLACK_SIGNING_SECRET: "e2e-slack-signing",
+      // Links and redirects the app builds (magic links, OAuth callbacks, signed
+      // attachment URLs) must point back at this server, not a .env.local host.
+      CRUMB_APP_URL: baseURL,
     },
   },
 });
