@@ -4,18 +4,23 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useTra
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { navigateWithTrailMorph } from "@/lib/view-transition";
-import { Avatar, BrandMark, Btn, Card, Dropdown, Ic, Pill, StatusPill, TypeChip, trailProgress } from "@crumb/ui";
+import {
+  Avatar, BrandMark, Btn, Card, Dropdown, Ic, Pill, StatusPill, TypeChip, trailProgress, statusLabel,
+  REASON_REQUIRED, VENDOR_STATUS_OPTIONS,
+} from "@crumb/ui";
 import type { Status, TypeKind } from "@crumb/ui";
 import { loopTurn, waitingDays, waitingSince, type LoopTurn, type ReplySide } from "@/lib/loop";
 import { priority, byPriorityDesc, formatArr, type Priority } from "@/lib/priority";
 import { gmailTime } from "@/lib/timefmt";
 import { splitTerms, matchesTerms } from "@/lib/fuzzy";
+import { errorMessage } from "@/lib/action-error";
+import { statusEmailsCustomer } from "@/lib/notify/customer-plan";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm";
 import { bulkAssign, bulkUpdateStatus, acceptTriageAssignee, dismissTriage } from "./actions";
 import { bulkSetInitiative, clusterItems, acceptSuggestion, dismissSuggestion } from "../initiatives/actions";
 import { InitiativeChip } from "../initiatives/InitiativeChip";
-import { RowActionMenu } from "./RowActionMenu";
+import { RowActionMenu, ReasonForm, emailNote, statusToast } from "./RowActionMenu";
 import { RowReplyDrawer } from "./RowReplyDrawer";
 
 export type TriageAssignee = { id: string; initials: string; name: string };
@@ -92,34 +97,8 @@ export type InitiativeOption = {
   status: string;
 };
 
-const STATUS_OPTIONS: Array<{ value: Status; label: string }> = [
-  { value: "open",      label: "Open" },
-  { value: "review",    label: "In review" },
-  { value: "planned",   label: "Planned" },
-  { value: "progress",  label: "In progress" },
-  { value: "shipped",   label: "Shipped" },
-  { value: "declined",  label: "Won’t ship" },
-  { value: "deferred",  label: "Set aside" },
-  { value: "duplicate", label: "Duplicate" },
-];
-
-const STATUS_LABEL: Record<string, string> = Object.fromEntries(STATUS_OPTIONS.map(s => [s.value, s.label]));
-
 const INITIATIVE_ANY = "__any";
 const INITIATIVE_NONE = "__none";
-
-// Friendly text for the server actions' error codes — so a failed write
-// surfaces a real explanation instead of failing silently.
-function errorMessage(code: string): string {
-  switch (code) {
-    case "forbidden":     return "You don't have permission to do that.";
-    case "no_items":      return "Nothing was selected.";
-    case "bad_status":    return "That status isn't allowed.";
-    case "bad_assignee":  return "That assignee isn't in this workspace.";
-    case "no_initiatives":return "Create an initiative first.";
-    default:              return "Something went wrong. Nothing was changed.";
-  }
-}
 
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
@@ -210,7 +189,7 @@ function InboxEmpty({
   // Waiting / Closed / other tabs at zero — accurate and quiet, no fanfare.
   const sub =
     tab === "waiting" ? "Nothing’s waiting on a customer right now."
-    : tab === "closed" ? "No closed loops yet. They collect here once the customer hears the outcome."
+    : tab === "closed" ? "No closed loops yet. They collect here once an item reaches an outcome."
     : "Nothing here yet.";
   return (
     <div className="inbox-empty quiet" role="cell">
@@ -225,7 +204,8 @@ function InboxEmpty({
 const RENDER_WINDOW = 60;
 
 export function InboxTable({
-  rows, assignees, meId, canWrite, aiEntitled, initiatives, canManageInitiatives, clusterEnabled, nowMs: serverNowMs,
+  rows, assignees, meId, canWrite, aiEntitled, initiatives, canManageInitiatives, clusterEnabled, emailConfigured,
+  nowMs: serverNowMs,
 }: {
   rows: InboxRow[];
   assignees: Assignee[];
@@ -235,6 +215,9 @@ export function InboxTable({
   initiatives: InitiativeOption[];
   canManageInitiatives: boolean;
   clusterEnabled: boolean;
+  // A real email provider is set up (emailConfigured() in lib/email). Without
+  // one, the status notes never promise an email.
+  emailConfigured: boolean;
   nowMs: number;
 }) {
   const router = useRouter();
@@ -261,6 +244,10 @@ export function InboxTable({
   const searchParams = useSearchParams();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // The reason-required status the bulk bar is asking a reason for. It goes
+  // with the selection: emptying the selection drops it.
+  const [bulkReason, setBulkReason] = useState<string | null>(null);
+  if (selected.size === 0 && bulkReason !== null) setBulkReason(null);
   const [pending, startTransition] = useTransition();
   // Working state seeds from the URL so a refresh or an accidental back-nav
   // returns you to the same tab / search / initiative — you don't lose your place.
@@ -291,14 +278,20 @@ export function InboxTable({
     () => (optStatus.size === 0 ? rows : rows.map(r => (optStatus.has(r.id) ? { ...r, status: optStatus.get(r.id)! } : r))),
     [rows, optStatus],
   );
+  // Ids from a write that partly failed. Its result has counts, not ids, so the
+  // refreshed server rows decide: these entries drop when the next rows land.
+  const unsettled = useRef<Set<string>>(new Set());
   // Retire overlay entries the server has caught up to (keeps the map from
-  // growing and lets a later real change through cleanly).
+  // growing and lets a later real change through cleanly), plus unsettled ones.
   useEffect(() => {
+    const drop = unsettled.current;
+    unsettled.current = new Set();
     setOptStatus(prev => {
       if (prev.size === 0) return prev;
       let changed = false;
       const next = new Map(prev);
       for (const r of rows) if (next.get(r.id) === r.status) { next.delete(r.id); changed = true; }
+      for (const id of drop) if (next.delete(id)) changed = true;
       return changed ? next : prev;
     });
   }, [rows]);
@@ -542,39 +535,54 @@ export function InboxTable({
   // ── Bulk writes: every one confirms what changed (with Undo) or surfaces the
   //    failure, so the inbox's core write path is never silent or one-way. ──
 
-  function applyStatus(status: string) {
+  // Status writes go through the real pipeline (status_events, webhooks, and
+  // an email to the customer for outcomes), so a reason comes first where the
+  // pipeline needs one, and a bulk move that emails confirms first, plainly.
+  function chooseStatus(status: string) {
     if (!status || selected.size === 0) return;
+    if (REASON_REQUIRED.has(status)) { setBulkReason(status); return; }
+    setBulkReason(null);
+    if (!statusEmailsCustomer(status)) { applyStatus(status); return; }
+    const label = statusLabel(status);
+    void confirm({
+      title: `Move ${plural(selected.size, "item")} to ${label}?`,
+      body: emailNote(selected.size, emailConfigured),
+      confirmLabel: `Move to ${label}`,
+    }).then(ok => { if (ok) applyStatus(status); });
+  }
+
+  // One status write, with the overlay reconciled to what the server did:
+  // nothing written snaps the rows back now; a partial failure lets the
+  // refreshed server rows decide (see `unsettled`).
+  async function writeStatus(ids: string[], status: string, reason?: string) {
+    const res = await bulkUpdateStatus(ids, status, reason);
+    if (!res.ok) setOptimisticStatus(ids, null);
+    else if (res.failed > 0) for (const id of ids) unsettled.current.add(id);
+    return res;
+  }
+
+  function applyStatus(status: string, reason?: string) {
+    if (selected.size === 0) return;
     const ids = Array.from(selected);
     const prev = new Map<string, string>();
     for (const r of rows) if (selected.has(r.id)) prev.set(r.id, r.status);
-    const run = () => {
-      setOptimisticStatus(ids, status);   // paint the move on this frame
-      startTransition(async () => {
-        const res = await bulkUpdateStatus(ids, status);
-        if (res.ok) {
-          clearSelection();
-          router.refresh();
-          toast.show({
-            message: `${plural(ids.length, "item")} set to ${STATUS_LABEL[status] ?? status}.`,
-            action: { label: "Undo", onClick: () => undoStatus(prev) },
-          });
-        } else {
-          setOptimisticStatus(ids, null);   // write failed — snap back
-          toast.show({ message: errorMessage(res.error), tone: "error" });
-        }
-      });
-    };
-    // "Won't ship" closes the loop in the customer's eyes — confirm it.
-    if (status === "declined") {
-      void confirm({
-        title: `Mark ${plural(ids.length, "item")} as “Won't ship”?`,
-        body: "The customer sees this as a closed loop. You can undo right after.",
-        confirmLabel: "Won't ship",
-        destructive: true,
-      }).then(ok => { if (ok) run(); });
-      return;
-    }
-    run();
+    setOptimisticStatus(ids, status);   // paint the move on this frame
+    startTransition(async () => {
+      const res = await writeStatus(ids, status, reason);
+      const outcome = statusToast(res, statusLabel(status));
+      // Nothing was written: keep the selection (and an open reason form, with
+      // its text) for a retry.
+      if (!res.ok) { toast.show(outcome); return; }
+      setBulkReason(null);
+      clearSelection();
+      router.refresh();
+      // Undo only when it's clean: no email went out and none would on the way
+      // back, so only between the quiet triage statuses (open, review). Undoing
+      // anything else would email the customer again or need a reason.
+      const undoable = res.failed === 0 && !statusEmailsCustomer(status)
+        && [...prev.values()].every(s => s === "open" || s === "review");
+      toast.show(undoable ? { ...outcome, action: { label: "Undo", onClick: () => undoStatus(prev) } } : outcome);
+    });
   }
 
   function undoStatus(prev: Map<string, string>) {
@@ -586,13 +594,14 @@ export function InboxTable({
       setOptimisticStatus([id], st);   // paint the revert immediately too
     }
     startTransition(async () => {
-      let okAll = true;
+      let err: string | null = null;
       for (const [st, ids] of byStatus) {
-        const res = await bulkUpdateStatus(ids, st);
-        if (!res.ok) okAll = false;
+        const res = await writeStatus(ids, st);
+        if (!res.ok) err ??= res.error;
+        else if (res.failed > 0) err ??= res.firstError ?? "";
       }
       router.refresh();
-      toast.show(okAll ? { message: "Reverted." } : { message: "Couldn't fully revert.", tone: "error" });
+      toast.show(err === null ? { message: "Reverted." } : { message: `Couldn't fully revert. ${errorMessage(err)}`, tone: "error" });
     });
   }
 
@@ -626,13 +635,13 @@ export function InboxTable({
       byAssignee.set(a, arr);
     }
     startTransition(async () => {
-      let okAll = true;
+      let err: string | null = null;
       for (const [a, ids] of byAssignee) {
         const res = await bulkAssign(ids, a);
-        if (!res.ok) okAll = false;
+        if (!res.ok) err ??= res.error;
       }
       router.refresh();
-      toast.show(okAll ? { message: "Reverted." } : { message: "Couldn't fully revert.", tone: "error" });
+      toast.show(err === null ? { message: "Reverted." } : { message: `Couldn't fully revert. ${errorMessage(err)}`, tone: "error" });
     });
   }
 
@@ -666,13 +675,13 @@ export function InboxTable({
       byInitiative.set(init, arr);
     }
     startTransition(async () => {
-      let okAll = true;
+      let err: string | null = null;
       for (const [init, ids] of byInitiative) {
         const res = await bulkSetInitiative(ids, init);
-        if (!res.ok) okAll = false;
+        if (!res.ok) err ??= res.error;
       }
       router.refresh();
-      toast.show(okAll ? { message: "Reverted." } : { message: "Couldn't fully revert.", tone: "error" });
+      toast.show(err === null ? { message: "Reverted." } : { message: `Couldn't fully revert. ${errorMessage(err)}`, tone: "error" });
     });
   }
 
@@ -750,7 +759,7 @@ export function InboxTable({
                 role="tab"
                 aria-selected={tab === "closed"}
                 onClick={() => setTab("closed")}
-                title="The customer heard the outcome: shipped, won't ship, or merged"
+                title="Loops with an outcome: shipped, won't ship, duplicate, or closed by the customer"
               >Closed · {turnCounts.closed}</button>
               <button role="tab" aria-selected={tab === "mine"} onClick={() => setTab("mine")}>Mine · {mineCount}</button>
               <button role="tab" aria-selected={tab === "all"}  onClick={() => setTab("all")}>All · {scopedRows.length}</button>
@@ -759,7 +768,7 @@ export function InboxTable({
               <Ic.search style={{ width: 13, height: 13, color: "var(--mute)" }} />
               <input
                 className="input search"
-                placeholder="Search everything — titles, comments, people…"
+                placeholder="Search everything: titles, comments, people…"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 aria-label="Search feedback, comments, and people"
@@ -845,8 +854,8 @@ export function InboxTable({
               placeholder="Set status…"
               value={null}
               disabled={pending}
-              onChange={applyStatus}
-              options={STATUS_OPTIONS.map(s => ({ value: s.value, label: s.label }))}
+              onChange={chooseStatus}
+              options={[...VENDOR_STATUS_OPTIONS]}
             />
           </label>
 
@@ -891,6 +900,20 @@ export function InboxTable({
 
           <div style={{ flex: 1 }} />
           <Btn sm variant="ghost" onClick={clearSelection} disabled={pending}>Clear</Btn>
+
+          {/* Full-width last child, so the reason step wraps under the controls. */}
+          {bulkReason && (
+            <div style={{ flexBasis: "100%" }}>
+              <ReasonForm
+                status={bulkReason}
+                count={selected.size}
+                emailConfigured={emailConfigured}
+                pending={pending}
+                onCancel={() => setBulkReason(null)}
+                onSubmit={reason => applyStatus(bulkReason, reason)}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -1142,6 +1165,7 @@ export function InboxTable({
                         initiatives={initiatives}
                         canWrite={canWrite}
                         canManageInitiatives={canManageInitiatives}
+                        emailConfigured={emailConfigured}
                         onStatusOptimistic={s => setOptimisticStatus([it.id], s)}  // s===null reverts
                       />
                     </div>

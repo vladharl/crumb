@@ -3,6 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Pill } from "@crumb/ui";
+import { useToast } from "@/components/toast";
+import { errorMessage } from "@/lib/action-error";
 import { setAccountArr } from "../actions";
 
 // Display matches the server `arr()` formatter: $X.XM / $Xk / "Set ARR".
@@ -20,6 +22,7 @@ export function AccountArrEdit({ accountId, arrCents, canEdit }: {
   canEdit: boolean;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [cents, setCents] = useState(arrCents);
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState("");
@@ -43,7 +46,10 @@ export function AccountArrEdit({ accountId, arrCents, canEdit }: {
     startTransition(async () => {
       const r = await setAccountArr(accountId, next);
       if (r.ok) { setCents(r.arrCents); router.refresh(); }
-      else setCents(prev); // revert
+      else {
+        setCents(prev); // revert
+        toast.show({ message: errorMessage(r.error), tone: "error" });
+      }
     });
   }
 

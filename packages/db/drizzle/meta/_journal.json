@@ -162,6 +162,13 @@
       "when": 1791299553956,
       "tag": "0022_purple_rachel_grey",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1791340619012,
+      "tag": "0023_empty_rumiko_fujikawa",
+      "breakpoints": true
     }
   ]
 }

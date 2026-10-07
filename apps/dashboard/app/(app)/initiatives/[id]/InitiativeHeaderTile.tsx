@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Card, PageHead, Pill } from "@crumb/ui";
+import { Card, PageHead, Pill, STATUS_LABELS } from "@crumb/ui";
 import { db, initiatives, items, workspaceUsers } from "@crumb/db";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
+import { notMergedSql } from "@/lib/loop-sql";
+import { statusMix } from "@/lib/insights/status-mix";
 import { usageAnalyticsAllowed } from "@/lib/entitlements";
 import { knownEventNames } from "@/lib/usage/signals";
 import { InitiativeStatusPill } from "../InitiativeChip";
@@ -16,6 +18,7 @@ async function loadHeader(workspaceId: string, id: string) {
       shortId: initiatives.shortId,
       name: initiatives.name,
       description: initiatives.description,
+      internalNotes: initiatives.internalNotes,
       status: initiatives.status,
       color: initiatives.color,
       createdAt: initiatives.createdAt,
@@ -31,30 +34,15 @@ async function loadHeader(workspaceId: string, id: string) {
     .limit(1);
   if (!row) return null;
 
-  const [statsRows, [{ count: total }]] = await Promise.all([
-    db
-      .select({ status: items.status, count: sql<number>`COUNT(*)::int` })
-      .from(items)
-      .where(eq(items.initiativeId, id))
-      .groupBy(items.status),
-    db
-      .select({ count: sql<number>`COUNT(*)::int` })
-      .from(items)
-      .where(eq(items.initiativeId, id)),
-  ]);
+  // Unmerged items only; the KPIs below add up to the total.
+  const statsRows = await db
+    .select({ status: items.status, count: sql<number>`COUNT(*)::int` })
+    .from(items)
+    .where(and(eq(items.initiativeId, id), notMergedSql(items.mergedIntoId)))
+    .groupBy(items.status);
+  const stats = statusMix(statsRows);
 
-  const m = new Map(statsRows.map(r => [r.status, r.count]));
-  const get = (s: string) => m.get(s) ?? 0;
-  const stats = {
-    open: get("open") + get("review"),
-    progress: get("planned") + get("progress"),
-    shipped: get("shipped"),
-    declined: get("declined"),
-    deferred: get("deferred"),
-    duplicate: get("duplicate"),
-  };
-
-  return { initiative: row, stats, total };
+  return { initiative: row, stats, total: stats.total };
 }
 
 export async function InitiativeHeaderTile({ id }: { id: string }) {
@@ -93,6 +81,7 @@ export async function InitiativeHeaderTile({ id }: { id: string }) {
               id: initiative.id,
               name: initiative.name,
               description: initiative.description,
+              internalNotes: initiative.internalNotes,
               status: initiative.status,
               color: initiative.color,
               ownerWorkspaceUserId: initiative.ownerWorkspaceUserId,
@@ -127,12 +116,15 @@ export async function InitiativeHeaderTile({ id }: { id: string }) {
               {total} {total === 1 ? "item" : "items"} grouped here.
             </div>
           </div>
-          <div className="row gap-6" style={{ alignItems: "flex-end" }}>
+          <div className="row gap-6" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
             {[
               [String(stats.open),     "Open"],
               [String(stats.progress), "In progress"],
-              [String(stats.shipped),  "Shipped"],
-              [String(stats.declined + stats.deferred + stats.duplicate), "Closed"],
+              [String(stats.shipped),  STATUS_LABELS.shipped],
+              // Closed without shipping: declined, duplicate, or closed by the customer.
+              [String(stats.declined + stats.otherClosed), "Closed"],
+              // Set aside is paused, not closed: the loop is still open.
+              [String(stats.deferred), STATUS_LABELS.deferred],
             ].map(([n, l]) => (
               <div key={l} className="kpi" style={{ alignItems: "center" }}>
                 <span className="num">{n}</span>

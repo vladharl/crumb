@@ -17,7 +17,9 @@ import { open } from "@/lib/crypto-at-rest";
 import { consumeAi } from "@/lib/usage";
 import { IntegrationAuthError, clearProviderInstall } from "@/lib/integrations/revoke";
 import { emitEvent } from "@/lib/webhooks";
-import { createItemReply, updateItemStatus, assignItemTo, type Status, type VendorRole } from "@/lib/items/mutations";
+import {
+  createItemReply, updateItemStatus, replyAndSetItemStatus, assignItemTo, type Status, type VendorRole,
+} from "@/lib/items/mutations";
 import { log } from "@/lib/log";
 
 // On a provider auth failure (revoked/expired token), clear the install so
@@ -35,6 +37,8 @@ async function handleRevoke(err: unknown, workspaceId: string): Promise<{ ok: fa
 // Thin session-bound wrappers over the shared cores in lib/items/mutations.ts.
 // They resolve the dashboard session into a VendorActor + origin, delegate, and
 // own the Next cache invalidation (revalidatePath can't run from the MCP path).
+// On success, `emailed` says whether a real provider accepted an email to the
+// customer (never on stdout), so the UI never has to guess.
 
 export async function createReply(input: {
   itemShortId: string;
@@ -69,6 +73,26 @@ export async function updateStatus(input: {
     revalidatePath("/inbox");
   }
   return r;
+}
+
+// Reply and close in one action: posts the reply, sets shipped/declined, and
+// sends the customer one email (the outcome with the reply in it). For
+// declined, the reply is the reason.
+export async function replyAndSetStatus(input: {
+  itemShortId: string;
+  body: string;
+  status: "shipped" | "declined";
+  attachmentIds?: string[];
+}): Promise<{ ok: true; emailed: boolean } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  const r = await replyAndSetItemStatus(
+    { workspaceId: workspace.id, actorWorkspaceUserId: user.id, role: user.role as VendorRole },
+    { ...input, origin: originFromHeaders(headers()) },
+  );
+  if (!r.ok) return r;
+  revalidatePath(`/thread/${input.itemShortId}`);
+  revalidatePath("/inbox");
+  return { ok: true, emailed: r.emailed };
 }
 
 // ─── single-item properties (assignee / type) ────────────────

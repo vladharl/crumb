@@ -3,12 +3,12 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Avatar, Btn, Ic, Pill, StatusDot, StatusPill, TrailDots, trailProgress } from "@crumb/ui";
+import { Avatar, Btn, Ic, Pill, REASON_PLACEHOLDER, StatusDot, StatusPill, TrailDots, trailProgress, statusLabel } from "@crumb/ui";
 import type { Status } from "@crumb/ui";
 import { LOOP_CLOSED_STATUSES } from "@/lib/loop";
 import { useToast } from "@/components/toast";
-import { ReplyComposer } from "@/components/ReplyComposer";
-import { updateStatus, translateItem } from "@/app/(app)/thread/[shortId]/actions";
+import { ReplyComposer, useStatusMove, runAction, firstName } from "@/components/ReplyComposer";
+import { translateItem } from "@/app/(app)/thread/[shortId]/actions";
 import { getReplyContext, type ReplyContext, type ReplyDrawerMessage } from "./reply-actions";
 import type { InboxRow } from "./InboxTable";
 
@@ -33,10 +33,6 @@ function humanBytes(b: number): string {
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
   return `${(b / 1024 / 1024).toFixed(1)} MB`;
 }
-
-const STATUS_LABEL: Partial<Record<string, string>> = {
-  shipped: "Shipped", declined: "Won’t ship", duplicate: "Duplicate",
-};
 
 function ConvoMessage({ m, accountName, i }: { m: ReplyDrawerMessage; accountName: string; i: number }) {
   return (
@@ -86,19 +82,23 @@ export function RowReplyDrawer({
   const [ctx, setCtx] = useState<ReplyContext | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [tab, setTab] = useState<"customer" | "internal">("customer");
-  const [closePending, startClose] = useTransition();
   const [reasonOpen, setReasonOpen] = useState(false);
+  // Kept until the move lands, so an undone Won't ship reopens with its reason.
   const [reason, setReason] = useState("");
-  const [reasonError, setReasonError] = useState<string | null>(null);
   const [showTranslation, setShowTranslation] = useState(false);
   const [translating, startTranslate] = useTransition();
   const alive = useRef(true);
+  const first = firstName(row.submitterName);
 
   async function load() {
-    const res = await getReplyContext(row.shortId);
-    if (!alive.current) return;
-    if (res.ok) { setCtx(res.context); setLoadError(false); }
-    else setLoadError(true);
+    try {
+      const res = await getReplyContext(row.shortId);
+      if (!alive.current) return;
+      if (res.ok) { setCtx(res.context); setLoadError(false); }
+      else setLoadError(true);
+    } catch {
+      if (alive.current) setLoadError(true);
+    }
   }
 
   useEffect(() => {
@@ -109,54 +109,48 @@ export function RowReplyDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row.shortId]);
 
-  const closed = LOOP_CLOSED_STATUSES.has(row.status);
-  const progress = trailProgress({ status: row.status, vendorReplied: row.vendorReplied });
+  // Close-the-loop moves: shown at once; one that emails waits behind an Undo
+  // toast, and the drawer collapses once the move lands (useStatusMove). Until
+  // the context loads the plan is unknown, so the buttons wait for it.
+  const statusMove = useStatusMove({
+    itemShortId: row.shortId,
+    status: row.status,
+    first,
+    source: row.source,
+    plan: ctx?.notifyPlan.status ?? { willEmail: true },
+    onMoved: () => {
+      setReason("");
+      if (alive.current) onCollapse();
+    },
+  });
+  const shown = statusMove.shown;
+  const closed = LOOP_CLOSED_STATUSES.has(shown);
+  const progress = trailProgress({ status: shown, vendorReplied: row.vendorReplied });
   const messages = tab === "customer" ? ctx?.customerMessages : ctx?.internalMessages;
   const atCap = (messages?.length ?? 0) >= 5;
   const foreign = !!ctx?.detectedLang && ctx.detectedLang !== "en";
+  const closeDisabled = !ctx || statusMove.saving;
 
-  function onSent() {
-    // Reply landed: refresh the inbox so the row re-buckets (Your turn →
-    // Waiting) and re-pull the conversation so the new message appears.
+  function onSent(closedAs?: "shipped" | "declined") {
+    // Something landed (the composer toasts what): refresh the inbox so the
+    // row re-buckets (Your turn → Waiting / Closed), then re-pull the
+    // conversation, or collapse when the reply also closed the loop.
     onDraftChange("");
     router.refresh();
-    void load();
-    toast.show({ message: `Reply sent to ${row.submitterName}.` });
-  }
-
-  function markShipped() {
-    startClose(async () => {
-      const res = await updateStatus({ itemShortId: row.shortId, status: "shipped" });
-      if (res.ok) {
-        router.refresh();
-        toast.show({ message: `Marked Shipped · ${row.accountName} notified.` });
-        onCollapse();
-      } else {
-        toast.show({ message: "Couldn't update status. Nothing changed.", tone: "error" });
-      }
-    });
+    if (closedAs) onCollapse();
+    else void load();
   }
 
   function submitWontShip() {
     const r = reason.trim();
-    if (!r) { setReasonError("A reason is required so the customer sees the why."); return; }
-    startClose(async () => {
-      const res = await updateStatus({ itemShortId: row.shortId, status: "declined", reason: r });
-      if (res.ok) {
-        router.refresh();
-        toast.show({ message: `Marked Won’t ship · ${row.accountName} notified.` });
-        onCollapse();
-      } else {
-        setReasonError(res.error === "reason_required" ? "A reason is required." : "Couldn't update status. Nothing changed.");
-      }
-    });
+    if (!r) return;
+    setReasonOpen(false);
+    void statusMove.move("declined", r);
   }
 
   function onTranslate() {
     startTranslate(async () => {
-      const res = await translateItem(row.shortId);
-      if (res.ok) { setShowTranslation(true); void load(); }
-      else toast.show({ message: "Couldn't translate this feedback.", tone: "error" });
+      if (await runAction(toast, () => translateItem(row.shortId))) { setShowTranslation(true); void load(); }
     });
   }
 
@@ -177,7 +171,7 @@ export function RowReplyDrawer({
           {/* ARR seeds instantly from the row — the revenue unit is visible the
               moment the drawer opens, before the conversation streams in. */}
           {row.arrAtStakeCents > 0 && <Pill ring>{formatArr(row.arrAtStakeCents)}</Pill>}
-          <StatusPill status={row.status as Status} />
+          <StatusPill status={shown as Status} />
           <TrailDots progress={progress} size={13} />
         </div>
         <div className="row gap-1 center" style={{ flexShrink: 0 }}>
@@ -248,12 +242,16 @@ export function RowReplyDrawer({
         )}
       </div>
 
+      {/* The tabs above only filter the conversation; who a message reaches
+          is the composer's own Reply / Internal note switch. */}
       {ctx && (
         <ReplyComposer
           itemShortId={row.shortId}
-          tab={tab}
+          status={shown}
           submitterName={row.submitterName}
           accountName={row.accountName}
+          source={row.source}
+          notifyPlan={ctx.notifyPlan}
           teammates={ctx.teammates}
           aiReplyAvailable={ctx.aiReplyAvailable}
           canWrite={canWrite}
@@ -269,34 +267,36 @@ export function RowReplyDrawer({
         closed ? (
           <div className="rd-foot rd-foot-closed">
             <Ic.check style={{ width: 13, height: 13, color: "var(--green)" }} />
-            <span className="text-xs muted">Loop closed · {STATUS_LABEL[row.status] ?? row.status}. Reopen from the thread.</span>
+            <span className="text-xs muted">Closed as {statusLabel(shown)}. Reopen from the thread.</span>
           </div>
         ) : reasonOpen ? (
           <div className="rd-foot col gap-2" style={{ alignItems: "stretch" }}>
-            <span className="eyebrow">Won’t ship: tell {row.submitterName} why</span>
+            <span className="eyebrow">Won’t ship: say why</span>
             <textarea
               className="input"
               rows={2}
               autoFocus
-              placeholder="e.g. We’re not building this in v2. The maintenance cost is too high for the use case."
+              aria-label="Reason for Won’t ship"
+              placeholder={REASON_PLACEHOLDER.declined}
               value={reason}
-              onChange={e => { setReason(e.target.value); setReasonError(null); }}
-              disabled={closePending}
+              onChange={e => setReason(e.target.value)}
+              disabled={closeDisabled}
             />
-            {reasonError && <span className="text-xs" style={{ color: "var(--err-text)" }}>{reasonError}</span>}
             <div className="row gap-2">
-              <Btn sm onClick={() => { setReasonOpen(false); setReason(""); setReasonError(null); }} disabled={closePending}>Cancel</Btn>
-              <Btn sm variant="primary" onClick={submitWontShip} disabled={closePending || !reason.trim()}>
-                {closePending ? "Saving…" : "Won’t ship & notify"}
+              <Btn sm onClick={() => { setReasonOpen(false); setReason(""); }} disabled={statusMove.saving}>Cancel</Btn>
+              <Btn sm variant="primary" onClick={submitWontShip} disabled={closeDisabled || !reason.trim()}>
+                Mark Won’t ship
               </Btn>
             </div>
           </div>
         ) : (
           <div className="rd-foot row gap-2 center" style={{ flexWrap: "wrap" }}>
             <span className="eyebrow">Close the loop</span>
+            {/* Both outcomes email the customer when their plan allows it. */}
+            {ctx?.notifyPlan.status.willEmail && <span className="text-2xs muted">emails {first}</span>}
             <div className="row gap-2 center" style={{ marginLeft: "auto" }}>
-              <Btn sm icon={<StatusDot status="shipped" />} onClick={markShipped} disabled={closePending}>Mark shipped</Btn>
-              <Btn sm icon={<StatusDot status="declined" />} onClick={() => setReasonOpen(true)} disabled={closePending}>Won’t ship</Btn>
+              <Btn sm icon={<StatusDot status="shipped" />} onClick={() => void statusMove.move("shipped")} disabled={closeDisabled}>Mark shipped</Btn>
+              <Btn sm icon={<StatusDot status="declined" />} onClick={() => setReasonOpen(true)} disabled={closeDisabled}>Won’t ship</Btn>
             </div>
           </div>
         )

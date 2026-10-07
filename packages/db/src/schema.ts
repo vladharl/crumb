@@ -399,7 +399,11 @@ export const initiatives = pgTable("initiatives", {
   seq: integer("seq").notNull(),
   shortId: varchar("short_id", { length: 16 }).notNull(),
   name: text("name").notNull(),
+  // Customer-facing: the public roadmap serves it and it seeds the changelog
+  // draft on ship. Team-only context goes in internal_notes, which must never
+  // be selected by a customer-facing route or email.
   description: text("description"),
+  internalNotes: text("internal_notes"),
   status: varchar("status", { length: 16 }).notNull().default("open"), // open | in_progress | shipped | parked
   color: varchar("color", { length: 16 }),
   // Public roadmap placement. null = not on the public roadmap; otherwise the

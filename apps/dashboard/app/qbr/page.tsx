@@ -4,13 +4,15 @@ import { db } from "@crumb/db";
 import { requireSession } from "@/lib/auth";
 import { hasFeature } from "@/lib/entitlements";
 import { accountRiskSignals, atRiskAccounts, atRiskArrCents } from "@/lib/insights/churn";
+import { loopOpenSql } from "@/lib/loop-sql";
 import { PrintButton } from "./PrintButton";
 
 export const dynamic = "force-dynamic";
 
 // Standalone, print-optimized Quarterly Business Review. Lives OUTSIDE the
 // (app) group so it has no dashboard chrome — clean for "Cmd-P → Save as PDF".
-// Covers the last 90 days. Reuses the same churn signals as Insights.
+// Covers the last 90 days. Reuses the same churn signals as Insights, and the
+// same counting: unmerged items only, open = not closed (Set aside included).
 
 function arr(cents: number): string {
   if (!cents) return "$0";
@@ -39,7 +41,7 @@ export default async function QbrPage() {
       select
         count(*) filter (where created_at >= now() - interval '90 days')::int as new_90,
         count(*) filter (where status = 'shipped' and updated_at >= now() - interval '90 days')::int as shipped_90,
-        count(*) filter (where status in ('open','review','planned','progress'))::int as open_now
+        count(*) filter (where ${loopOpenSql(sql`status`)})::int as open_now
       from items where workspace_id = ${ws}::uuid and merged_into_id is null
     `),
     db.execute(sql`
@@ -47,7 +49,7 @@ export default async function QbrPage() {
       from items i join (
         select item_id, min(at) as at from status_events where to_status in ('shipped','declined') group by item_id
       ) se on se.item_id = i.id
-      where i.workspace_id = ${ws}::uuid
+      where i.workspace_id = ${ws}::uuid and i.merged_into_id is null
     `),
     db.execute(sql`
       select ini.name as name, count(*)::int as n
@@ -57,10 +59,10 @@ export default async function QbrPage() {
     `),
     db.execute(sql`
       select a.id as id, a.name as name, a.arr_cents as arr_cents,
-        count(i.id) filter (where i.merged_into_id is null) as total,
-        count(i.id) filter (where i.status in ('open','review','planned','progress')) as open,
+        count(i.id) as total,
+        count(i.id) filter (where ${loopOpenSql(sql`i.status`)}) as open,
         count(i.id) filter (where i.status = 'shipped') as shipped
-      from accounts a left join items i on i.account_id = a.id
+      from accounts a left join items i on i.account_id = a.id and i.merged_into_id is null
       where a.workspace_id = ${ws}::uuid
       group by a.id, a.name, a.arr_cents
       order by a.arr_cents desc limit 15

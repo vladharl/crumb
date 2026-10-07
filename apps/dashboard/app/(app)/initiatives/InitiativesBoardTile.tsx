@@ -1,6 +1,7 @@
 import { db, initiatives, workspaceUsers } from "@crumb/db";
 import { asc, eq, sql } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
+import { loopOpenSql } from "@/lib/loop-sql";
 import { InitiativesBoard, type BoardItem } from "./InitiativesBoard";
 
 export async function InitiativesBoardTile() {
@@ -27,22 +28,22 @@ export async function InitiativesBoardTile() {
       )`,
       // Revenue at stake: ARR over the DISTINCT accounts with OPEN feedback in
       // this initiative — the same unit the inbox ranks on, rolled up. Open
-      // statuses only (shipped work is done); merged dupes excluded. Same
-      // fully-qualified-ref caveat as `followers` above. ::bigint → mapper
-      // Number()s it (a portfolio sum can exceed int4).
+      // loops only (not closed, Set aside included: lib/loop-sql); merged dupes
+      // excluded. Same fully-qualified-ref caveat as `followers` above.
+      // ::bigint → mapper Number()s it (a portfolio sum can exceed int4).
       arrAtStake: sql<string>`(
         SELECT COALESCE(SUM(a.arr_cents), 0)::bigint FROM (
           SELECT DISTINCT it.account_id FROM items it
           WHERE it.initiative_id = initiatives.id
             AND it.merged_into_id IS NULL
-            AND it.status IN ('open','review','planned','progress')
+            AND ${loopOpenSql(sql`it.status`)}
         ) g JOIN accounts a ON a.id = g.account_id
       )`,
       accountCount: sql<number>`(
         SELECT COUNT(DISTINCT it.account_id)::int FROM items it
         WHERE it.initiative_id = initiatives.id
           AND it.merged_into_id IS NULL
-          AND it.status IN ('open','review','planned','progress')
+          AND ${loopOpenSql(sql`it.status`)}
       )`,
     })
     .from(initiatives)

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, eq, sql } from "drizzle-orm";
 import { db, workspaces, accounts, accountUsers } from "@crumb/db";
+import { CLOSED_STATUSES } from "@crumb/ui";
 import { verifySlackSignature } from "@/lib/slack/verify";
 import { sendDirectMessage, getSlackUserEmail, escapeSlackText } from "@/lib/slack/notify";
 import { open } from "@/lib/crypto-at-rest";
@@ -75,11 +76,6 @@ type SlackEnvelope = {
   team_id?: string;
   event?: SlackMentionEvent;
 };
-
-// Terminal statuses — a "similar OPEN request" excludes these. dedup already
-// drops merged items + 'duplicate'; the rest we filter here. Mirrors the CLOSED
-// set in lib/items/mutations.ts.
-const CLOSED_STATUSES = new Set(["shipped", "declined", "deferred", "duplicate"]);
 
 async function processAppMention(teamId: string | undefined, event: SlackMentionEvent) {
   try {
@@ -229,6 +225,8 @@ async function findSimilar(
   if (!vec) return empty;
 
   const candidates = await findDuplicatesForVector({ workspaceId, vec, limit: 5, threshold: 0.6 });
+  // Open loops only, by the shared closed set (resolved is closed, Set aside
+  // stays open). dedup already drops merged items + 'duplicate'.
   const openCandidates = candidates.filter(c => !CLOSED_STATUSES.has(c.status));
   if (openCandidates.length === 0) return empty;
 

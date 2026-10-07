@@ -1,6 +1,7 @@
 import "server-only";
 import { sql } from "drizzle-orm";
 import { db } from "@crumb/db";
+import { loopOpenSql } from "@/lib/loop-sql";
 
 // Sentiment + churn-risk signals (feature 6). Aggregates the AI sentiment /
 // urgency / severity that triage (#3) writes onto items, per account, into a
@@ -43,7 +44,8 @@ type Row = {
   prior_active_days: number | string | null;
 };
 
-const OPEN_STATUSES = sql`('open','review','planned','progress')`;
+// Open loop = not closed (Set aside included), the same set as the inbox.
+const OPEN = loopOpenSql(sql`i.status`);
 
 export async function accountRiskSignals(workspaceId: string): Promise<AccountRisk[]> {
   const rows = (await db.execute(sql`
@@ -54,9 +56,9 @@ export async function accountRiskSignals(workspaceId: string): Promise<AccountRi
         WHERE i.created_at <= now() - interval '30 days' AND i.created_at > now() - interval '60 days'
       ) AS prior_sentiment,
       MAX(i.ai_urgency) FILTER (WHERE i.created_at > now() - interval '90 days') AS max_urgency,
-      COUNT(*) FILTER (WHERE i.status IN ${OPEN_STATUSES}) AS open_count,
+      COUNT(*) FILTER (WHERE ${OPEN}) AS open_count,
       COUNT(*) FILTER (
-        WHERE i.ai_severity IN ('high','critical') AND i.status IN ${OPEN_STATUSES}
+        WHERE i.ai_severity IN ('high','critical') AND ${OPEN}
       ) AS open_severe,
       u.recent_active_days AS recent_active_days,
       u.prior_active_days AS prior_active_days

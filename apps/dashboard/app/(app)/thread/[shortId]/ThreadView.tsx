@@ -3,10 +3,16 @@
 import { useMemo, useState, useTransition, type CSSProperties } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Avatar, Btn, Card, CardHead, Dropdown, Ic, PageHead, Pill, StatusDot, StatusPill, TrailDots, trailProgress } from "@crumb/ui";
-import type { Status } from "@crumb/ui";
-import { updateStatus, translateItem, assignItem, updateType } from "./actions";
-import { ReplyComposer } from "@/components/ReplyComposer";
+import {
+  Avatar, Btn, Card, CardHead, Dropdown, Ic, PageHead, Pill, StatusDot, StatusPill, TrailDots, trailProgress,
+  CLOSED_STATUSES, REASON_PLACEHOLDER, REASON_REQUIRED, VENDOR_STATUS_OPTIONS, statusLabel,
+} from "@crumb/ui";
+import type { Status, VendorStatus } from "@crumb/ui";
+import { translateItem, assignItem, updateType } from "./actions";
+import { useToast } from "@/components/toast";
+import {
+  ReplyComposer, useStatusMove, runAction, firstName, sourceLabel, noEmailNote, statusWillEmail, type ItemNotifyPlan,
+} from "@/components/ReplyComposer";
 import { InitiativePanel, type ThreadInitiativeOption } from "./InitiativePanel";
 import { ThreadSuggestionCard, type ThreadSuggestion } from "./ThreadSuggestionCard";
 import { ExternalTicketTile } from "./ExternalTicketTile";
@@ -39,13 +45,6 @@ function MentionText({ body, names }: { body: string; names: string[] }) {
   if (last < body.length) out.push(body.slice(last));
   return <>{out}</>;
 }
-
-const REASON_REQUIRED: Set<Status> = new Set(["declined", "deferred", "duplicate"]);
-const REASON_PLACEHOLDER: Record<string, string> = {
-  declined:  "e.g. We're not building this in v2. The maintenance cost is too high for the use case.",
-  deferred:  "e.g. Revisiting in Q3 once the new export pipeline ships.",
-  duplicate: "e.g. Tracked under FB-242. Replies there will reach you.",
-};
 
 function humanBytes(b: number): string {
   if (b < 1024) return `${b} B`;
@@ -129,7 +128,11 @@ export type ThreadData = {
     detectedLang: string | null;
     titleTranslated: string | null;
     bodyTranslated: string | null;
+    // Where it came in (null for native items) and an http(s) link back to it.
+    source: string | null;
+    sourceUrl: string | null;
   };
+  notifyPlan: ItemNotifyPlan;
   account: { id: string; name: string; arrCents: number };
   submitter: { name: string; initials: string };
   assignee: { id: string; initials: string; name: string } | null;
@@ -153,21 +156,6 @@ export type ThreadData = {
   merge: ThreadMergeData;
 };
 
-// Unified status list — all 8 in one column. The 3 reason-required
-// statuses (declined / deferred / duplicate) trigger an inline reason
-// form below their row when clicked, instead of living in a separate
-// "actions" block. Keeps the panel one mental model.
-const STATUS_ROWS: Array<[label: string, status: Status]> = [
-  ["Open",        "open"],
-  ["In review",   "review"],
-  ["Planned",     "planned"],
-  ["In progress", "progress"],
-  ["Shipped",     "shipped"],
-  ["Won’t ship",  "declined"],
-  ["Set aside",   "deferred"],
-  ["Duplicate",   "duplicate"],
-];
-
 function relAge(iso: string): string {
   const d = Date.now() - new Date(iso).getTime();
   const units: Array<[string, number]> = [
@@ -181,12 +169,6 @@ function relAge(iso: string): string {
   return "now";
 }
 
-const STATUS_LABEL_MAP: Record<string, string> = {
-  open: "Open", review: "In review", planned: "Planned", progress: "In progress",
-  shipped: "Shipped", declined: "Won’t ship", deferred: "Set aside", duplicate: "Duplicate",
-  resolved: "Resolved",
-};
-
 type TrailEntry =
   | { kind: "message"; at: string; msg: ThreadMessage }
   | { kind: "event";   at: string; event: ThreadStatusEvent }
@@ -194,8 +176,10 @@ type TrailEntry =
 
 export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boolean }) {
   const router = useRouter();
-  const { item, account, submitter, assignee, messages, events, notices, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, aiReplyAvailable, replay, usageBreadcrumb, merge } = data;
+  const toast = useToast();
+  const { item, notifyPlan, account, submitter, assignee, messages, events, notices, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, aiReplyAvailable, replay, usageBreadcrumb, merge } = data;
   const teammateNames = useMemo(() => teammates.map(t => t.name), [teammates]);
+  const first = firstName(submitter.name);
 
   const customerMsgs = messages.filter(m => !m.internal);
   const internalMsgs = messages.filter(m => m.internal);
@@ -210,73 +194,53 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
     return all;
   }, [messages, events, notices]);
 
-  const progress = useMemo(() => trailProgress({
-    status: item.status,
-    vendorReplied: messages.some(m => m.kind === "vendor" && !m.internal),
-  }), [item.status, messages]);
-
   const [tab, setTab] = useState<"customer" | "internal" | "trail">("customer");
   const [pending, startTransition] = useTransition();
-  const [reasonForm, setReasonForm] = useState<{ status: Status; label: string } | null>(null);
+  const [reasonFor, setReasonFor] = useState<VendorStatus | null>(null);
+  // Kept until the move lands, so an undone one reopens with its reason.
   const [reasonText, setReasonText] = useState("");
-  const [reasonError, setReasonError] = useState<string | null>(null);
   const [showTranslation, setShowTranslation] = useState(false);
 
-  const onStatus = (next: Status) => {
-    startTransition(async () => {
-      const res = await updateStatus({ itemShortId: item.shortId, status: next });
-      if (res.ok) router.refresh();
-    });
-  };
+  // Status moves show at once; one that emails the customer waits behind an
+  // Undo toast first (see useStatusMove).
+  const statusMove = useStatusMove({
+    itemShortId: item.shortId,
+    status: item.status,
+    first,
+    source: item.source,
+    plan: notifyPlan.status,
+    onMoved: () => setReasonText(""),
+  });
+  const shown = statusMove.shown;
+
+  const progress = useMemo(() => trailProgress({
+    status: shown,
+    vendorReplied: messages.some(m => m.kind === "vendor" && !m.internal),
+  }), [shown, messages]);
 
   const onTranslate = () => {
     startTransition(async () => {
-      const res = await translateItem(item.shortId);
-      if (res.ok) { setShowTranslation(true); router.refresh(); }
+      if (await runAction(toast, () => translateItem(item.shortId))) { setShowTranslation(true); router.refresh(); }
     });
-  };
-
-  const openReasonFor = (status: Status, label: string) => {
-    setReasonForm({ status, label });
-    setReasonText("");
-    setReasonError(null);
   };
 
   const submitReason = () => {
-    if (!reasonForm) return;
     const reason = reasonText.trim();
-    if (!reason) {
-      setReasonError("A reason is required so the customer sees the why.");
-      return;
-    }
-    startTransition(async () => {
-      const res = await updateStatus({
-        itemShortId: item.shortId,
-        status: reasonForm.status,
-        reason,
-      });
-      if (res.ok) {
-        setReasonForm(null);
-        setReasonText("");
-        router.refresh();
-      } else {
-        setReasonError(res.error === "reason_required" ? "A reason is required." : res.error);
-      }
-    });
+    if (!reasonFor || !reason) return;
+    setReasonFor(null);
+    void statusMove.move(reasonFor, reason);
   };
 
   // Details-card property edits (assignee / type) — single-item, in place.
   function onAssign(value: string) {
     startTransition(async () => {
-      const res = await assignItem(item.shortId, value === "__unassign" ? null : value);
-      if (res.ok) router.refresh();
+      if (await runAction(toast, () => assignItem(item.shortId, value === "__unassign" ? null : value))) router.refresh();
     });
   }
 
   function onType(value: string) {
     startTransition(async () => {
-      const res = await updateType(item.shortId, value);
-      if (res.ok) router.refresh();
+      if (await runAction(toast, () => updateType(item.shortId, value))) router.refresh();
     });
   }
 
@@ -295,7 +259,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
             <span style={{ viewTransitionName: "vt-thread-trail", display: "inline-flex", lineHeight: 0 }}>
               <TrailDots progress={progress} size={14} />
             </span>
-            <StatusPill status={item.status as Status} />
+            <StatusPill status={shown as Status} />
             {item.externalTicketUrl && (
               <a href={item.externalTicketUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
                 <Btn icon={<Ic.link style={{ width: 12, height: 12 }} />}>{item.externalTicketId}</Btn>
@@ -355,6 +319,10 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                 // the whole trail static (see globals.css .trail-timeline).
                 <div className="trail-timeline" style={{ "--n": trail.length } as CSSProperties}>
                   <span className="trail-spine" aria-hidden />
+                  {/* Notice crumbs come only from the customer_notifications
+                      ledger, which records emails a real provider accepted, so
+                      "was told" and "loop closed" never show for an email that
+                      didn't go out. */}
                   {trail.map((entry, i) => entry.kind === "notice" ? (
                     <div key={`n:${entry.notice.id}`} className="trail-node" style={{ "--i": i } as CSSProperties}>
                       <span className="trail-crumb notice" aria-hidden />
@@ -364,9 +332,11 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                           <span className="muted">
                             {entry.notice.kind === "reply"
                               ? " was notified of the reply"
-                              : ` was told it's ${(STATUS_LABEL_MAP[entry.notice.toStatus ?? ""] ?? entry.notice.toStatus ?? "updated").toLowerCase()}`}
+                              : entry.notice.toStatus === "declined"
+                                ? " was told it won’t ship"
+                                : ` was told it's ${(entry.notice.toStatus ? statusLabel(entry.notice.toStatus) : "updated").toLowerCase()}`}
                           </span>
-                          {entry.notice.kind === "status" && (entry.notice.toStatus === "shipped" || entry.notice.toStatus === "declined") && (
+                          {entry.notice.kind === "status" && CLOSED_STATUSES.has(entry.notice.toStatus ?? "") && (
                             <strong style={{ fontWeight: 500, color: "var(--accent-deep)" }}> · loop closed</strong>
                           )}
                         </span>
@@ -384,9 +354,9 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                               ? ` moved status to `
                               : ` submitted as `}
                           </span>
-                          <strong style={{ fontWeight: 500 }}>{STATUS_LABEL_MAP[entry.event.toStatus] ?? entry.event.toStatus}</strong>
+                          <strong style={{ fontWeight: 500 }}>{statusLabel(entry.event.toStatus)}</strong>
                           {entry.event.fromStatus && (
-                            <span className="muted text-xs"> (from {STATUS_LABEL_MAP[entry.event.fromStatus] ?? entry.event.fromStatus})</span>
+                            <span className="muted text-xs"> (from {statusLabel(entry.event.fromStatus)})</span>
                           )}
                         </span>
                         {entry.event.reason && (
@@ -439,10 +409,12 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                           <span className="text-xs muted mono" style={{ marginLeft: "auto" }}>{relAge(m.createdAt)}</span>
                         </div>
                         {m.internal ? (
+                          // The darker paper tone notes are written on in the
+                          // composer, so a note reads the same both places.
                           <div style={{
                             background: "var(--surface-2)",
-                            borderLeft: "3px solid var(--accent)",
-                            borderRadius: "0 var(--r-sm) var(--r-sm) 0",
+                            border: "var(--border)",
+                            borderRadius: "var(--r-sm)",
                             padding: "10px 12px",
                           }}>
                             <p className="text-md" style={{ margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
@@ -470,16 +442,23 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
             )}
           </div>
 
-          <ReplyComposer
-            itemShortId={item.shortId}
-            tab={tab}
-            submitterName={submitter.name}
-            accountName={account.name}
-            teammates={teammates}
-            aiReplyAvailable={aiReplyAvailable}
-            canWrite={canWrite}
-            onSent={() => router.refresh()}
-          />
+          {/* The tabs only filter the conversation; who a message reaches is
+              the composer's own Reply / Internal note switch. It's hidden (not
+              unmounted) on the Trail, so a draft survives a look at it. */}
+          <div hidden={tab === "trail"}>
+            <ReplyComposer
+              itemShortId={item.shortId}
+              status={shown}
+              submitterName={submitter.name}
+              accountName={account.name}
+              source={item.source}
+              notifyPlan={notifyPlan}
+              teammates={teammates}
+              aiReplyAvailable={aiReplyAvailable}
+              canWrite={canWrite}
+              onSent={() => router.refresh()}
+            />
+          </div>
         </Card>
 
         <div className="col gap-4">
@@ -498,9 +477,16 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                 <Ic.chevR style={{ width: 12, height: 12, color: "var(--mute-2)" }} />
               </Link>
               <span className="eyebrow">Submitter</span>
-              <div className="row gap-2 center">
+              <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
                 <Avatar size="sm">{submitter.initials}</Avatar>
                 <span className="text-sm">{submitter.name}</span>
+                {item.source && (item.sourceUrl ? (
+                  <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-xs muted">
+                    via {sourceLabel(item.source)}
+                  </a>
+                ) : (
+                  <span className="text-xs muted">via {sourceLabel(item.source)}</span>
+                ))}
               </div>
               <span className="eyebrow">Assignee</span>
               {canWrite ? (
@@ -549,7 +535,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
           <Card>
             <CardHead title="Status" />
             <div className="card-body col gap-1">
-              {item.status === "resolved" && (
+              {shown === "resolved" && (
                 // "resolved" is customer-only — it isn't one of the settable
                 // rows below, so surface the current state explicitly. The vendor
                 // can still pick another status to reopen the loop.
@@ -559,31 +545,41 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                 </span>
               )}
               {!canWrite && <span className="text-xs muted" style={{ marginBottom: 4 }}>Viewers can't change status.</span>}
-              {STATUS_ROWS.map(([l, s]) => {
-                const isCurrent = item.status === s;
-                const needsReason = REASON_REQUIRED.has(s);
-                const reasonOpenHere = reasonForm?.status === s;
+              {canWrite && !notifyPlan.status.willEmail && (
+                <p className="note text-xs muted" style={{ marginBottom: 6 }}>
+                  {noEmailNote(notifyPlan.status, "status", first, item.source)}
+                </p>
+              )}
+              {/* All 8 vendor statuses in one column. The reason-required ones
+                  open an inline reason form below their row; the ones that
+                  will email the customer say so. */}
+              {VENDOR_STATUS_OPTIONS.map(({ value: s, label: l }) => {
+                const isCurrent = shown === s;
+                // Going back to the saved status is an undo, so no reason.
+                const needsReason = REASON_REQUIRED.has(s) && s !== item.status;
+                const hint = isCurrent ? "" : [
+                  needsReason && "say why",
+                  statusWillEmail(s, item.status, notifyPlan.status) && `emails ${first}`,
+                ].filter(Boolean).join(" · ");
                 return (
                   <div key={s}>
                     <button
                       onClick={() => {
                         if (isCurrent) return;
-                        if (needsReason) openReasonFor(s, l);
-                        else onStatus(s);
+                        if (needsReason) setReasonFor(s);
+                        else void statusMove.move(s);
                       }}
-                      disabled={pending || isCurrent || !canWrite}
+                      disabled={statusMove.saving || isCurrent || !canWrite}
                       className="nav-item"
                       aria-selected={isCurrent}
                       style={{ justifyContent: "flex-start", gap: 12, width: "100%" }}
                     >
                       <StatusDot status={s} />
                       <span className={isCurrent ? "fw-med" : ""}>{l}</span>
-                      {needsReason && !isCurrent && (
-                        <span className="text-2xs muted" style={{ marginLeft: "auto" }}>say why</span>
-                      )}
+                      {hint && <span className="text-2xs muted" style={{ marginLeft: "auto" }}>{hint}</span>}
                     </button>
 
-                    {reasonOpenHere && (
+                    {reasonFor === s && (
                       <div className="col gap-2" style={{
                         margin: "6px 0 10px",
                         padding: 12,
@@ -594,19 +590,17 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                         <textarea
                           className="input"
                           rows={3}
-                          placeholder={REASON_PLACEHOLDER[reasonForm!.status]}
+                          aria-label={`Reason for ${l}`}
+                          placeholder={REASON_PLACEHOLDER[s]}
                           value={reasonText}
-                          onChange={e => { setReasonText(e.target.value); setReasonError(null); }}
-                          disabled={pending}
+                          onChange={e => setReasonText(e.target.value)}
+                          disabled={statusMove.saving}
                           autoFocus
                         />
-                        {reasonError && (
-                          <span className="text-xs" style={{ color: "var(--err-text)" }}>{reasonError}</span>
-                        )}
                         <div className="row gap-2">
-                          <Btn sm onClick={() => setReasonForm(null)} disabled={pending}>Cancel</Btn>
-                          <Btn sm variant="primary" onClick={submitReason} disabled={pending || !reasonText.trim()}>
-                            {pending ? "Saving…" : `${reasonForm!.label} & notify`}
+                          <Btn sm onClick={() => { setReasonFor(null); setReasonText(""); }} disabled={statusMove.saving}>Cancel</Btn>
+                          <Btn sm variant="primary" onClick={submitReason} disabled={statusMove.saving || !reasonText.trim()}>
+                            Mark {l}
                           </Btn>
                         </div>
                       </div>

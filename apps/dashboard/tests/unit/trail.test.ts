@@ -27,7 +27,7 @@ describe("ui/trailProgress", () => {
   });
 
   it("lights the full trail when the loop closes", () => {
-    for (const status of ["shipped", "declined", "duplicate"]) {
+    for (const status of ["shipped", "declined", "duplicate", "resolved"]) {
       const p = trailProgress({ status, vendorReplied: true });
       expect(p.decided).toBe(true);
       expect(p.closed).toBe(true);

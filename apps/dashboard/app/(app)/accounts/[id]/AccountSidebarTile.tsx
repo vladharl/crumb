@@ -1,7 +1,10 @@
-import { Avatar, Card, CardHead } from "@crumb/ui";
+import { Avatar, Card, CardHead, STATUS_LABELS } from "@crumb/ui";
 import { db, accountUsers, items } from "@crumb/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { notMergedSql } from "@/lib/loop-sql";
+import { statusMix } from "@/lib/insights/status-mix";
 
+// Both cards count unmerged items only, like the account hero.
 async function loadRequesters(accountId: string) {
   return db
     .select({
@@ -12,7 +15,7 @@ async function loadRequesters(accountId: string) {
       count: sql<number>`COUNT(${items.id})::int`,
     })
     .from(accountUsers)
-    .leftJoin(items, eq(items.submitterId, accountUsers.id))
+    .leftJoin(items, and(eq(items.submitterId, accountUsers.id), notMergedSql(items.mergedIntoId)))
     .where(eq(accountUsers.accountId, accountId))
     .groupBy(accountUsers.id)
     .orderBy(sql`COUNT(${items.id}) DESC`)
@@ -23,17 +26,9 @@ async function loadStatusMix(accountId: string) {
   const rows = await db
     .select({ status: items.status, count: sql<number>`COUNT(*)::int` })
     .from(items)
-    .where(eq(items.accountId, accountId))
+    .where(and(eq(items.accountId, accountId), notMergedSql(items.mergedIntoId)))
     .groupBy(items.status);
-  const m = new Map(rows.map(r => [r.status, r.count]));
-  const get = (s: string) => m.get(s) ?? 0;
-  return {
-    open: get("open") + get("review"),
-    progress: get("planned") + get("progress"),
-    shipped: get("shipped"),
-    declined: get("declined"),
-    deferred: get("deferred"),
-  };
+  return statusMix(rows);
 }
 
 export async function AccountSidebarTile({ accountId }: { accountId: string }) {
@@ -69,9 +64,9 @@ export async function AccountSidebarTile({ accountId }: { accountId: string }) {
           {[
             ["Open / In review",  stats.open],
             ["Planned / In progress", stats.progress],
-            ["Shipped",           stats.shipped],
-            ["Won’t ship",        stats.declined],
-            ["Set aside",         stats.deferred],
+            [STATUS_LABELS.shipped,  stats.shipped],
+            [STATUS_LABELS.declined, stats.declined],
+            [STATUS_LABELS.deferred, stats.deferred],
           ].map(([l, n]) => (
             <div key={l as string} className="row gap-3 center">
               <span className="text-sm grow">{l}</span>

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Card, CardHead, Ic, Pill } from "@crumb/ui";
+import { Card, CardHead, Ic, Pill, statusLabel } from "@crumb/ui";
 import {
   db, items, replies, statusEvents, workspaceUsers, accountUsers,
 } from "@crumb/db";
@@ -7,12 +7,6 @@ import { desc, eq } from "drizzle-orm";
 import { ageFrom, getActiveSession } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
-
-const STATUS_LABELS: Record<string, string> = {
-  open: "Open", review: "In review", planned: "Planned", progress: "In progress",
-  shipped: "Shipped", declined: "Won’t ship", deferred: "Set aside", duplicate: "Duplicate",
-  resolved: "Resolved",
-};
 
 type FeedEntry = {
   id: string;
@@ -66,8 +60,8 @@ async function loadFeed(workspaceId: string): Promise<FeedEntry[]> {
   const entries: FeedEntry[] = [];
 
   for (const r of statusRows) {
-    const fromLabel = r.fromStatus ? (STATUS_LABELS[r.fromStatus] ?? r.fromStatus) : null;
-    const toLabel = STATUS_LABELS[r.toStatus] ?? r.toStatus;
+    const fromLabel = r.fromStatus ? statusLabel(r.fromStatus) : null;
+    const toLabel = statusLabel(r.toStatus);
     entries.push({
       id: `s:${r.id}`,
       kind: "status",

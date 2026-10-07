@@ -1,5 +1,52 @@
 import { describe, it, expect } from "vitest";
+import { sql, type SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
+import {
+  CLOSED_STATUSES, OPEN_STATUSES, STATUS_LABELS, VENDOR_STATUSES, VENDOR_STATUS_OPTIONS,
+} from "@crumb/ui";
 import { loopTurn, waitingSince, waitingDays, LOOP_CLOSED_STATUSES } from "@/lib/loop";
+import { loopOpenSql, notMergedSql } from "@/lib/loop-sql";
+
+describe("shared status sets (@crumb/ui)", () => {
+  const all = Object.keys(STATUS_LABELS);
+
+  it("labels all nine statuses", () => {
+    expect(all).toEqual(["open", "review", "planned", "progress", "shipped", "declined", "deferred", "duplicate", "resolved"]);
+  });
+
+  it("puts every status in exactly one of OPEN or CLOSED", () => {
+    for (const s of all) expect(OPEN_STATUSES.has(s) !== CLOSED_STATUSES.has(s)).toBe(true);
+    expect(OPEN_STATUSES.size + CLOSED_STATUSES.size).toBe(all.length);
+    expect(OPEN_STATUSES.has("deferred")).toBe(true);
+  });
+
+  it("treats resolved as closed but never vendor-settable", () => {
+    expect(CLOSED_STATUSES.has("resolved")).toBe(true);
+    expect(VENDOR_STATUSES).not.toContain("resolved");
+    expect(VENDOR_STATUS_OPTIONS.map(o => o.value)).not.toContain("resolved");
+  });
+
+  it("offers the other eight to vendors in picker order, with the shared labels", () => {
+    expect(VENDOR_STATUSES).toEqual(all.filter(s => s !== "resolved"));
+    expect(VENDOR_STATUS_OPTIONS).toEqual(VENDOR_STATUSES.map(value => ({ value, label: STATUS_LABELS[value] })));
+  });
+
+  it("drives the inbox buckets from the shared closed set", () => {
+    expect([...LOOP_CLOSED_STATUSES]).toEqual([...CLOSED_STATUSES]);
+  });
+});
+
+describe("lib/loop-sql", () => {
+  const render = (q: SQL) => new PgDialect().sqlToQuery(q);
+
+  it("filters on the shared closed set", () => {
+    const open = render(loopOpenSql(sql`i.status`));
+    expect(open.sql).toBe("i.status not in ($1, $2, $3, $4)");
+    expect(open.params).toEqual([...CLOSED_STATUSES]);
+
+    expect(render(notMergedSql(sql`i.merged_into_id`)).sql).toBe("i.merged_into_id is null");
+  });
+});
 
 describe("lib/loop", () => {
   describe("loopTurn", () => {

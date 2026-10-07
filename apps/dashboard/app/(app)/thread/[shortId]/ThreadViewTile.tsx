@@ -10,6 +10,8 @@ import { replaySummaryConfigured } from "@/lib/ai/replay-summary";
 import { getReplayForItem } from "@/lib/replay/read";
 import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { eventsBefore } from "@/lib/usage/signals";
+import { emailConfigured } from "@/lib/email";
+import { customerNotifyPlan } from "@/lib/notify/customer-plan";
 import { ThreadView, type ThreadData } from "./ThreadView";
 
 // Combined ARR + follower count over a merge group {canonical} ∪ {its
@@ -88,6 +90,14 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       submitterId: items.submitterId,
       submitterName: accountUsers.name,
       submitterInitials: accountUsers.initials,
+      // Where it came in, and what customerNotifyPlan needs to say whether
+      // the submitter is emailed.
+      source: items.source,
+      sourceUrl: items.sourceUrl,
+      submitterEmail: accountUsers.email,
+      submitterUnsub: accountUsers.unsubscribedAll,
+      submitterNotifyReplies: accountUsers.notifyReplies,
+      submitterNotifyStatus: accountUsers.notifyStatus,
       assigneeId: items.assigneeId,
       assigneeInitials: workspaceUsers.initials,
       assigneeName: workspaceUsers.name,
@@ -360,7 +370,21 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       detectedLang: head.detectedLang,
       titleTranslated: head.titleTranslated,
       bodyTranslated: head.bodyTranslated,
+      source: head.source,
+      // A deep link back to the call/ticket, from connector data: only an
+      // http(s) URL is ever rendered as a link.
+      sourceUrl: head.sourceUrl && /^https?:\/\//i.test(head.sourceUrl) ? head.sourceUrl : null,
     },
+    // Whether a reply / status change will actually email the submitter: the
+    // same plan the send paths gate on, so the composer's copy can't drift.
+    notifyPlan: customerNotifyPlan({
+      source: head.source,
+      submitterEmail: head.submitterEmail,
+      unsubscribedAll: head.submitterUnsub,
+      notifyReplies: head.submitterNotifyReplies,
+      notifyStatus: head.submitterNotifyStatus,
+      emailConfigured: emailConfigured(),
+    }),
     account: {
       id: head.accountId,
       name: head.accountName,

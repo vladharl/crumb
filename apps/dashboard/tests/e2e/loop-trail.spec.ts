@@ -1,10 +1,12 @@
 import { test, expect } from "@playwright/test";
 
-// The loop reframe end-to-end: replying to a customer logs a row in the
-// customer_notifications ledger (stdout email provider counts as delivered),
-// which surfaces in the thread's Trail as "<name> was notified of the reply",
-// and flips the item from "Your turn" to "Waiting" in the inbox.
-test("vendor reply closes the turn: ledger crumb in Trail, item moves to Waiting", async ({ page }) => {
+// The loop reframe end-to-end: replying to a customer flips the item from
+// "Your turn" to "Waiting" in the inbox. The e2e run uses the stdout email
+// provider, which delivers nothing, so the composer says the customer wasn't
+// emailed and the Trail shows no "was notified" crumb: those come only from
+// the customer_notifications ledger, which records emails a real provider
+// accepted.
+test("vendor reply closes the turn: no stdout notice in Trail, item moves to Waiting", async ({ page }) => {
   await page.goto("/inbox");
 
   // Land on the default "Your turn" tab and open its first item.
@@ -23,12 +25,15 @@ test("vendor reply closes the turn: ledger crumb in Trail, item moves to Waiting
   await composer.waitFor({ state: "visible", timeout: 10_000 });
   const replyBody = `loop e2e reply ${Date.now()}`;
   await composer.fill(replyBody);
-  await page.getByRole("button", { name: /^send$|^reply$/i }).click();
+  await page.getByRole("button", { name: /^Send (to |reply)/i }).click();
   await expect(page.locator("body")).toContainText(replyBody, { timeout: 15_000 });
+  await expect(page.getByText(/Reply posted\. .+ wasn't emailed\./)).toBeVisible({ timeout: 10_000 });
 
-  // The Trail shows the ledger crumb: the customer actually heard back.
+  // The Trail has the reply but no notice crumb: nothing was delivered.
   await page.locator(".seg button", { hasText: /Trail/ }).click();
-  await expect(page.locator("body")).toContainText("was notified of the reply", { timeout: 10_000 });
+  const trail = page.locator(".trail-timeline");
+  await expect(trail).toContainText(replyBody, { timeout: 10_000 });
+  await expect(trail).not.toContainText("was notified of the reply");
 
   // Back in the inbox, the loop's turn flipped: gone from "Your turn",
   // present under "Waiting".

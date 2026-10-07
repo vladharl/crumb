@@ -1,41 +1,68 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, items, workspaceUsers } from "@crumb/db";
+import { REASON_REQUIRED, VENDOR_STATUSES, type VendorStatus } from "@crumb/ui";
 import { getActiveSession } from "@/lib/server";
+import { originFromHeaders } from "@/lib/origin";
+import { updateItemStatus, type VendorRole } from "@/lib/items/mutations";
+import { log } from "@/lib/log";
 
 // Status changes + assignment are manage actions — viewers are read-only.
 function canManage(role: string): boolean {
   return role === "admin" || role === "pm";
 }
 
-const ALLOWED_STATUSES = [
-  "open", "review", "planned", "progress",
-  "shipped", "declined", "deferred", "duplicate",
-] as const;
-type Status = (typeof ALLOWED_STATUSES)[number];
-
 export type BulkResult = { ok: true; affected: number } | { ok: false; error: string };
+export type BulkStatusResult =
+  | { ok: true; affected: number; failed: number; firstError?: string }
+  | { ok: false; error: string };
 
 function validIds(ids: unknown): ids is string[] {
   return Array.isArray(ids) && ids.length > 0 && ids.every(i => typeof i === "string");
 }
 
-export async function bulkUpdateStatus(itemIds: string[], status: string): Promise<BulkResult> {
+// Each item goes through the same status core as the thread, so a bulk change
+// writes status_events, fires webhooks + chat cards and emails the customer
+// exactly like a single one. Items already in `status` count as affected (the
+// core no-ops without re-notifying); ids outside this workspace count as failed.
+export async function bulkUpdateStatus(itemIds: string[], status: string, reason?: string): Promise<BulkStatusResult> {
   if (!validIds(itemIds)) return { ok: false, error: "no_items" };
-  if (!ALLOWED_STATUSES.includes(status as Status)) return { ok: false, error: "bad_status" };
+  if (!VENDOR_STATUSES.includes(status as VendorStatus)) return { ok: false, error: "bad_status" };
+  const why = reason?.trim() || undefined;
+  if (REASON_REQUIRED.has(status) && !why) return { ok: false, error: "reason_required" };
 
   const { workspace: ws, user } = await getActiveSession();
   if (!canManage(user.role)) return { ok: false, error: "forbidden" };
-  const result = await db
-    .update(items)
-    .set({ status, updatedAt: new Date() })
-    .where(and(eq(items.workspaceId, ws.id), inArray(items.id, itemIds)))
-    .returning({ id: items.id });
+
+  const ids = [...new Set(itemIds)];
+  const rows = await db
+    .select({ shortId: items.shortId })
+    .from(items)
+    .where(and(eq(items.workspaceId, ws.id), inArray(items.id, ids)));
+
+  const actor = { workspaceId: ws.id, actorWorkspaceUserId: user.id, role: user.role as VendorRole };
+  const origin = originFromHeaders(headers());
+  let affected = 0;
+  let failed = ids.length - rows.length;
+  let firstError: string | undefined = failed > 0 ? "not_found" : undefined;
+  // ponytail: sequential, so customer emails go out one at a time (provider
+  // rate limits); N round trips is fine for inbox-sized selections. Queue the
+  // sends if bulk selections get large.
+  for (const { shortId } of rows) {
+    const r = await updateItemStatus(actor, { itemShortId: shortId, status: status as VendorStatus, reason: why, origin })
+      .catch((err: unknown) => {
+        log.error("bulk status update failed", { scope: "crumb/inbox", shortId, err });
+        return { ok: false as const, error: "update_failed" };
+      });
+    if (r.ok) affected++;
+    else { failed++; firstError ??= r.error; }
+  }
 
   revalidatePath("/inbox");
-  return { ok: true, affected: result.length };
+  return firstError ? { ok: true, affected, failed, firstError } : { ok: true, affected, failed };
 }
 
 export async function bulkAssign(itemIds: string[], assigneeId: string | null): Promise<BulkResult> {
