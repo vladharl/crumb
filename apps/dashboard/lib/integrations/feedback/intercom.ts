@@ -1,8 +1,9 @@
 import "server-only";
-import type { IntegrationConnection } from "@crumb/db";
 import { open } from "@/lib/crypto-at-rest";
-import { log } from "@/lib/log";
-import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, lookbackStart } from "./types";
+import {
+  type ConnectionCreds, type FeedbackAdapter, type FeedbackPage, type FeedbackRecord,
+  FeedbackSyncError, cursorSeconds, vendorFetch,
+} from "./types";
 
 // Intercom — search conversations updated after a cursor.
 //   https://developers.intercom.com/docs/references/rest-api/api.intercom.io/conversations/searchconversations
@@ -20,11 +21,31 @@ type IntercomConversation = {
   source?: { author?: IntercomAuthor | null; body?: string | null } | null;
 };
 type SearchResponse = {
+  total_count?: number;
   conversations?: IntercomConversation[];
 };
 
 function stripHtml(s: string | null | undefined): string {
   return (s ?? "").replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
+}
+
+async function search(conn: ConnectionCreds, since: number, perPage: number): Promise<SearchResponse> {
+  const token = conn.accessToken ? open(conn.accessToken) : null;
+  if (!token) throw new FeedbackSyncError("config", "Intercom needs an access token.");
+  const resp = await vendorFetch(`${API}/conversations/search`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      accept: "application/json",
+      "Intercom-Version": "2.11",
+    },
+    body: JSON.stringify({
+      query: { field: "updated_at", operator: ">", value: since },
+      pagination: { per_page: perPage },
+    }),
+  });
+  return (await resp.json()) as SearchResponse;
 }
 
 export const intercom: FeedbackAdapter = {
@@ -34,33 +55,9 @@ export const intercom: FeedbackAdapter = {
     return true; // BYO access token on the connection (OAuth app is optional)
   },
 
-  async listSince(conn: IntegrationConnection, cursor: string | null): Promise<FeedbackPage> {
-    const token = conn.accessToken ? open(conn.accessToken) : null;
-    if (!token) {
-      log.error("intercom connection incomplete", { scope: "crumb/intercom", workspaceId: conn.workspaceId });
-      return { records: [], nextCursor: cursor, done: true };
-    }
-
-    const since = cursor ? Number(cursor) : Math.floor(lookbackStart().getTime() / 1000);
-    const resp = await fetch(`${API}/conversations/search`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        accept: "application/json",
-        "Intercom-Version": "2.11",
-      },
-      body: JSON.stringify({
-        query: { field: "updated_at", operator: ">", value: since },
-        pagination: { per_page: PER_PAGE },
-      }),
-    });
-    if (!resp.ok) {
-      log.error("intercom search failed", { scope: "crumb/intercom", status: resp.status });
-      return { records: [], nextCursor: cursor, done: true };
-    }
-    const data = (await resp.json()) as SearchResponse;
-    const conversations = data.conversations ?? [];
+  async listSince(conn, cursor): Promise<FeedbackPage> {
+    const since = cursorSeconds(cursor);
+    const conversations = (await search(conn, since, PER_PAGE)).conversations ?? [];
 
     const records: FeedbackRecord[] = [];
     let maxUpdated = since;
@@ -85,5 +82,10 @@ export const intercom: FeedbackAdapter = {
     const done = conversations.length < PER_PAGE;
     const nextCursor = conversations.length ? String(maxUpdated + 1) : cursor;
     return { records, nextCursor, done };
+  },
+
+  // Search reports total_count; ask for one row to get it.
+  async count(conn, since) {
+    return (await search(conn, Math.floor(since.getTime() / 1000), 1)).total_count ?? 0;
   },
 };

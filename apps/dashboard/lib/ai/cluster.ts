@@ -1,7 +1,7 @@
 import "server-only";
 import { isCloud } from "@/lib/tier";
 import { log } from "@/lib/log";
-import { aistackChat, aistackConfigured, AISTACK_MODEL } from "@/lib/ai/aistack";
+import { aistackChat, aistackConfigured, AISTACK_MODEL, NO_EM_DASH_RULE } from "@/lib/ai/aistack";
 
 export function clusterConfigured(): boolean {
   return isCloud() && aistackConfigured();
@@ -49,7 +49,7 @@ export async function suggestInitiative(
   }).join("\n");
 
   const body = (item.body ?? "").slice(0, 1200);
-  const prompt = `You are classifying a piece of inbound customer feedback into one of the vendor's existing "Initiatives" — manual themed buckets the vendor uses to group related requests.
+  const prompt = `You are classifying a piece of inbound customer feedback into one of the vendor's existing "Initiatives", manual themed buckets the vendor uses to group related requests.
 
 Initiatives (pick one by id, or return null if none clearly fits):
 ${briefs}
@@ -59,13 +59,14 @@ Feedback to classify:
 - title: ${item.title}
 - body: ${body}
 
-Respond with a single line of JSON only — no prose, no code fences. Schema:
+Respond with a single line of JSON only, no prose and no code fences. Schema:
 {"initiative_id": "<uuid or null>", "confidence": <0..1>, "reason": "<one short sentence>"}
 
 Rules:
 - Pick the single best fit. If two are close, pick the more specific one.
 - If nothing fits with confidence > 0.55, return null for initiative_id.
-- Reason must be ≤ 120 characters and reference the feedback's substance.`;
+- Reason must be ≤ 120 characters and reference the feedback's substance.
+- ${NO_EM_DASH_RULE}`;
 
   // max_tokens 1024 (not the old 200): qwen is a reasoning model, so a tight
   // budget can be spent thinking before the JSON answer is emitted.

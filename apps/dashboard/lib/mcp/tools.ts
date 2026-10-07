@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, desc, eq, ilike, or } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, or, sql } from "drizzle-orm";
 import {
   db, items, accounts, accountUsers, replies, statusEvents, initiatives, workspaceUsers, workspaces,
 } from "@crumb/db";
@@ -53,12 +53,49 @@ function unwrap<T extends { ok: true } | { ok: false; error: string }>(r: T): Ex
   return r as Extract<T, { ok: true }>;
 }
 
+// ILIKE reads % and _ as wildcards and \ as its escape: match them literally.
+export function likeContains(q: string): string {
+  return `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+}
+
+// Keyset pages for the capped list tools. `next_cursor` names the last row
+// returned by its integer sort key and id; passing it back as `cursor` resumes
+// strictly after that row, so rows created meanwhile can't shift or repeat a
+// page. Opaque to clients: base64url of "<key>:<uuid>".
+const CURSOR_RE = /^(-?\d{1,19}):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+function readCursor(v: unknown): { key: string; id: string } | null {
+  const raw = str(v);
+  if (!raw) return null;
+  const m = CURSOR_RE.exec(Buffer.from(raw, "base64url").toString("utf8"));
+  return m ? { key: m[1]!, id: m[2]! } : fail("invalid_cursor");
+}
+
+// Callers fetch limit + 1 rows, so a full page knows whether more remain.
+function page<T extends { _key: string; _id: string }>(rows: T[], limit: number) {
+  const kept = rows.slice(0, limit);
+  const last = kept[kept.length - 1];
+  return {
+    rows: kept.map(({ _key, _id, ...row }) => row),
+    next_cursor: rows.length > limit && last ? Buffer.from(`${last._key}:${last._id}`).toString("base64url") : null,
+  };
+}
+
+// Item sort key: created_at in integer microseconds, the precision Postgres
+// stores. A JS Date keeps only milliseconds, so a cursor built from one would
+// skip rows created later in the same millisecond.
+const CREATED_US = sql`(extract(epoch from ${items.createdAt}) * 1000000)::bigint`;
+const itemsAfter = (c: { key: string; id: string }) =>
+  sql`(${CREATED_US}, ${items.id}) < (${c.key}::bigint, ${c.id}::uuid)`;
+
+const CURSOR_PROP = { type: "string", description: "next_cursor from the previous call, to fetch the next page." };
+
 export const TOOLS: ToolDef[] = [
   // ─── read ──────────────────────────────────────────────────
   {
     name: "list_items",
     description:
-      "List feedback items in the workspace, newest first. Optionally filter by status, type, or account name. Returns short_id, title, type, status, account, and timestamps.",
+      "List feedback items in the workspace, newest first. Optionally filter by status, type, or account name. Returns short_id, title, type, status, account, and timestamps, plus next_cursor when more items remain (pass it back as cursor for the next page).",
     inputSchema: {
       type: "object",
       properties: {
@@ -66,6 +103,7 @@ export const TOOLS: ToolDef[] = [
         type: { type: "string", enum: [...ITEM_TYPES], description: "Filter by item type." },
         account: { type: "string", description: "Exact account name to filter by." },
         limit: { type: "integer", description: "Max rows (default 50, max 200)." },
+        cursor: CURSOR_PROP,
       },
       additionalProperties: false,
     },
@@ -77,6 +115,9 @@ export const TOOLS: ToolDef[] = [
       if (type) conds.push(eq(items.type, type));
       const account = str(args.account);
       if (account) conds.push(eq(accounts.name, account));
+      const after = readCursor(args.cursor);
+      if (after) conds.push(itemsAfter(after));
+      const limit = clampLimit(args.limit, 50);
 
       const rows = await db
         .select({
@@ -87,30 +128,39 @@ export const TOOLS: ToolDef[] = [
           account: accounts.name,
           created_at: items.createdAt,
           updated_at: items.updatedAt,
+          _key: sql<string>`${CREATED_US}::text`,
+          _id: items.id,
         })
         .from(items)
         .innerJoin(accounts, eq(accounts.id, items.accountId))
         .where(and(...conds))
-        .orderBy(desc(items.createdAt))
-        .limit(clampLimit(args.limit, 50));
-      return { count: rows.length, items: rows };
+        .orderBy(desc(items.createdAt), desc(items.id))
+        .limit(limit + 1);
+      const p = page(rows, limit);
+      return { count: p.rows.length, items: p.rows, next_cursor: p.next_cursor };
     },
   },
   {
     name: "search_items",
-    description: "Full-text-ish search over feedback item titles and bodies (case-insensitive substring). Returns matching items newest first.",
+    description: "Full-text-ish search over feedback item titles and bodies (case-insensitive substring; % and _ match literally). Returns matching items newest first, plus next_cursor when more remain (pass it back as cursor for the next page).",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Text to search for in title/body." },
         limit: { type: "integer", description: "Max rows (default 25, max 200)." },
+        cursor: CURSOR_PROP,
       },
       required: ["query"],
       additionalProperties: false,
     },
     async handler(args, ctx) {
       const q = str(args.query) ?? fail("query is required");
-      const like = `%${q}%`;
+      const like = likeContains(q);
+      const conds = [eq(items.workspaceId, ctx.workspaceId), or(ilike(items.title, like), ilike(items.body, like))];
+      const after = readCursor(args.cursor);
+      if (after) conds.push(itemsAfter(after));
+      const limit = clampLimit(args.limit, 25);
+
       const rows = await db
         .select({
           short_id: items.shortId,
@@ -119,13 +169,16 @@ export const TOOLS: ToolDef[] = [
           status: items.status,
           account: accounts.name,
           created_at: items.createdAt,
+          _key: sql<string>`${CREATED_US}::text`,
+          _id: items.id,
         })
         .from(items)
         .innerJoin(accounts, eq(accounts.id, items.accountId))
-        .where(and(eq(items.workspaceId, ctx.workspaceId), or(ilike(items.title, like), ilike(items.body, like))))
-        .orderBy(desc(items.createdAt))
-        .limit(clampLimit(args.limit, 25));
-      return { count: rows.length, items: rows };
+        .where(and(...conds))
+        .orderBy(desc(items.createdAt), desc(items.id))
+        .limit(limit + 1);
+      const p = page(rows, limit);
+      return { count: p.rows.length, items: p.rows, next_cursor: p.next_cursor };
     },
   },
   {
@@ -226,20 +279,39 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "list_accounts",
-    description: "List customer accounts in the workspace with their ARR (US dollars) and start date.",
+    description: "List customer accounts in the workspace with their ARR (US dollars) and start date, highest ARR first, plus next_cursor when more remain (pass it back as cursor for the next page).",
     inputSchema: {
       type: "object",
-      properties: { limit: { type: "integer", description: "Max rows (default 100, max 200)." } },
+      properties: {
+        limit: { type: "integer", description: "Max rows (default 100, max 200)." },
+        cursor: CURSOR_PROP,
+      },
       additionalProperties: false,
     },
     async handler(args, ctx) {
+      const conds = [eq(accounts.workspaceId, ctx.workspaceId)];
+      const after = readCursor(args.cursor);
+      if (after) conds.push(sql`(${accounts.arrCents}, ${accounts.id}) < (${after.key}::bigint, ${after.id}::uuid)`);
+      const limit = clampLimit(args.limit, 100);
+
       const rows = await db
-        .select({ name: accounts.name, arr_cents: accounts.arrCents, since: accounts.since })
+        .select({
+          name: accounts.name,
+          arr_cents: accounts.arrCents,
+          since: accounts.since,
+          _key: sql<string>`${accounts.arrCents}::text`,
+          _id: accounts.id,
+        })
         .from(accounts)
-        .where(eq(accounts.workspaceId, ctx.workspaceId))
-        .orderBy(desc(accounts.arrCents))
-        .limit(clampLimit(args.limit, 100));
-      return { count: rows.length, accounts: rows.map(r => ({ name: r.name, arr_usd: r.arr_cents / 100, since: r.since })) };
+        .where(and(...conds))
+        .orderBy(desc(accounts.arrCents), desc(accounts.id))
+        .limit(limit + 1);
+      const p = page(rows, limit);
+      return {
+        count: p.rows.length,
+        accounts: p.rows.map(r => ({ name: r.name, arr_usd: r.arr_cents / 100, since: r.since })),
+        next_cursor: p.next_cursor,
+      };
     },
   },
 

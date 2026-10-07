@@ -63,8 +63,9 @@ You need **Node 22+**, **pnpm 11+**, and **Docker** (for Postgres).
 
 ```bash
 pnpm install
-pnpm db:up         # boots Postgres 16 in docker on :5432
-pnpm db:push       # applies the schema
+pnpm db:up         # boots Postgres 16 (with pgvector) in docker on :5432
+export DATABASE_URL=postgres://crumb:crumb@localhost:5432/crumb
+pnpm db:migrate    # applies the migrations, which also create the pgcrypto + vector extensions
 pnpm db:seed       # populates one workspace (southbeam) with sample data
 pnpm widget:build  # builds the embed widget → apps/dashboard/public/widget.js
 cp apps/dashboard/.env.local.example apps/dashboard/.env.local
@@ -73,7 +74,7 @@ pnpm dev           # → http://localhost:3000
 
 The dashboard requires login, and sign-in is invite-only. There are two first-run paths, pick one:
 - **Fresh / empty DB** (skip `pnpm db:seed`): mint a one-time setup link with `CRUMB_APP_URL=http://localhost:3000 pnpm --filter @crumb/db cli setup-link`, open it, and create the first workspace and its admin. The link works once and expires after 60 minutes. Opening `/onboard` without a link explains how to get one.
-- **Seeded demo** (`pnpm db:seed`): log in at **http://localhost:3000/login** as a seeded admin (e.g. `lina@southbeam.io`) — the seed creates the `southbeam` workspace + sample data. Magic links go to whichever email provider is configured — by default that's stdout (read from the dev terminal or `docker compose logs dashboard`); set `CRUMB_EMAIL_PROVIDER=resend` for real delivery, see [Email delivery](#email-delivery). A 7-day session cookie is set; sign out clears it.
+- **Seeded demo** (`pnpm db:seed`): log in at **http://localhost:3000/login** as a seeded admin (e.g. `lina@southbeam.io`); the seed creates the `southbeam` workspace + sample data. Magic links go to whichever email provider is configured, by default stdout (read from the dev terminal or `docker compose logs dashboard`); set `CRUMB_EMAIL_PROVIDER=smtp` (or `resend` with `CRUMB_TIER=cloud`) for real delivery, see [Email delivery](#email-delivery). A 7-day session cookie is set; sign out clears it.
 
 ### Self-host vs. Crumb Cloud
 
@@ -124,7 +125,14 @@ AISTACK_API_KEY=xxx               # AI features: clustering, ticket drafts, Ask 
 # Slack / Linear / Jira / GitHub OAuth-app credentials as added later
 ```
 
-**Storage:** default `local` (per-instance disk) is fine for single-node self-host. A multi-instance Cloud deployment must set `CRUMB_STORAGE_PROVIDER=postgres` so attachments + Session Record chunks live in the DB and every instance sees them (an S3/R2 adapter is the eventual home for large blobs).
+### Storage
+
+Attachments (and, on Cloud, Session Record chunks) go where `CRUMB_STORAGE_PROVIDER` says:
+
+- **`postgres`** (the Docker Compose default): the bytes live in the `storage_blobs` table, so they survive container recreates, every instance sees them, and `pg_dump` backs them up with everything else. They're stored base64-encoded, about a third larger than the file. That's fine at the 10 MB upload cap, but attachments do grow the database and its dumps. Multi-instance Cloud requires it.
+- **`local`** (the default for `pnpm dev`): files under `CRUMB_STORAGE_DIR` (default `.crumb-uploads` in the dashboard's working directory). In a container that directory is inside the container, so every recreate (which every upgrade does) deletes the files. Use `local` in Docker only with `CRUMB_STORAGE_DIR` on a mounted volume, and back that directory up alongside the database.
+
+If you run the image without the bundled compose file, set `CRUMB_STORAGE_PROVIDER=postgres` yourself; the container logs a warning on every start while files would land on its own disk. Upgrading an install that kept files on the container's disk: see DEPLOY.md "Update to a new version".
 
 ### Email delivery
 
@@ -223,7 +231,7 @@ admin), the Connect button now shows the reason inline instead of silently doing
 
 ### Slack notifications
 
-Workspace admins can connect Slack from **Settings → Integrations** to DM teammates when a customer replies — instead of (or in addition to, on a per-user basis) email. Each member picks their delivery channel under **Notifications → Preferences**; Slack falls back to email if the lookup or DM send fails, so customer replies never go silently dropped.
+Workspace admins can connect Slack from **Settings → Integrations** to DM teammates when a customer replies, instead of (or, per user, in addition to) email. Each member picks their delivery channel under **Settings → Notifications**; Slack falls back to email if the lookup or DM send fails, so customer replies never go silently dropped.
 
 Cloud comes with a Slack app registered. Self-host needs to bring its own — set:
 
@@ -233,7 +241,7 @@ SLACK_CLIENT_SECRET=...
 SLACK_SIGNING_SECRET=...
 ```
 
-Then register a Slack app at [api.slack.com/apps](https://api.slack.com/apps) with bot scopes `chat:write`, `im:write`, `users:read`, `users:read.email`, `app_mentions:read` and redirect URL `{dashboard origin}/api/integrations/slack/callback`. `SLACK_SIGNING_SECRET` (from the app's Basic Information) verifies the request signature on the `/crumb` command and the events endpoint. Optional: `SLACK_REDIRECT_URL` if the dashboard sits behind a proxy that mangles `x-forwarded-host`; `SLACK_STATE_SECRET` if you want a dedicated HMAC key for the OAuth `state` (otherwise falls back to `CRUMB_INBOUND_SECRET`, then `SLACK_CLIENT_SECRET`).
+Then register a Slack app at [api.slack.com/apps](https://api.slack.com/apps) with bot scopes `chat:write`, `im:write`, `users:read`, `users:read.email`, `app_mentions:read` and redirect URL `{dashboard origin}/api/integrations/slack/callback`. `SLACK_SIGNING_SECRET` (from the app's Basic Information) verifies the request signature on the `/crumb` command and the events endpoint. Optional: `SLACK_REDIRECT_URL` if the dashboard sits behind a proxy that mangles `x-forwarded-host`; `CRUMB_OAUTH_STATE_SECRET` if you want a dedicated HMAC key for the OAuth `state` of every provider (otherwise it falls back to `CRUMB_INBOUND_SECRET`, then the first provider client secret that's set).
 
 Slack user lookups are by email — each workspace member is matched once to their Slack `user_id` and cached on first DM. Failed lookups (member's Slack email doesn't match their Crumb email) are retried after 24h.
 
@@ -265,10 +273,10 @@ What this **does not** do: write Crumb status changes back to the provider, mirr
 
 Crumb prioritizes by the revenue behind a request, so every account carries an ARR value. Connect **HubSpot** or **Salesforce** under **Settings → Integrations** and Crumb pulls your companies/accounts and their ARR, then matches incoming feedback to the right account. Like the engineering integrations it's one-click on Cloud (Team plan) and BYO OAuth on self-host:
 
-- **HubSpot**: `HUBSPOT_CLIENT_ID` / `HUBSPOT_CLIENT_SECRET` (+ `HUBSPOT_ARR_PROPERTY` to name the company property holding ARR). Redirect URL `{dashboard origin}/api/integrations/hubspot/callback`.
+- **HubSpot**: `HUBSPOT_CLIENT_ID` / `HUBSPOT_CLIENT_SECRET` (+ optional `HUBSPOT_ARR_PROPERTY` to preset the ARR property on self-host). Redirect URL `{dashboard origin}/api/integrations/hubspot/callback`.
 - **Salesforce**: `SALESFORCE_CLIENT_ID` / `SALESFORCE_CLIENT_SECRET` (+ `SALESFORCE_LOGIN_URL` for a sandbox / My Domain). Redirect URL `{dashboard origin}/api/integrations/salesforce/callback`.
 
-Line up fields under **Settings → Account mapping**. Connect-time sync and the **Sync now** button work immediately; to keep ARR fresh, hit `POST /api/v1/internal/crm-sync` on a schedule (header `X-Crumb-Sweep-Secret`, e.g. every 6h). ARR you set by hand is marked manual and is never overwritten by a sync unless you opt in.
+After connecting, an admin picks the CRM field that holds ARR (any number or currency field) on the integration's card. Nothing is assumed: the stock annual-revenue field is the customer company's own revenue, not what it pays you, so until a field is picked only account names sync. Line up fields under **Settings → Account mapping**. Connect-time sync and the **Sync now** button work immediately; to keep ARR fresh, hit `POST /api/v1/internal/crm-sync` on a schedule (header `X-Crumb-Sweep-Secret`, e.g. every 6h). ARR you set by hand is marked manual and is never overwritten by a sync unless you opt in.
 
 ### AI initiative clustering
 
@@ -293,7 +301,7 @@ Ask a plain-English question across your feedback and get an answer grounded in 
 
 ### Insights — usage analytics & churn signals
 
-**Settings → Insights** turns the raw stream into a read on the relationship: median loop time (submission → outcome), open loops and the ARR behind them, first-response time, volume by status, a 12-week trend, and volume by account ARR tier. Stream product usage in via `POST /api/v1/usage-events` (`crumb.track()` from the widget) and accounts that go quiet or trend negative surface as **at-risk** churn signals. Export a per-account, QBR-style CSV from `GET /api/v1/insights/export`. The non-AI metrics run on self-host; the AI-enriched churn/sentiment signals need a Cloud Team plan.
+**Insights** (`/insights` in the sidebar) turns the raw stream into a read on the relationship: median loop time (submission → outcome), open loops and the ARR behind them, first-response time, volume by status, a 12-week trend, and volume by account ARR tier. Stream product usage in via `POST /api/v1/usage-events` (`crumb.track()` from the widget) and accounts that go quiet or trend negative surface as **at-risk** churn signals. Export a per-account, QBR-style CSV with the page's **Export** button (`/insights/export`, signed-in session). The non-AI metrics run on self-host; the AI-enriched churn/sentiment signals need a Cloud Team plan.
 
 ### Session record (Cloud)
 
@@ -364,6 +372,10 @@ In a single-page app, drive identity from JavaScript: `crumb.identify({ jwt })` 
 
 All endpoints CORS-enabled (`Access-Control-Allow-Origin: *`) until auth narrows it down per-workspace.
 
+The full reference (customer API, MCP server, outgoing webhooks and operator endpoints, with request and response shapes) is in [docs/API.md](docs/API.md).
+
+**MCP server.** AI assistants (Claude Desktop, Cursor, any MCP client) can read and triage your feedback over the Model Context Protocol at `{dashboard origin}/api/mcp`. Create a key under **Settings → API keys** and send it as `Authorization: Bearer <key>`; the key acts as the teammate who created it. Tools and limits: [docs/API.md](docs/API.md#mcp-server).
+
 ### Try the create endpoint directly
 
 The embedded widget will POST to `/api/v1/items`. You can hit it manually right now:
@@ -392,7 +404,8 @@ Reload `/inbox` and the item is there. Click in to reply or move it through the 
 | `pnpm build`       | Next.js production build                          |
 | `pnpm db:up`       | Start the Postgres container                      |
 | `pnpm db:down`     | Stop the Postgres container (data persists)       |
-| `pnpm db:push`     | Sync schema → DB (Drizzle Kit, dev only)          |
+| `pnpm db:migrate`  | Apply SQL migrations (needs `DATABASE_URL`)       |
+| `pnpm db:generate` | Write a migration after editing the schema        |
 | `pnpm db:seed`     | Reseed sample data (wipes existing rows first)    |
 | `pnpm db:studio`   | Open Drizzle Studio against the local DB          |
 | `pnpm widget:build`| Build the embed widget bundle                     |
@@ -414,9 +427,9 @@ This builds the dashboard image, brings Postgres up, waits for it to be healthy,
 2. Open the link and create your workspace and admin account. You're signed in when you finish. The link works once and expires after 60 minutes. For a fresh one, run `docker compose exec dashboard node packages/db/dist/cli.mjs setup-link`.
 3. Invite teammates from **Settings → Team**.
 
-The link is built from `CRUMB_APP_URL`. When that's unset (the default for a local run) you get only the `/onboard?token=…` path, so open it on your dashboard's address, e.g. `http://localhost:3000/onboard?token=…`. Once a workspace exists, nothing more is printed and `/onboard` without a link sends visitors to sign in.
+The link is built from `CRUMB_APP_URL`. When that's unset (as on a local run without a `.env`) you get only the `/onboard?token=…` path, so open it on your dashboard's address, e.g. `http://localhost:3000/onboard?token=…`. Once a workspace exists, nothing more is printed and `/onboard` without a link sends visitors to sign in.
 
-Override anything via env or a `.env` file at the repo root:
+Configure it with a `.env` file next to `docker-compose.yml` (start from `.env.example`). Compose passes every variable in it to the dashboard container, so any setting documented in `apps/dashboard/.env.local.example` works there. Your shell environment only fills in the compose file's own `${...}` values (ports, the build arg and the defaults below); it doesn't otherwise reach the container. Compose-level defaults:
 
 | Var                    | Default        | What it does                                                |
 | ---------------------- | -------------- | ----------------------------------------------------------- |
@@ -425,7 +438,8 @@ Override anything via env or a `.env` file at the repo root:
 | `POSTGRES_DB`          | `crumb`        | Postgres database name                                      |
 | `POSTGRES_PORT`        | `5432`         | Host port for Postgres                                      |
 | `DASHBOARD_PORT`       | `3000`         | Host port for the dashboard                                 |
-| `CRUMB_WORKSPACE_SLUG` | `southbeam`    | Workspace the dashboard renders (until auth lands)          |
+| `CRUMB_TIER`           | `self_host`    | Runtime tier (`cloud` only for the hosted product)          |
+| `CRUMB_STORAGE_PROVIDER` | `postgres`   | Where attachments live; see [Storage](#storage)             |
 | `CRUMB_SKIP_MIGRATIONS`| _(unset)_      | Set to `1` to skip the migrate step on container startup    |
 | `CRUMB_EDITION`        | `community`    | **Build arg** (not runtime): `community` self-host build or `cloud`. See [Self-host vs. Crumb Cloud](#self-host-vs-crumb-cloud) |
 
@@ -439,7 +453,7 @@ docker compose exec dashboard sh -c "node packages/db/dist/migrate.mjs && true" 
 DATABASE_URL=postgres://crumb:crumb@localhost:5432/crumb pnpm db:seed
 ```
 
-For a real deployment, point `DATABASE_URL` at your own managed Postgres and skip the `postgres` service.
+To use your own managed Postgres (it needs the `vector` extension), replace `DATABASE_URL` under the dashboard service in `docker-compose.yml`, which otherwise derives it from the `POSTGRES_*` values, and remove the `postgres` service and the dashboard's `depends_on`. A `DATABASE_URL` in `.env` doesn't override it.
 
 The hosted tier is live at [crumb-app.localhostlabs.net](https://crumb-app.localhostlabs.net), running the same code with auth, billing, and the AI features layered on top.
 
@@ -460,6 +474,7 @@ Every sensitive env var also accepts a `*_FILE` companion pointing at a file who
 services:
   dashboard:
     environment:
+      DATABASE_URL: ""   # the stock compose file sets this, and a set variable wins over its _FILE
       DATABASE_URL_FILE: /run/secrets/db_url
       CRUMB_ENCRYPTION_KEY_FILE: /run/secrets/enc_key
       STRIPE_SECRET_KEY_FILE: /run/secrets/stripe_key
@@ -470,11 +485,11 @@ secrets:
   stripe_key:{ file: ./secrets/stripe_key }
 ```
 
-For production, set `CRUMB_ENCRYPTION_KEY` (`openssl rand -hex 32`) so integration tokens are encrypted at rest — see `apps/dashboard/.env.local.example`, which documents every variable.
+For production, set `CRUMB_ENCRYPTION_KEY` (`openssl rand -hex 32`) so integration tokens are encrypted at rest. Set it after integrations were connected? `docker compose exec dashboard node packages/db/dist/backfill-encrypt-secrets.mjs` encrypts the Slack, Linear and Jira tokens already stored. `apps/dashboard/.env.local.example` documents every variable, key rotation included.
 
 ### Backups & restore
 
-Crumb keeps everything in Postgres (with `CRUMB_STORAGE_PROVIDER=postgres`, that includes attachment + replay bytes), so a single `pg_dump` is a full backup.
+With the compose default `CRUMB_STORAGE_PROVIDER=postgres`, Crumb keeps everything in Postgres, attachment and replay bytes included, so a single `pg_dump` is a full backup. If you switched to `local` storage, also copy `CRUMB_STORAGE_DIR`.
 
 ```bash
 # Back up (compressed custom format)
@@ -488,12 +503,18 @@ Schedule the dump however you like (host cron, a sidecar) and ship the file off-
 
 ### Maintenance cron
 
-To prune orphaned uploads + replay sessions (and enforce replay retention), set `CRUMB_INTERNAL_SWEEP_SECRET` and hit the cleanup endpoint on a schedule:
+Three internal endpoints do scheduled work. Set `CRUMB_INTERNAL_SWEEP_SECRET`, then `POST` to each with the header `X-Crumb-Sweep-Secret: <secret>` (they return 503 until the secret is set):
+
+- `/api/v1/internal/replay-sweep`, hourly: prunes orphaned uploads and replay sessions, enforces replay retention, drops aged usage events (a bounded batch per run).
+- `/api/v1/internal/crm-sync`, every few hours: refreshes accounts and ARR from a connected CRM.
+- `/api/v1/internal/feedback-sync`, every 15 to 30 minutes: pulls new tickets and calls from connected feedback sources.
 
 ```bash
 curl -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" \
   http://localhost:3000/api/v1/internal/replay-sweep
 ```
+
+DEPLOY.md has crontab lines that read the secret from `.env`.
 
 ## License
 

@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db, webhookEndpoints } from "@crumb/db";
 import { requireSession } from "@/lib/auth";
-import { newWebhookSecret, isDeliverableUrl, EVENT_TYPES, isEventType, type EventType } from "@/lib/webhooks";
+import { newWebhookSecret, isDeliverableUrl, sendTestEvent, EVENT_TYPES, isEventType, type EventType } from "@/lib/webhooks";
 
 const MAX_ENDPOINTS = 10;
 
@@ -118,4 +118,38 @@ export async function revealWebhookSecret(id: string): Promise<{ ok: true; secre
     .limit(1);
   if (!row) return { ok: false, error: "Endpoint not found." };
   return { ok: true, secret: row.secret };
+}
+
+// "Rotate secret": the old secret stops verifying at once, so the panel
+// confirms first and shows the new one (once, with Copy) for the receiver.
+export async function rotateWebhookSecret(id: string): Promise<{ ok: true; secret: string } | { ok: false; error: string }> {
+  const { workspace, user } = await requireSession();
+  if (user.role !== "admin") return { ok: false, error: "Only admins can manage webhooks." };
+  const secret = newWebhookSecret();
+  const r = await db
+    .update(webhookEndpoints)
+    .set({ secret })
+    .where(and(eq(webhookEndpoints.id, id), eq(webhookEndpoints.workspaceId, workspace.id)))
+    .returning({ id: webhookEndpoints.id });
+  if (r.length === 0) return { ok: false, error: "Endpoint not found." };
+  return { ok: true, secret };
+}
+
+// "Send test": one signed sample event, awaited so the panel can say how it went.
+export async function sendTestWebhook(id: string): Promise<{ ok: true; delivered: boolean; message: string } | { ok: false; error: string }> {
+  const { workspace, user } = await requireSession();
+  if (user.role !== "admin") return { ok: false, error: "Only admins can manage webhooks." };
+  const [ep] = await db
+    .select()
+    .from(webhookEndpoints)
+    .where(and(eq(webhookEndpoints.id, id), eq(webhookEndpoints.workspaceId, workspace.id)))
+    .limit(1);
+  if (!ep) return { ok: false, error: "Endpoint not found." };
+  const r = await sendTestEvent(ep, workspace.slug);
+  revalidatePath("/settings/webhooks");
+  return {
+    ok: true,
+    delivered: r.ok,
+    message: r.ok ? "Test event delivered." : `Test event not delivered. ${r.message}${r.status ? ` (HTTP ${r.status})` : ""}.`,
+  };
 }

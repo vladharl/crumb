@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { deliverEvent } from "@/lib/webhooks";
 import { postSlackWebhook } from "@/lib/notify/chat";
 import { fetchSitePreview } from "@/app/(app)/settings/branding/actions";
@@ -72,7 +74,9 @@ describe("outbound webhook delivery", () => {
     });
 
     expect(hits).toEqual(["POST /hook"]); // the redirect target was never requested
-    expect(h.updates).toEqual([expect.objectContaining({ lastStatus: 302, failureCount: 1 })]);
+    expect(h.updates).toEqual([expect.objectContaining({ lastStatus: 302 })]);
+    // A failed event: the streak goes up by one (counted in SQL).
+    expect(new PgDialect().sqlToQuery(h.updates[0]!.failureCount as SQL).sql).toBe('"webhook_endpoints"."failure_count" + 1');
   });
 
   it("chat webhooks don't follow a 3xx either", async () => {

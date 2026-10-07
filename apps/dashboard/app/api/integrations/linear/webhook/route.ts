@@ -4,13 +4,15 @@ import { db, items, workspaces } from "@crumb/db";
 import { verifyWebhook } from "@/lib/integrations/linear";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
+import { syncExternalStatus } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // Linear webhook ingress. Status sync only — when a linked Issue's state
-// changes, we update the matching item's external_status. Linear is the
-// source of truth for engineering status; Crumb never writes back.
+// changes, we update the matching item's external_status (and emit
+// item.external_status_changed). Linear is the source of truth for
+// engineering status; Crumb never writes back.
 //
 // Linear sends a header `linear-signature` containing a hex SHA-256 HMAC
 // of the raw request body, signed with the webhook's signing secret.
@@ -96,24 +98,17 @@ export async function POST(req: Request) {
   const urlKey = orgUrlKey(event.data.url);
 
   try {
-    await db
-      .update(items)
-      .set({
-        externalStatus: newStatus,
-        externalSyncedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(items.externalProvider, "linear"),
-        eq(items.externalTicketId, identifier),
-        or(
-          inArray(items.workspaceId, installs(eq(workspaces.linearOrganizationId, organizationId))),
-          urlKey ? and(
-            inArray(items.workspaceId, installs(and(isNotNull(workspaces.linearAccessToken), isNull(workspaces.linearOrganizationId)))),
-            sql`starts_with(${items.externalTicketUrl}, ${`https://linear.app/${urlKey}/issue/`})`,
-          ) : undefined,
-        ),
-      ));
+    await syncExternalStatus(and(
+      eq(items.externalProvider, "linear"),
+      eq(items.externalTicketId, identifier),
+      or(
+        inArray(items.workspaceId, installs(eq(workspaces.linearOrganizationId, organizationId))),
+        urlKey ? and(
+          inArray(items.workspaceId, installs(and(isNotNull(workspaces.linearAccessToken), isNull(workspaces.linearOrganizationId)))),
+          sql`starts_with(${items.externalTicketUrl}, ${`https://linear.app/${urlKey}/issue/`})`,
+        ) : undefined,
+      ),
+    ), newStatus);
   } catch (err) {
     log.error("linear webhook DB update failed", { scope: "crumb/linear", identifier, err });
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });

@@ -8,6 +8,7 @@ import {
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
 import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
 import { seal } from "@/lib/crypto-at-rest";
+import { withoutAlert } from "@/lib/integrations/revoke";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +72,7 @@ export async function GET(req: Request) {
       // Set on every connect: a reconnect may point at a different Linear org.
       linearOrganizationId: info?.organizationId ?? null,
       linearInstalledAt: new Date(),
+      integrationAlerts: withoutAlert("linear"),
     })
     .where(eq(workspaces.id, ws.id));
 

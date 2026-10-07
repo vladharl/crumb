@@ -216,6 +216,13 @@ export async function updateItemStatus(
           kind: "status",
           toStatus: input.status,
         });
+        void emitEvent(workspace.id, {
+          type: "customer.notified",
+          workspace: workspace.slug,
+          item: { short_id: input.itemShortId, title: row.title, type: row.type },
+          notification: { kind: "status", channel: "email", to_status: input.status },
+          at: new Date().toISOString(),
+        });
       }
     } catch (err) {
       log.error("status notification failed", { scope: "crumb/status", err });
@@ -331,6 +338,13 @@ export async function createItemReply(
           itemId: row.id,
           accountUserId: row.submitterId,
           kind: "reply",
+        });
+        void emitEvent(workspace.id, {
+          type: "customer.notified",
+          workspace: workspace.slug,
+          item: { short_id: input.itemShortId, title: row.title, type: row.type },
+          notification: { kind: "reply", channel: "email", to_status: null },
+          at: new Date().toISOString(),
         });
       }
     } catch (err) {

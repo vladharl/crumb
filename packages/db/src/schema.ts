@@ -128,6 +128,10 @@ export const workspaces = pgTable("workspaces", {
   hubspotTokenExpiresAt: timestamp("hubspot_token_expires_at", { withTimezone: true }),
   hubspotPortalId:       text("hubspot_portal_id"),
   hubspotInstalledAt:    timestamp("hubspot_installed_at", { withTimezone: true }),
+  // The company property ARR syncs from, chosen by an admin after connecting
+  // (never guessed: annualrevenue is the company's own revenue). Null syncs
+  // names only. Cleared on disconnect, since a reconnect may be another portal.
+  hubspotArrField:       text("hubspot_arr_field"),
 
   // ── Salesforce CRM install (OAuth web-server flow) ───────────
   // instance_url is returned with the token and scopes every REST/SOQL call
@@ -137,6 +141,8 @@ export const workspaces = pgTable("workspaces", {
   salesforceInstanceUrl:    text("salesforce_instance_url"),
   salesforceTokenExpiresAt: timestamp("salesforce_token_expires_at", { withTimezone: true }),
   salesforceInstalledAt:    timestamp("salesforce_installed_at", { withTimezone: true }),
+  // The Account field ARR syncs from; same rules as hubspot_arr_field.
+  salesforceArrField:       text("salesforce_arr_field"),
 
   // ── MS Teams incoming webhook (vendor channel firehose; sealed) ──────
   // A Teams "Workflows"/incoming-webhook URL the workspace pastes; key events
@@ -1015,10 +1021,9 @@ export type WebhookEndpoint = typeof webhookEndpoints.$inferSelect;
 // sent and why it failed; webhook_endpoints keeps only the latest status.
 // http_status is null when no response came back (timeout, network error,
 // refused target); error is a short reason, never the response body.
-// Retention: rows older than 30 days are pruned in batches on created_at,
-// like usage_events.
-// ponytail: no created_at-only index, the prune scans a table retention keeps
-// small. Add one if deliveries reach millions of rows.
+// Retention: per endpoint, after each delivery or Send test, keep the newest
+// 100 rows and none older than 30 days (lib/webhooks.ts pruneLog). The
+// endpoint_id index below serves that prune.
 export const webhookDeliveries = pgTable("webhook_deliveries", {
   id: uuid("id").primaryKey().defaultRandom(),
   endpointId: uuid("endpoint_id").notNull().references(() => webhookEndpoints.id, { onDelete: "cascade" }),

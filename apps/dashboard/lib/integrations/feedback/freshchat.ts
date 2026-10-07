@@ -1,8 +1,9 @@
 import "server-only";
-import type { IntegrationConnection } from "@crumb/db";
 import { open } from "@/lib/crypto-at-rest";
-import { log } from "@/lib/log";
-import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfig, lookbackStart, vendorBaseUrl } from "./types";
+import {
+  type FeedbackAdapter, type FeedbackPage, type FeedbackRecord,
+  FeedbackSyncError, cursorIso, readConfig, vendorBaseUrl, vendorFetch,
+} from "./types";
 
 // Freshchat — pull recently-updated conversations.
 //   https://developers.freshchat.com/api/
@@ -11,10 +12,10 @@ import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfi
 // be on freshchat.com.
 //
 // NOTE: Freshchat is webhook-first; its public "list conversations updated since"
-// support is thin and account-dependent. This polling adapter tries the
-// documented endpoint and DEGRADES SAFELY (logs + done) when it isn't available,
-// so a misconfigured/unsupported account never errors the whole sync. A
-// real-time Freshchat webhook ingest is the recommended follow-up.
+// support is thin and account-dependent. When an account doesn't expose it, the
+// refusal (404/501) shows on the connection as an error rather than a sync that
+// quietly finds nothing. A real-time Freshchat webhook ingest is the
+// recommended follow-up.
 
 const PER_PAGE = 50;
 
@@ -42,34 +43,17 @@ export const freshchat: FeedbackAdapter = {
     return true; // BYO API token + region base URL on the connection
   },
 
-  async listSince(conn: IntegrationConnection, cursor: string | null): Promise<FeedbackPage> {
-    const cfg = readConfig(conn);
+  async listSince(conn, cursor): Promise<FeedbackPage> {
     const token = conn.accessToken ? open(conn.accessToken) : null;
-    if (!cfg.baseUrl || !token) {
-      log.error("freshchat connection incomplete", { scope: "crumb/freshchat", workspaceId: conn.workspaceId });
-      return { records: [], nextCursor: cursor, done: true };
-    }
+    const base = vendorBaseUrl(readConfig(conn).baseUrl, "freshchat.com");
+    if (!base || !token) throw new FeedbackSyncError("config", "Freshchat needs an API URL on freshchat.com and an API token.");
 
-    const base = vendorBaseUrl(cfg.baseUrl, "freshchat.com");
-    if (!base) throw new Error("Freshchat API base URL must be on freshchat.com, like https://acme.freshchat.com/v2.");
-    const since = cursor ?? lookbackStart().toISOString();
+    const since = cursorIso(cursor);
     const url = new URL(`${base}/conversations`);
     url.searchParams.set("updated_time", since);
     url.searchParams.set("items_per_page", String(PER_PAGE));
 
-    let resp: Response;
-    try {
-      resp = await fetch(url, { headers: { authorization: `Bearer ${token}`, accept: "application/json" }, redirect: "manual" });
-    } catch (err) {
-      log.error("freshchat fetch failed", { scope: "crumb/freshchat", err });
-      return { records: [], nextCursor: cursor, done: true };
-    }
-    if (!resp.ok) {
-      // 404/501 here usually means the account/plan doesn't expose conversation
-      // polling — degrade to "nothing to do" rather than erroring the sync.
-      log.warn("freshchat list conversations unavailable", { scope: "crumb/freshchat", status: resp.status });
-      return { records: [], nextCursor: cursor, done: true };
-    }
+    const resp = await vendorFetch(url, { headers: { authorization: `Bearer ${token}`, accept: "application/json" } });
     const data = (await resp.json()) as ConversationsResponse;
     const conversations = data.conversations ?? [];
 

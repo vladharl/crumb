@@ -23,6 +23,23 @@ export function aistackConfigured(): boolean {
   return !!process.env.AISTACK_API_KEY?.trim();
 }
 
+// House style: no em-dashes in anything people read. Prompts whose output is
+// shown to someone carry this rule; aistackChat enforces it on every reply.
+export const NO_EM_DASH_RULE = "Never use em-dashes (—). Use a comma, a period or parentheses instead.";
+
+// Dash punctuation in model output becomes a comma: an em-dash (raw, or as a
+// unicode escape inside JSON) or an en-dash with spaces around it. A dash
+// that opens a line or meets other punctuation is dropped. Ranges like 2–5
+// and 9:00 – 17:00 stay.
+export function noEmDash(text: string): string {
+  return text
+    .replace(/\\u2014/gi, "—")
+    .replace(/(?<!\d)[ \t]+–[ \t]+(?!\d)/g, " — ")
+    .replace(/^[ \t]*—[ \t]*/gm, "")
+    .replace(/[ \t]*—[ \t]*(?=[.,;:!?)]|$)/gm, "")
+    .replace(/[ \t]*—[ \t]*/g, ", ");
+}
+
 // Single-turn chat completion. Returns the assistant message content, or null
 // on missing key / non-2xx / timeout / network error — callers treat null as
 // "no suggestion" and never throw (both AI features are best-effort).
@@ -59,7 +76,7 @@ export async function aistackChat(
     const data = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
     // qwen is a reasoning model: thinking tokens land in message.reasoning
     // (non-streaming), so message.content is the clean final answer.
-    const text = (data.choices?.[0]?.message?.content ?? "").trim();
+    const text = noEmDash((data.choices?.[0]?.message?.content ?? "").trim()).trim();
     return text || null;
   } catch (err) {
     log.error("aistack chat error", { scope: opts.scope, err });

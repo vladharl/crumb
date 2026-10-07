@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db, accounts } from "@crumb/db";
 import { verifySlackSignature } from "@/lib/slack/verify";
 import { workspaceForSlackTeam } from "@/lib/slack/install";
+import { integrationsAllowed } from "@/lib/entitlements";
 import { composeItem } from "@/lib/compose";
 import { log } from "@/lib/log";
 
@@ -54,6 +55,13 @@ export async function POST(req: Request) {
   if (!teamId) return new NextResponse("", { status: 200 });
   const ws = await workspaceForSlackTeam(teamId);
   if (!ws) return new NextResponse("", { status: 200 });
+  // A form opened before a downgrade can't create items after it.
+  if (!integrationsAllowed(ws)) {
+    return NextResponse.json({
+      response_action: "errors",
+      errors: { title: "Capturing from Slack is paused on this workspace's current Crumb plan. A Crumb admin can upgrade in Settings, then Billing." },
+    });
+  }
 
   if (!title || !accountRaw) {
     return NextResponse.json({ response_action: "errors", errors: { title: "Required", account: "Required" } });

@@ -39,112 +39,27 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Every variable in .env reaches the container, so any setting from
+    # .env.example or apps/dashboard/.env.local.example works by adding it
+    # there. No .env is fine: the defaults below apply. (The `path:` form needs
+    # Docker Compose 2.24 or newer.)
+    env_file:
+      - path: .env
+        required: false
+    # These win over .env: each derives a value or supplies a default.
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-crumb}:${POSTGRES_PASSWORD:-crumb}@postgres:5432/${POSTGRES_DB:-crumb}
-      CRUMB_WORKSPACE_SLUG: ${CRUMB_WORKSPACE_SLUG:-southbeam}
       NODE_ENV: production
       # Runtime tier. Self-host keeps AI / billing / session-replay off;
-      # integrations still work via the BYO OAuth-app creds below. Only set
-      # "cloud" for the hosted product.
+      # integrations still work via BYO OAuth-app creds. Only set "cloud" for
+      # the hosted product.
       CRUMB_TIER: ${CRUMB_TIER:-self_host}
-      # Canonical public origin — used to build OAuth callback URLs. Must equal
-      # the hostname your Cloudflare Tunnel (or DNS) serves, e.g.
-      # https://crumb.localhostlabs.net
-      CRUMB_APP_URL: ${CRUMB_APP_URL:-}
-      # Encrypt integration tokens at rest (recommended). Generate with:
-      #   openssl rand -hex 32
-      CRUMB_ENCRYPTION_KEY: ${CRUMB_ENCRYPTION_KEY:-}
       CRUMB_ENCRYPTION_KEY_ID: ${CRUMB_ENCRYPTION_KEY_ID:-1}
-      # Shared secret for the orphan-sweep cron endpoint (503s until set).
-      CRUMB_INTERNAL_SWEEP_SECRET: ${CRUMB_INTERNAL_SWEEP_SECRET:-}
-      # Days that cron keeps session replays (unset: 30; 0: forever). Per-plan
-      # overrides win over the global.
-      CRUMB_REPLAY_RETENTION_DAYS: ${CRUMB_REPLAY_RETENTION_DAYS:-}
-      CRUMB_REPLAY_RETENTION_DAYS_FREE: ${CRUMB_REPLAY_RETENTION_DAYS_FREE:-}
-      CRUMB_REPLAY_RETENTION_DAYS_TEAM: ${CRUMB_REPLAY_RETENTION_DAYS_TEAM:-}
-      CRUMB_REPLAY_RETENTION_DAYS_GROWTH: ${CRUMB_REPLAY_RETENTION_DAYS_GROWTH:-}
-      # ── Inbound email (reply-by-email + forward-to-capture) ──
-      # The domain your mail provider routes to the inbound webhooks. Enables
-      # reply+<FB-id>.<token>@DOMAIN (reply lands on the thread) and
-      # inbox+<slug>.<token>@DOMAIN (forwarded email → a pending capture in
-      # /captures). CRUMB_INBOUND_SECRET signs those addresses + optionally
-      # gates the webhook (Bearer). Generate the secret: openssl rand -hex 32.
-      CRUMB_INBOUND_DOMAIN: ${CRUMB_INBOUND_DOMAIN:-}
-      CRUMB_INBOUND_SECRET: ${CRUMB_INBOUND_SECRET:-}
-      # ── Integrations: bring your own OAuth-app creds (see DEPLOY.md) ──
-      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
-      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
-      # Verifies the /crumb slash command + interactivity requests from Slack.
-      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
-      LINEAR_CLIENT_ID: ${LINEAR_CLIENT_ID:-}
-      LINEAR_CLIENT_SECRET: ${LINEAR_CLIENT_SECRET:-}
-      LINEAR_WEBHOOK_SECRET: ${LINEAR_WEBHOOK_SECRET:-}
-      JIRA_CLIENT_ID: ${JIRA_CLIENT_ID:-}
-      JIRA_CLIENT_SECRET: ${JIRA_CLIENT_SECRET:-}
-      JIRA_WEBHOOK_SECRET: ${JIRA_WEBHOOK_SECRET:-}
-      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
-      GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
-      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
-      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
-      # The App's OAuth client (with "Request user authorization (OAuth) during
-      # installation" on): proves who finished an install. Without it only
-      # installs made in the last 10 minutes are accepted.
-      GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID:-}
-      GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET:-}
-      # ── CRM sync: bring your own OAuth-app creds (see DEPLOY.md) ──
-      # One-way sync of accounts + ARR from HubSpot / Salesforce. Capability-
-      # gated: present creds ⇒ the integration shows up (works on self-host).
-      HUBSPOT_CLIENT_ID: ${HUBSPOT_CLIENT_ID:-}
-      HUBSPOT_CLIENT_SECRET: ${HUBSPOT_CLIENT_SECRET:-}
-      SALESFORCE_CLIENT_ID: ${SALESFORCE_CLIENT_ID:-}
-      SALESFORCE_CLIENT_SECRET: ${SALESFORCE_CLIENT_SECRET:-}
-      # ── Email (optional): an SMTP relay, or Resend (cloud tier) ──
-      CRUMB_EMAIL_PROVIDER: ${CRUMB_EMAIL_PROVIDER:-}
-      CRUMB_EMAIL_FROM: ${CRUMB_EMAIL_FROM:-}
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASS: ${SMTP_PASS:-}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      # Operator address notified when someone completes self-serve signup.
-      CRUMB_OPS_EMAIL: ${CRUMB_OPS_EMAIL:-}
-      # Where in-app Help → Contact messages go (falls back to CRUMB_OPS_EMAIL).
-      CRUMB_SUPPORT_EMAIL: ${CRUMB_SUPPORT_EMAIL:-}
-      # ── AI (cloud tier): aistack model API for triage / clustering / drafting ──
-      # Defaults (endpoint + models) live in lib/ai/*; only the key is required.
-      AISTACK_API_KEY: ${AISTACK_API_KEY:-}
-      AISTACK_BASE_URL: ${AISTACK_BASE_URL:-}
-      AISTACK_MODEL: ${AISTACK_MODEL:-}
-      AISTACK_EMBEDDINGS_MODEL: ${AISTACK_EMBEDDINGS_MODEL:-}
-      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-}
-      # ── Autopilot: inbound feedback connectors (Gong / Zendesk / Intercom /
-      # Freshdesk / Freshchat). Per-workspace creds are entered in Settings →
-      # Integrations and SEALED in the DB (not env). These optional knobs tune the
-      # Cloud "new & relevant" gate (all 0..1); defaults in lib/feedback/ingest.ts.
-      # Pull runs via the feedback-sync cron (see DEPLOY.md).
-      CRUMB_AUTOPILOT_MERGE_THRESHOLD: ${CRUMB_AUTOPILOT_MERGE_THRESHOLD:-}
-      CRUMB_AUTOPILOT_SUGGEST_THRESHOLD: ${CRUMB_AUTOPILOT_SUGGEST_THRESHOLD:-}
-      CRUMB_AUTOPILOT_RELEVANCE_FLOOR: ${CRUMB_AUTOPILOT_RELEVANCE_FLOOR:-}
-      CRUMB_AUTOPILOT_PROMOTE_RELEVANCE: ${CRUMB_AUTOPILOT_PROMOTE_RELEVANCE:-}
-      CRUMB_AUTOPILOT_PROMOTE_CONFIDENCE: ${CRUMB_AUTOPILOT_PROMOTE_CONFIDENCE:-}
-      # ── Billing (cloud tier): Stripe-direct subscriptions ──
-      # Prices carry lookup_keys team_monthly|team_annual|growth_monthly|growth_annual;
-      # checkout resolves by (plan, interval) and the webhook keys plan_id off the
-      # prefix. Webhook endpoint: ${CRUMB_APP_URL}/api/v1/stripe/webhook.
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-      STRIPE_PORTAL_RETURN_URL: ${STRIPE_PORTAL_RETURN_URL:-}
-      # ── Self-serve signup abuse protection (Cloudflare Turnstile) ──
-      # Both read at runtime (no rebuild). Unset ⇒ not enforced (fine for
-      # self-host, which has no /signup).
-      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
-      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
-      # ── Blob storage (session-replay chunks + attachments) ──
-      # "postgres" keeps blobs in the DB — durable across container recreates,
-      # which matters whenever the container is ephemeral (every redeploy).
-      # "local" (default) writes to the container's disk and is LOST on redeploy.
-      CRUMB_STORAGE_PROVIDER: ${CRUMB_STORAGE_PROVIDER:-}
-      CRUMB_STORAGE_DIR: ${CRUMB_STORAGE_DIR:-}
+      # Attachments (and Cloud session replays) live in Postgres, so they
+      # survive container recreates and every pg_dump includes them. "local"
+      # writes inside the container and loses them on the next upgrade unless
+      # CRUMB_STORAGE_DIR points at a mounted volume (README "Storage").
+      CRUMB_STORAGE_PROVIDER: ${CRUMB_STORAGE_PROVIDER:-postgres}
     # Bind to localhost by default. With the Cloudflare Tunnel below, cloudflared
     # reaches the app over the internal `dashboard` network name, so no public
     # port is needed. Set DASHBOARD_BIND=0.0.0.0 only if exposing directly.
@@ -164,7 +79,7 @@ services:
   # profile so it never runs unless you ask for it:
   #   docker compose --profile tunnel up -d
   # Setup (one-time, see DEPLOY.md): create a tunnel in the Cloudflare Zero
-  # Trust dashboard, add a public hostname (crumb.localhostlabs.net →
+  # Trust dashboard, add a public hostname (crumb.example.com →
   # http://dashboard:3000), and put the tunnel token in .env.
   cloudflared:
     image: cloudflare/cloudflared:latest

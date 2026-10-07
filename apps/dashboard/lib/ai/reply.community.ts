@@ -8,7 +8,9 @@ export const REPLY_MODEL = "qwen-35b-8bit";
 
 export type DraftReplyInput = {
   item: { title: string; body: string; type: string; status: string };
-  recentVendorReplies: string[];
+  lang: string | null;
+  thread: Array<{ fromVendor: boolean; body: string }>;
+  styleExamples: Array<{ body: string; names: string[] }>;
 };
 export type DraftReplyResult = { draft: string; reason: string; confidence: number };
 

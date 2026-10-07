@@ -1,8 +1,9 @@
 import "server-only";
-import type { IntegrationConnection } from "@crumb/db";
 import { open } from "@/lib/crypto-at-rest";
-import { log } from "@/lib/log";
-import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfig, lookbackStart, vendorSubdomain } from "./types";
+import {
+  type FeedbackAdapter, type FeedbackPage, type FeedbackRecord,
+  FeedbackSyncError, cursorIso, readConfig, vendorFetch, vendorSubdomain,
+} from "./types";
 
 // Freshdesk — list tickets updated since a timestamp.
 //   https://developers.freshdesk.com/api/#list_all_tickets
@@ -29,17 +30,12 @@ export const freshdesk: FeedbackAdapter = {
     return true; // BYO domain + API key on the connection
   },
 
-  async listSince(conn: IntegrationConnection, cursor: string | null): Promise<FeedbackPage> {
-    const cfg = readConfig(conn);
+  async listSince(conn, cursor): Promise<FeedbackPage> {
     const apiKey = conn.accessToken ? open(conn.accessToken) : null;
-    if (!cfg.domain || !apiKey) {
-      log.error("freshdesk connection incomplete", { scope: "crumb/freshdesk", workspaceId: conn.workspaceId });
-      return { records: [], nextCursor: cursor, done: true };
-    }
-    const domain = vendorSubdomain(cfg.domain);
-    if (!domain) throw new Error('Invalid Freshdesk domain. Enter just the "acme" of acme.freshdesk.com.');
+    const domain = vendorSubdomain(readConfig(conn).domain);
+    if (!domain || !apiKey) throw new FeedbackSyncError("config", 'Freshdesk needs the "acme" of acme.freshdesk.com and an API key.');
 
-    const since = cursor ?? lookbackStart().toISOString();
+    const since = cursorIso(cursor);
     const url = new URL(`https://${domain}.freshdesk.com/api/v2/tickets`);
     url.searchParams.set("updated_since", since);
     url.searchParams.set("order_by", "updated_at");
@@ -47,11 +43,7 @@ export const freshdesk: FeedbackAdapter = {
     url.searchParams.set("per_page", String(PAGE_LIMIT));
 
     const auth = Buffer.from(`${apiKey}:X`).toString("base64");
-    const resp = await fetch(url, { headers: { authorization: `Basic ${auth}`, accept: "application/json" }, redirect: "manual" });
-    if (!resp.ok) {
-      log.error("freshdesk list tickets failed", { scope: "crumb/freshdesk", status: resp.status });
-      return { records: [], nextCursor: cursor, done: true };
-    }
+    const resp = await vendorFetch(url, { headers: { authorization: `Basic ${auth}`, accept: "application/json" } });
     const tickets = (await resp.json()) as FreshdeskTicket[];
 
     const records: FeedbackRecord[] = [];
@@ -75,7 +67,7 @@ export const freshdesk: FeedbackAdapter = {
     }
 
     const done = tickets.length < PAGE_LIMIT;
-    // Advance one millisecond past the newest seen so the next sync excludes it.
+    // Advance one second past the newest seen so the next sync excludes it.
     const nextCursor = tickets.length ? new Date(new Date(maxUpdated).getTime() + 1000).toISOString() : cursor;
     return { records, nextCursor, done };
   },

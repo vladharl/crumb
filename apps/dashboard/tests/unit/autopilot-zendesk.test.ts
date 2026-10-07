@@ -48,18 +48,17 @@ describe("zendesk adapter — record mapping + cursor", () => {
     expect(calledUrl).toContain("start_time=");
   });
 
-  it("returns an empty, done page when the connection is incomplete", async () => {
+  // A failed pull must never pass for an empty, finished one: that read as
+  // "Connected, last synced just now" while nothing was pulled (audit #80).
+  it("fails as a config error when the connection is incomplete", async () => {
     const bad = { accessToken: null, config: {}, workspaceId: "ws-1" } as unknown as IntegrationConnection;
-    const page = await zendesk.listSince(bad, null);
-    expect(page.records).toEqual([]);
-    expect(page.done).toBe(true);
+    await expect(zendesk.listSince(bad, null)).rejects.toMatchObject({ reason: "config" });
   });
 
-  it("degrades to a done page on a non-2xx response", async () => {
+  it("throws a classified error on a non-2xx response", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 429, json: async () => ({}) })) as unknown as typeof fetch);
-    const page = await zendesk.listSince(conn(), "1735600000");
-    expect(page.records).toEqual([]);
-    expect(page.done).toBe(true);
-    expect(page.nextCursor).toBe("1735600000"); // cursor unchanged on failure
+    await expect(zendesk.listSince(conn(), "1735600000")).rejects.toMatchObject({ reason: "transient" });
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}) })) as unknown as typeof fetch);
+    await expect(zendesk.listSince(conn(), "1735600000")).rejects.toMatchObject({ reason: "auth" });
   });
 });

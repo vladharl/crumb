@@ -3,6 +3,7 @@ import { db, workspaces } from "@crumb/db";
 import { salesforce } from "@/lib/integrations/crm/salesforce";
 import { syncCrmAccounts } from "@/lib/integrations/crm/sync";
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
+import { withoutAlert } from "@/lib/integrations/revoke";
 import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
 import { seal } from "@/lib/crypto-at-rest";
 import { log } from "@/lib/log";
@@ -11,8 +12,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // Salesforce redirects here after consent. Stores the per-org instance_url
-// alongside the tokens (every REST call is scoped to it), then runs an initial
-// account+ARR sync.
+// alongside the tokens (every REST call is scoped to it), clears any
+// automatic-disconnect alert, starts the first account sync in the background
+// and redirects straight back. The settings card shows "Syncing…" until it ends.
 
 function redirectBack(req: Request, slug: string): Response {
   return redirectToSettings(req, "salesforce", slug);
@@ -41,7 +43,7 @@ export async function GET(req: Request) {
     return redirectBack(req, "error_exchange_failed");
   }
 
-  await db
+  const [fresh] = await db
     .update(workspaces)
     .set({
       salesforceAccessToken: seal(tokens.accessToken),
@@ -49,15 +51,14 @@ export async function GET(req: Request) {
       salesforceInstanceUrl: tokens.instanceUrl ?? null,
       salesforceTokenExpiresAt: tokens.expiresAt,
       salesforceInstalledAt: new Date(),
+      integrationAlerts: withoutAlert("salesforce"),
     })
-    .where(eq(workspaces.id, ws.id));
+    .where(eq(workspaces.id, ws.id))
+    .returning();
 
-  try {
-    const [fresh] = await db.select().from(workspaces).where(eq(workspaces.id, ws.id)).limit(1);
-    if (fresh) await syncCrmAccounts(fresh, "salesforce");
-  } catch (err) {
-    log.warn("salesforce initial sync failed (non-fatal)", { scope: "crumb/salesforce", err });
-  }
+  // A big org takes minutes, so the first sync runs after the redirect. It
+  // never rejects, and its outcome is shown on the card.
+  if (fresh) void syncCrmAccounts(fresh, "salesforce");
 
   return redirectBack(req, "connected");
 }

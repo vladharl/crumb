@@ -10,6 +10,12 @@ export const EVENT_TYPES = [
   "item.reply_created",
   "item.assigned",
   "item.merged",
+  "item.external_status_changed",
+  "ticket.linked",
+  "ticket.unlinked",
+  "customer.notified",
+  "initiative.updated",
+  "capture.created",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -20,6 +26,12 @@ export const EVENT_LABELS: Record<EventType, string> = {
   "item.reply_created": "Reply added",
   "item.assigned": "Item assigned",
   "item.merged": "Item merged",
+  "item.external_status_changed": "Tracker status changed",
+  "ticket.linked": "Ticket linked",
+  "ticket.unlinked": "Ticket unlinked",
+  "customer.notified": "Customer notified",
+  "initiative.updated": "Initiative updated",
+  "capture.created": "Capture created",
 };
 
 export function isEventType(s: string): s is EventType {

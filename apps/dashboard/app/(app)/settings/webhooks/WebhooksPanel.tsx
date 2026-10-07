@@ -1,25 +1,74 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Pill, Switch } from "@crumb/ui";
+import { useConfirm } from "@/components/confirm";
+import { useToast } from "@/components/toast";
+import { errorMessage } from "@/lib/action-error";
+import { CopySnippetButton } from "@/app/(app)/settings/install/CopySnippetButton";
 import { EVENT_TYPES, EVENT_LABELS, type EventType } from "@/lib/event-catalog";
-import { createWebhook, deleteWebhook, setWebhookActive, setWebhookEvents, revealWebhookSecret } from "./actions";
+import {
+  createWebhook, deleteWebhook, setWebhookActive, setWebhookEvents, revealWebhookSecret,
+  rotateWebhookSecret, sendTestWebhook,
+} from "./actions";
+
+// One delivery attempt, already in words (the page maps codes server-side).
+export type DeliveryView = {
+  id: string;
+  at: string;   // ISO, shown on hover
+  ago: string;  // "3m", "2h"
+  event: string;
+  attempt: number;
+  httpStatus: number | null;
+  ok: boolean;
+  result: string;
+};
 
 export type EndpointView = {
   id: string;
   url: string;
   active: boolean;
   events: string[];
-  lastStatus: number | null;
-  lastAttemptAt: string | null;
   failureCount: number;
+  deliveries: DeliveryView[]; // newest first
 };
 
-function health(ep: EndpointView): { label: string; tone: "ok" | "warn" | "idle" } {
-  if (!ep.lastAttemptAt) return { label: "No deliveries yet", tone: "idle" };
-  if (ep.lastStatus && ep.lastStatus >= 200 && ep.lastStatus < 300) return { label: `Last delivery ${ep.lastStatus} ✓`, tone: "ok" };
-  return { label: `Last delivery ${ep.lastStatus ?? "failed"} · ${ep.failureCount} fail${ep.failureCount === 1 ? "" : "s"}`, tone: "warn" };
+function streak(ep: EndpointView): string | null {
+  if (ep.failureCount === 0) return null;
+  const n = `${ep.failureCount} failed ${ep.failureCount === 1 ? "event" : "events"} in a row.`;
+  return ep.active ? n : `${n} Turn it back on once your receiver is healthy.`;
+}
+
+const cell: CSSProperties = { padding: "6px 12px 6px 0", textAlign: "left", fontWeight: 400, whiteSpace: "nowrap" };
+
+function DeliveryLog({ deliveries }: { deliveries: DeliveryView[] }) {
+  if (deliveries.length === 0) return <span className="text-xs muted">No deliveries yet.</span>;
+  return (
+    <details>
+      <summary className="text-xs" style={{ color: "var(--ink)" }}>Recent deliveries ({deliveries.length})</summary>
+      <div style={{ overflowX: "auto", marginTop: 6 }}>
+        <table className="text-xs" style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr className="muted">
+              <th style={cell}>When</th><th style={cell}>Event</th><th style={cell}>Attempt</th><th style={cell}>Status</th><th style={cell}>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {deliveries.map(d => (
+              <tr key={d.id} style={{ borderTop: "var(--border)" }}>
+                <td style={cell} className="mono" title={d.at}>{d.ago}</td>
+                <td style={cell}>{d.event}</td>
+                <td style={cell} className="mono">{d.attempt}</td>
+                <td style={cell} className="mono">{d.httpStatus ?? "None"}</td>
+                <td style={{ ...cell, whiteSpace: "normal", minWidth: 180, color: d.ok ? "var(--ink)" : "var(--err-text)" }}>{d.result}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
 }
 
 // Checkbox grid over the event catalog. Pure presentational — parent owns the
@@ -37,18 +86,26 @@ function EventPicker({ selected, onToggle, disabled }: { selected: Set<EventType
   );
 }
 
+const secretBox: CSSProperties = { wordBreak: "break-all", background: "var(--surface)", border: "var(--border)", borderRadius: "var(--r-sm)", padding: "8px 10px" };
+
 export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; isAdmin: boolean }) {
   const router = useRouter();
+  const confirm = useConfirm();
+  const toast = useToast();
   const [url, setUrl] = useState("");
   const [newEvents, setNewEvents] = useState<Set<EventType>>(new Set(EVENT_TYPES));
   const [error, setError] = useState<string | null>(null);
-  const [createdSecret, setCreatedSecret] = useState<{ url: string; secret: string } | null>(null);
+  // A secret shown once, right after create or rotate.
+  const [fresh, setFresh] = useState<{ title: string; note: string; secret: string } | null>(null);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<Record<string, Set<EventType>>>({});
   const [pending, startTransition] = useTransition();
 
   function toggleNew(t: EventType) {
     setNewEvents(s => { const n = new Set(s); n.has(t) ? n.delete(t) : n.add(t); return n; });
+  }
+  function hideSecret(id: string) {
+    setRevealed(s => { const n = { ...s }; delete n[id]; return n; });
   }
 
   function add() {
@@ -59,20 +116,67 @@ export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; i
     fd.set("events", JSON.stringify([...newEvents]));
     startTransition(async () => {
       const r = await createWebhook(fd);
-      if (r.ok) { setCreatedSecret({ url: r.url, secret: r.secret }); setUrl(""); setNewEvents(new Set(EVENT_TYPES)); router.refresh(); }
-      else setError(r.error);
+      if (r.ok) {
+        setFresh({
+          title: "Endpoint added. Save this signing secret now",
+          note: "It verifies the X-Crumb-Signature header. You can reveal it again later, but store it on your receiver now.",
+          secret: r.secret,
+        });
+        setUrl(""); setNewEvents(new Set(EVENT_TYPES)); router.refresh();
+      } else setError(errorMessage(r.error));
     });
   }
   function toggle(id: string, active: boolean) {
-    startTransition(async () => { await setWebhookActive(id, active); router.refresh(); });
+    startTransition(async () => {
+      const r = await setWebhookActive(id, active);
+      if (!r.ok) toast.show({ message: errorMessage(r.error), tone: "error" });
+      router.refresh();
+    });
   }
-  function remove(id: string) {
-    startTransition(async () => { await deleteWebhook(id); router.refresh(); });
+  async function remove(ep: EndpointView) {
+    if (!(await confirm({
+      title: "Delete this endpoint?",
+      body: `${ep.url} stops receiving events right away, and its delivery log is deleted. This can't be undone.`,
+      confirmLabel: "Delete",
+      destructive: true,
+    }))) return;
+    startTransition(async () => {
+      const r = await deleteWebhook(ep.id);
+      if (!r.ok) toast.show({ message: errorMessage(r.error), tone: "error" });
+      router.refresh();
+    });
+  }
+  async function rotate(ep: EndpointView) {
+    if (!(await confirm({
+      title: "Rotate the signing secret?",
+      body: "The current secret stops working right away, so deliveries fail verification until your receiver has the new one.",
+      confirmLabel: "Rotate",
+      destructive: true,
+    }))) return;
+    startTransition(async () => {
+      const r = await rotateWebhookSecret(ep.id);
+      if (!r.ok) { toast.show({ message: errorMessage(r.error), tone: "error" }); return; }
+      hideSecret(ep.id);
+      setFresh({
+        title: "New signing secret. Copy it now",
+        note: `The old secret no longer works for ${ep.url}. Put this one on your receiver.`,
+        secret: r.secret,
+      });
+    });
+  }
+  function sendTest(id: string) {
+    startTransition(async () => {
+      const r = await sendTestWebhook(id);
+      if (r.ok) toast.show({ message: r.message, tone: r.delivered ? "default" : "error" });
+      else toast.show({ message: errorMessage(r.error), tone: "error" });
+      router.refresh();
+    });
   }
   function reveal(id: string) {
     startTransition(async () => {
       const r = await revealWebhookSecret(id);
       if (r.ok) setRevealed(s => ({ ...s, [id]: r.secret }));
+      else toast.show({ message: errorMessage(r.error), tone: "error" });
     });
   }
   function startEdit(ep: EndpointView) {
@@ -87,18 +191,21 @@ export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; i
     startTransition(async () => {
       const r = await setWebhookEvents(id, [...sel]);
       if (r.ok) { setEditing(s => { const n = { ...s }; delete n[id]; return n; }); router.refresh(); }
-      else setError(r.error);
+      else setError(errorMessage(r.error));
     });
   }
 
   return (
     <div className="col gap-4">
-      {createdSecret && (
+      {fresh && (
         <div className="col gap-2" style={{ background: "var(--bone-2)", border: "var(--border)", borderRadius: "var(--r-sm)", padding: "12px 14px" }}>
-          <span className="text-sm fw-med">Endpoint added. Save this signing secret now</span>
-          <span className="text-xs muted">It's used to verify the <span className="mono">X-Crumb-Signature</span> header. You can re-reveal it later, but store it on your receiver now.</span>
-          <div className="mono text-xs" style={{ wordBreak: "break-all", background: "var(--surface)", border: "var(--border)", borderRadius: "var(--r-sm)", padding: "8px 10px" }}>{createdSecret.secret}</div>
-          <div><Btn sm onClick={() => setCreatedSecret(null)}>Done</Btn></div>
+          <span className="text-sm fw-med">{fresh.title}</span>
+          <span className="text-xs muted">{fresh.note}</span>
+          <div className="mono text-xs" style={secretBox}>{fresh.secret}</div>
+          <div className="row gap-2">
+            <CopySnippetButton snippet={fresh.secret} label="Copy secret" />
+            <Btn sm onClick={() => setFresh(null)}>Done</Btn>
+          </div>
         </div>
       )}
 
@@ -110,6 +217,7 @@ export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; i
               value={url}
               onChange={e => setUrl(e.target.value)}
               placeholder="https://your-app.example.com/crumb/webhook"
+              aria-label="Endpoint URL"
               style={{ flex: 1, minWidth: 260, background: "var(--surface)", border: "var(--border)", borderRadius: "var(--r-sm)", padding: "8px 10px", font: "inherit", color: "var(--ink)" }}
             />
             <Btn variant="primary" onClick={add} disabled={pending || !url.trim()}>{pending ? "Adding…" : "Add endpoint"}</Btn>
@@ -120,22 +228,22 @@ export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; i
       {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
 
       {initial.length === 0 ? (
-        <p className="text-sm muted" style={{ margin: 0 }}>No endpoints yet. Add one to receive signed event POSTs (created, status changed, replied, assigned, merged).</p>
+        <p className="text-sm muted" style={{ margin: 0 }}>No endpoints yet. Add one to receive signed event POSTs.</p>
       ) : (
         <div className="col gap-2">
           {initial.map(ep => {
-            const h = health(ep);
             const editSet = editing[ep.id];
+            const note = streak(ep);
             return (
               <div key={ep.id} className="col gap-2" style={{ border: "var(--border)", borderRadius: "var(--r-sm)", padding: "10px 12px" }}>
                 <div className="row between center" style={{ gap: 12, flexWrap: "wrap" }}>
                   <span className="mono text-xs" style={{ wordBreak: "break-all", flex: 1 }}>{ep.url}</span>
                   <div className="row gap-2 center">
-                    <Pill ring ringFill={h.tone === "ok"}>{ep.active ? "Active" : "Paused"}</Pill>
+                    <Pill ring ringFill={ep.active}>{ep.active ? "Active" : "Paused"}</Pill>
                     {isAdmin && <Switch on={ep.active} onClick={() => toggle(ep.id, !ep.active)} />}
                   </div>
                 </div>
-                <span className="text-xs" style={{ color: h.tone === "warn" ? "var(--err-text)" : "var(--mute)" }}>{h.label}</span>
+                {note && <span className="text-xs" style={{ color: "var(--err-text)" }}>{note}</span>}
 
                 {editSet ? (
                   <div className="col gap-2">
@@ -154,15 +262,23 @@ export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; i
                 )}
 
                 {revealed[ep.id] && (
-                  <div className="mono text-xs" style={{ wordBreak: "break-all", background: "var(--bone-2)", border: "var(--border)", borderRadius: "var(--r-sm)", padding: "6px 8px" }}>{revealed[ep.id]}</div>
-                )}
-                {isAdmin && !editSet && (
-                  <div className="row gap-2">
-                    <Btn sm variant="ghost" onClick={() => startEdit(ep)} disabled={pending}>Edit events</Btn>
-                    <Btn sm variant="ghost" onClick={() => reveal(ep.id)} disabled={pending}>Reveal secret</Btn>
-                    <Btn sm variant="ghost" onClick={() => remove(ep.id)} disabled={pending}>Delete</Btn>
+                  <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
+                    <div className="mono text-xs" style={{ ...secretBox, flex: 1, minWidth: 200 }}>{revealed[ep.id]}</div>
+                    <CopySnippetButton snippet={revealed[ep.id]!} label="Copy secret" />
+                    <Btn sm variant="ghost" onClick={() => hideSecret(ep.id)}>Hide</Btn>
                   </div>
                 )}
+                {isAdmin && !editSet && (
+                  <div className="row gap-2" style={{ flexWrap: "wrap" }}>
+                    <Btn sm variant="ghost" onClick={() => startEdit(ep)} disabled={pending}>Edit events</Btn>
+                    <Btn sm variant="ghost" onClick={() => sendTest(ep.id)} disabled={pending}>Send test</Btn>
+                    <Btn sm variant="ghost" onClick={() => reveal(ep.id)} disabled={pending}>Reveal secret</Btn>
+                    <Btn sm variant="ghost" onClick={() => rotate(ep)} disabled={pending}>Rotate secret</Btn>
+                    <Btn sm variant="ghost" onClick={() => remove(ep)} disabled={pending}>Delete</Btn>
+                  </div>
+                )}
+
+                <DeliveryLog deliveries={ep.deliveries} />
               </div>
             );
           })}

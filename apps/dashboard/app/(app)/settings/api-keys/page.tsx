@@ -1,7 +1,7 @@
 import { Card, CardHead, Pill } from "@crumb/ui";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { headers } from "next/headers";
-import { db, apiKeys } from "@crumb/db";
+import { db, apiKeys, workspaceUsers } from "@crumb/db";
 import { getActiveSession } from "@/lib/server";
 import { originFromHeaders } from "@/lib/origin";
 import { ApiKeysPanel, type KeyView } from "./ApiKeysPanel";
@@ -12,8 +12,17 @@ export const metadata = { title: "API keys · Settings" };
 export default async function ApiKeysPage() {
   const { workspace, user } = await getActiveSession();
   const rows = await db
-    .select()
+    .select({
+      id: apiKeys.id,
+      name: apiKeys.name,
+      prefix: apiKeys.prefix,
+      creator: workspaceUsers.name,
+      lastUsedAt: apiKeys.lastUsedAt,
+      createdAt: apiKeys.createdAt,
+    })
     .from(apiKeys)
+    // Inner join is safe: a key's creator FK cascades, so every key has one.
+    .innerJoin(workspaceUsers, eq(workspaceUsers.id, apiKeys.createdByWorkspaceUserId))
     .where(and(eq(apiKeys.workspaceId, workspace.id), isNull(apiKeys.revokedAt)))
     .orderBy(desc(apiKeys.createdAt));
 
@@ -21,6 +30,7 @@ export default async function ApiKeysPage() {
     id: r.id,
     name: r.name,
     prefix: r.prefix,
+    creator: r.creator,
     lastUsedAt: r.lastUsedAt ? r.lastUsedAt.toISOString() : null,
     createdAt: r.createdAt.toISOString(),
   }));
@@ -34,7 +44,7 @@ export default async function ApiKeysPage() {
         <CardHead title="API keys" after={<Pill ring>{rows.length} active</Pill>} />
         <div className="card-body col gap-4">
           <p className="text-sm muted note">
-            API keys let an AI assistant connect to this workspace over MCP to read and triage your feedback. A key acts as the teammate who created it: writes (status changes, replies) are attributed to you and respect your role. Treat a key like a password.
+            API keys let an AI assistant connect to this workspace over MCP to read and triage your feedback. A key acts as the teammate who created it: status changes and replies made with it are attributed to the key&apos;s creator, and what it can do follows that person&apos;s current role. Removing that teammate deletes their keys. Treat a key like a password.
           </p>
           <ApiKeysPanel initial={initial} isAdmin={user.role === "admin"} />
         </div>
@@ -44,7 +54,7 @@ export default async function ApiKeysPage() {
         <CardHead title="Connect over MCP" />
         <div className="card-body col gap-3">
           <p className="text-sm muted note">
-            Crumb exposes a Model Context Protocol server at the URL below. Point an MCP client (Claude Desktop, Cursor, or any MCP host) at it and authenticate with a key from above. The server offers tools to list and search feedback, read threads, change status, reply, create items, and view the roadmap.
+            Crumb exposes a Model Context Protocol server at the URL below. Point an MCP client (Claude Desktop, Cursor, or any MCP host) at it and authenticate with a key from above. The server offers tools to list and search feedback, read threads, list accounts and the roadmap, change status, reply, assign, and create items.
           </p>
           <div className="code">{mcpUrl}</div>
           <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>

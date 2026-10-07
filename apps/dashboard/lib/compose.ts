@@ -40,6 +40,9 @@ export async function composeItem(input: {
   // an AI initiative suggestion like widget submissions do. Omitted on the
   // session-free Slack path, which simply skips clustering.
   workspace?: Pick<Workspace, "id" | "planId" | "subscriptionStatus">;
+  // false skips the item.created webhook and the Teams new-submission post:
+  // Autopilot folds the item into an existing one as a duplicate right away.
+  announce?: boolean;
 }): Promise<ComposeItemResult> {
   const accountName = input.accountName.trim();
   const submitterEmail = input.submitterEmail.trim().toLowerCase();
@@ -111,7 +114,8 @@ export async function composeItem(input: {
   }
 
   // Outbound webhook fan-out: item.created (covers compose, Slack, capture-accept).
-  if (bumped?.slug) {
+  const announce = input.announce !== false;
+  if (announce && bumped?.slug) {
     void emitEvent(input.workspaceId, {
       type: "item.created",
       workspace: bumped.slug,
@@ -122,15 +126,17 @@ export async function composeItem(input: {
   }
 
   // Vendor Teams firehose: new submission (covers compose, Slack, capture-accept).
-  void notifyWorkspaceChannel(input.workspaceId, {
-    kind: "new_submission",
-    shortId,
-    title,
-    type: input.type,
-    accountName,
-    submitterName,
-    url: null,
-  });
+  if (announce) {
+    void notifyWorkspaceChannel(input.workspaceId, {
+      kind: "new_submission",
+      shortId,
+      title,
+      type: input.type,
+      accountName,
+      submitterName,
+      url: null,
+    });
+  }
 
   // Fire-and-forget AI clustering, matching the widget path. Only when the
   // caller passed the workspace (dashboard sessions); no-ops on self-host.

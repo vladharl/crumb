@@ -4,6 +4,7 @@ import { exchangeCode, SLACK_REDIRECT_URL } from "@/lib/slack/install";
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
 import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
 import { seal } from "@/lib/crypto-at-rest";
+import { withoutAlert } from "@/lib/integrations/revoke";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -83,6 +84,7 @@ export async function GET(req: Request) {
       slackBotToken: seal(result.access_token),
       slackBotUserId: result.bot_user_id,
       slackInstalledAt: new Date(),
+      integrationAlerts: withoutAlert("slack"),
     })
     .where(eq(workspaces.id, ws.id));
 

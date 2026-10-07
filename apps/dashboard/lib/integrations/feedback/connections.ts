@@ -37,16 +37,20 @@ export async function listConnections(workspaceId: string): Promise<ConnectionVi
 
 // Create or replace a connection. Updates creds + config + status, preserving the
 // sync cursor across a re-connect (so a token refresh doesn't re-pull history).
+// A new connection starts at `startCursor`: the first sync's window, chosen at
+// connect time. Replacing config also drops the sync's claim and failure streak
+// (see sync.ts), so a reconnect starts clean.
 export async function upsertConnection(
   workspaceId: string,
   provider: FeedbackProvider,
   input: { accessToken?: string | null; refreshToken?: string | null; config?: ConnectionConfig },
+  startCursor: string,
 ): Promise<void> {
   const accessToken = input.accessToken ? seal(input.accessToken) : null;
   const refreshToken = input.refreshToken ? seal(input.refreshToken) : null;
   await db
     .insert(integrationConnections)
-    .values({ workspaceId, provider, accessToken, refreshToken, config: input.config ?? {}, status: "active" })
+    .values({ workspaceId, provider, accessToken, refreshToken, config: input.config ?? {}, status: "active", syncCursor: startCursor })
     .onConflictDoUpdate({
       target: [integrationConnections.workspaceId, integrationConnections.provider],
       set: { accessToken, refreshToken, config: input.config ?? {}, status: "active", error: null, updatedAt: new Date() },

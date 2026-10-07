@@ -1,10 +1,11 @@
 import "server-only";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db, accounts, inboundCaptures, type Workspace } from "@crumb/db";
 import { matchAccountConfigured, suggestAccount } from "@/lib/ai/match-account";
 import { withAiBudget } from "@/lib/ai/run";
 import { hasFeature } from "@/lib/entitlements";
 import { log } from "@/lib/log";
+import { emitEvent } from "@/lib/webhooks";
 
 export type CaptureSource =
   | "email"
@@ -37,33 +38,14 @@ export type CaptureInput = {
   suggestion?: { accountId: string | null; accountName: string | null; confidence: number } | null;
 };
 
-// True if a capture for this provider record already exists — the idempotency
-// guard so a re-sync of the same ticket/call never double-ingests. Matches the
-// unique (workspace, source, external_id) index.
-export async function captureExists(
-  ws: Workspace,
-  source: CaptureSource,
-  externalId: string,
-): Promise<boolean> {
-  const [row] = await db
-    .select({ id: inboundCaptures.id })
-    .from(inboundCaptures)
-    .where(
-      and(
-        eq(inboundCaptures.workspaceId, ws.id),
-        eq(inboundCaptures.source, source),
-        eq(inboundCaptures.externalId, externalId),
-      ),
-    )
-    .limit(1);
-  return !!row;
-}
-
 // Create a PENDING inbound capture, running the Cloud-only AI account suggester
 // first (best-effort, metered) unless the caller already supplied one. Shared by
 // the forwarded-email webhook, the extension API, and the feedback connectors.
 // The capture is reviewed/confirmed in the Inbox (the retired /captures tile).
-export async function createInboundCapture(ws: Workspace, input: CaptureInput): Promise<string> {
+// Returns null when this provider record was already captured: the insert is a
+// no-op on the unique (workspace, source, external_id) index, so two runs over
+// the same record can't collide. Captures without an external_id never conflict.
+export async function createInboundCapture(ws: Workspace, input: CaptureInput): Promise<string | null> {
   let suggestion = input.suggestion ?? null;
   if (suggestion === null && matchAccountConfigured() && hasFeature(ws, "ai")) {
     try {
@@ -81,6 +63,7 @@ export async function createInboundCapture(ws: Workspace, input: CaptureInput): 
     }
   }
 
+  const status = input.status ?? "pending";
   const [cap] = await db
     .insert(inboundCaptures)
     .values({
@@ -97,10 +80,19 @@ export async function createInboundCapture(ws: Workspace, input: CaptureInput): 
       duplicateOfItemId: input.duplicateOfItemId ?? null,
       duplicateSimilarity: input.duplicateSimilarity ?? null,
       relevanceScore: input.relevanceScore ?? null,
-      status: input.status ?? "pending",
+      status,
       createdItemId: input.createdItemId ?? null,
       rawMeta: input.rawMeta != null ? JSON.stringify(input.rawMeta) : null,
     })
+    .onConflictDoNothing({ target: [inboundCaptures.workspaceId, inboundCaptures.source, inboundCaptures.externalId] })
     .returning({ id: inboundCaptures.id });
-  return cap!.id;
+  if (!cap) return null;
+
+  void emitEvent(ws.id, {
+    type: "capture.created",
+    workspace: ws.slug,
+    capture: { id: cap.id, source: input.source, subject: input.subject, status },
+    at: new Date().toISOString(),
+  });
+  return cap.id;
 }

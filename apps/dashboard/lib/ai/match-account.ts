@@ -50,7 +50,7 @@ Email:
 - subject: ${input.subject ?? ""}
 - body: ${(input.body ?? "").slice(0, 1000)}
 
-Respond with a single line of JSON only — no prose, no code fences:
+Respond with a single line of JSON only, no prose and no code fences:
 {"account_id":"<id from the list, or null>","account_name":"<best-guess company name if no id fits, else null>","confidence":<number 0..1>}`;
 
   const text = await aistackChat(prompt, { maxTokens: 512, temperature: 0.1, scope: "crumb/ai" });

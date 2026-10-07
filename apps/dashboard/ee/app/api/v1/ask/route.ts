@@ -18,14 +18,19 @@ export const runtime = "nodejs";
 // Cheap intent regex — strong usage signals. Used as the primary fast path and
 // as the fallback when the LLM classifier is unavailable/ambiguous.
 const USAGE_RE = /\b(how many|how much|active (users|accounts)|adoption|trend(ing)?|usage|used|using|count of|number of|\bMAU\b|\bDAU\b|last (week|month|\d+ days)|past \d+ days)\b/i;
+// Words that make a counting, revenue or time question about what customers
+// asked for ("how much ARR is asking for SSO?", "how many requests last
+// month?"). The feedback engine answers those from SQL totals.
+const FEEDBACK_RE = /\b(feedback|requests?|requested|ask(s|ed|ing)? for|asking|want(s|ed)?|bugs?|complain\w*|said|mention\w*)\b/i;
 
 // Decide feedback vs usage. Defaults to "feedback" (broadly applicable, safe)
 // on any uncertainty. The LLM call is tiny and best-effort; the regex is the
 // floor so routing still works when aistack is down.
 async function classifyAsk(question: string): Promise<"feedback" | "usage"> {
-  const heuristic: "feedback" | "usage" = USAGE_RE.test(question) ? "usage" : "feedback";
+  const heuristic: "feedback" | "usage" =
+    USAGE_RE.test(question) && !FEEDBACK_RE.test(question) ? "usage" : "feedback";
   const out = await aistackChat(
-    `Classify this question as exactly one word — "usage" if it asks about product analytics (counts, active users/accounts, adoption, trends over time), or "feedback" if it asks about what customers said (themes, requests, bugs, sentiment).\n\nQuestion: ${question}\n\nAnswer with only "usage" or "feedback".`,
+    `Classify this question as exactly one word. "usage" if it asks about product analytics (counts, active users or accounts, adoption, trends over time), or "feedback" if it asks about what customers said (themes, requests, bugs, sentiment). Questions about what customers asked for are "feedback" even when they ask for a count, revenue or a time window.\n\nQuestion: ${question}\n\nAnswer with only "usage" or "feedback".`,
     { maxTokens: 4, temperature: 0, scope: "ask_classify" },
   );
   const v = out?.toLowerCase() ?? "";

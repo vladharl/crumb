@@ -4,16 +4,14 @@ import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
 import { db, accounts } from "@crumb/db";
 import { getActiveSession } from "@/lib/server";
+import { MAX_ARR_CENTS } from "@/lib/integrations/crm/types";
 
 function canManage(role: string): boolean {
   return role === "admin" || role === "pm";
 }
 
 // Set an account's ARR (in cents). Admin/PM only; workspace-scoped.
-// `accounts.arrCents` is an integer column (≈ $21M ceiling), so we cap below
-// the int max to avoid overflow.
-const MAX_ARR_CENTS = 2_100_000_000; // ~$21M
-
+// `accounts.arrCents` is bigint; the cap only keeps the value exact in JS.
 export async function setAccountArr(
   accountId: string,
   arrCents: number,

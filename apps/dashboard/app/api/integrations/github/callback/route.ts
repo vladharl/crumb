@@ -6,6 +6,7 @@ import {
 } from "@/lib/integrations/github";
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
 import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
+import { withoutAlert } from "@/lib/integrations/revoke";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -96,6 +97,7 @@ export async function GET(req: Request) {
       githubAppInstallAccount: meta.account.login,
       githubDefaultRepo:       defaultRepo,
       githubInstalledAt:       new Date(),
+      integrationAlerts:       withoutAlert("github"),
     })
     .where(eq(workspaces.id, ws.id));
 

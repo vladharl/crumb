@@ -5,12 +5,14 @@ import { verifyWebhook, verifyWebhookToken } from "@/lib/integrations/jira";
 import { isCloud } from "@/lib/tier";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
+import { syncExternalStatus } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // Jira webhook. Status sync only — when a linked Issue's status changes,
-// update the matching item's external_status.
+// update the matching item's external_status (and emit
+// item.external_status_changed).
 //
 // Atlassian fires `jira:issue_updated` on any field change. We filter to
 // status changes by inspecting the `changelog.items` array for an entry
@@ -85,18 +87,11 @@ export async function POST(req: Request) {
   const newStatus = statusChange?.toString ?? event.issue?.fields?.status?.name ?? null;
 
   try {
-    await db
-      .update(items)
-      .set({
-        externalStatus: newStatus,
-        externalSyncedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(and(
-        scope,
-        eq(items.externalProvider, "jira"),
-        eq(items.externalTicketId, key),
-      ));
+    await syncExternalStatus(and(
+      scope,
+      eq(items.externalProvider, "jira"),
+      eq(items.externalTicketId, key),
+    ), newStatus);
   } catch (err) {
     log.error("jira webhook DB update failed", { scope: "crumb/jira", key, err });
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });

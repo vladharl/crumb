@@ -1,12 +1,12 @@
 import "server-only";
 import { eq } from "drizzle-orm";
 import { db, workspaces, type Workspace } from "@crumb/db";
+import { isCloud } from "@/lib/tier";
 import { signState } from "../state";
 import { seal, open } from "../../crypto-at-rest";
 import { clearProviderInstall, IntegrationAuthError } from "../revoke";
-import { log } from "@/lib/log";
-import type { CrmAdapter, CrmCompany, CrmTokens } from "./types";
-import { dollarsToArrCents } from "./types";
+import type { CrmAdapter, CrmCompany, CrmField, CrmTokens } from "./types";
+import { dollarsToArrCents, fetchWithRetry, safeFieldName } from "./types";
 
 // HubSpot OAuth 2.0 + CRM v3. Docs:
 //   https://developers.hubspot.com/docs/api/oauth-quickstart-guide
@@ -18,8 +18,6 @@ const AUTH_URL = "https://app.hubspot.com/oauth/authorize";
 const TOKEN_URL = "https://api.hubapi.com/oauth/v1/token";
 const API_BASE = "https://api.hubapi.com";
 const SCOPES = "crm.objects.companies.read oauth";
-// The HubSpot company property to read ARR from. Override per deployment.
-const ARR_PROPERTY = () => process.env.HUBSPOT_ARR_PROPERTY?.trim() || "annualrevenue";
 
 function clientId() { return process.env.HUBSPOT_CLIENT_ID?.trim() || null; }
 function clientSecret() { return process.env.HUBSPOT_CLIENT_SECRET?.trim() || null; }
@@ -78,40 +76,60 @@ export const hubspot: CrmAdapter = {
     };
   },
 
-  async listCompaniesWithArr(workspace): Promise<CrmCompany[]> {
-    const token = await getValidToken(workspace);
+  // The admin's pick. On self-host HUBSPOT_ARR_PROPERTY is the default until
+  // one is made; on Cloud an operator-wide property means nothing per tenant.
+  arrField(workspace) {
+    return safeFieldName(workspace.hubspotArrField)
+      ?? (isCloud() ? null : safeFieldName(process.env.HUBSPOT_ARR_PROPERTY));
+  },
+
+  // Number properties on companies (currency ones are numbers too).
+  async numberFields(workspace) {
+    let token = await getValidToken(workspace);
     if (!token) return [];
-    const prop = ARR_PROPERTY();
-    const out: CrmCompany[] = [];
+    const url = `${API_BASE}/crm/v3/properties/companies`;
+    let resp = await fetchWithRetry(url, { headers: { authorization: `Bearer ${token}` } });
+    if (resp.status === 401 && workspace.hubspotRefreshToken) {
+      token = await refreshToken(workspace.id, open(workspace.hubspotRefreshToken));
+      resp = await fetchWithRetry(url, { headers: { authorization: `Bearer ${token}` } });
+    }
+    if (!resp.ok) throw new Error(`hubspot_list_properties_failed: ${resp.status}`);
+    const data = (await resp.json()) as { results?: Array<{ name: string; label?: string; type?: string; hidden?: boolean }> };
+    return (data.results ?? [])
+      .filter((p) => p.type === "number" && !p.hidden && safeFieldName(p.name))
+      .map((p): CrmField => ({ name: p.name, label: p.label || p.name }));
+  },
+
+  // Pages through the whole portal (no page cap). An access token lasts ~30m
+  // and a big portal can outlast one, so a 401 refreshes and retries the page.
+  async *companyPages(workspace, arrField) {
+    let token = await getValidToken(workspace);
+    if (!token) return;
     let after: string | undefined;
-    // Bound the sweep so a huge portal can't run unbounded (20 pages × 100).
-    for (let page = 0; page < 20; page++) {
+    do {
       const url = new URL(`${API_BASE}/crm/v3/objects/companies`);
       url.searchParams.set("limit", "100");
-      url.searchParams.set("properties", `name,${prop}`);
+      url.searchParams.set("properties", arrField ? `name,${arrField}` : "name");
       if (after) url.searchParams.set("after", after);
-      const resp = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-      if (resp.status === 401) {
-        await clearProviderInstall(workspace.id, "hubspot");
-        throw new IntegrationAuthError("hubspot", "401");
+      let resp = await fetchWithRetry(url, { headers: { authorization: `Bearer ${token}` } });
+      if (resp.status === 401 && workspace.hubspotRefreshToken) {
+        token = await refreshToken(workspace.id, open(workspace.hubspotRefreshToken));
+        resp = await fetchWithRetry(url, { headers: { authorization: `Bearer ${token}` } });
       }
-      if (!resp.ok) {
-        log.error("hubspot list companies failed", { scope: "crumb/hubspot", status: resp.status });
-        break;
-      }
+      if (!resp.ok) throw new Error(`hubspot_list_companies_failed: ${resp.status}`);
       const data = (await resp.json()) as {
         results?: Array<{ id: string; properties?: Record<string, string | null> }>;
         paging?: { next?: { after?: string } };
       };
+      const page: CrmCompany[] = [];
       for (const c of data.results ?? []) {
         const name = c.properties?.name?.trim();
         if (!name) continue;
-        out.push({ externalId: c.id, name, arrCents: dollarsToArrCents(c.properties?.[prop]) });
+        page.push({ externalId: c.id, name, arrCents: arrField ? dollarsToArrCents(c.properties?.[arrField]) : null });
       }
+      yield page;
       after = data.paging?.next?.after;
-      if (!after) break;
-    }
-    return out;
+    } while (after);
   },
 };
 
@@ -137,11 +155,14 @@ async function getValidToken(workspace: Workspace): Promise<string | null> {
   return refreshToken(workspace.id, open(workspace.hubspotRefreshToken));
 }
 
+// Disconnects only when HubSpot rejects the refresh token itself (the app was
+// uninstalled or access revoked). An outage, a rate limit or a misconfigured
+// client secret fails this sync and the next one tries again.
 async function refreshToken(workspaceId: string, currentRefreshToken: string): Promise<string> {
   const id = clientId();
   const secret = clientSecret();
   if (!id || !secret) throw new Error("HUBSPOT creds not configured");
-  const resp = await fetch(TOKEN_URL, {
+  const resp = await fetchWithRetry(TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -152,12 +173,12 @@ async function refreshToken(workspaceId: string, currentRefreshToken: string): P
     }),
   });
   if (!resp.ok) {
-    if (resp.status === 400 || resp.status === 401) {
+    const body = (await resp.json().catch(() => null)) as { status?: string; error?: string } | null;
+    if (body?.status === "BAD_REFRESH_TOKEN" || body?.error === "invalid_grant") {
       await clearProviderInstall(workspaceId, "hubspot");
-      throw new IntegrationAuthError("hubspot", String(resp.status));
+      throw new IntegrationAuthError("hubspot", "refresh_rejected");
     }
-    const text = await resp.text();
-    throw new Error(`hubspot_refresh_failed: ${resp.status} ${text.slice(0, 200)}`);
+    throw new Error(`hubspot_refresh_failed: ${resp.status} ${body?.status ?? ""}`.trim());
   }
   const token = (await resp.json()) as TokenResponse;
   await db
