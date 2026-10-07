@@ -148,19 +148,17 @@ function InboxEmpty({
   totalRows: number;
   onClearFilters: () => void;
 }) {
-  // Nothing has ever landed — first run. Calm invite, not a victory lap.
+  // Nothing has ever landed — first run. Calm invite, not a victory lap. The
+  // setup checklist above the table (InboxTableTile) carries the next steps.
   if (totalRows === 0) {
     return (
       <div className="inbox-empty" role="cell">
         <span className="inbox-empty-mark"><BrandMark width={38} height={38} /></span>
         <p className="inbox-empty-head">Nothing’s landed yet</p>
         <p className="inbox-empty-sub">
-          Drop the widget into your product and feedback shows up here, with the
+          Work through the setup steps above and feedback lands here, with the
           account, ARR and session already attached.
         </p>
-        <Link href="/settings/install" className="inbox-empty-link">
-          Set up the widget <Ic.chevR style={{ width: 11, height: 11 }} />
-        </Link>
       </div>
     );
   }

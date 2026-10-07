@@ -24,5 +24,11 @@ else
   node packages/db/dist/migrate.mjs
 fi
 
+# Fresh instance (no workspace yet): print a one-time /onboard setup link, the
+# only way to create the first admin. Silent once any workspace exists. Never
+# fatal: the dashboard starts either way.
+node packages/db/dist/cli.mjs first-run \
+  || echo "[entrypoint] could not check for a first run; on a fresh install, get a setup link with: node packages/db/dist/cli.mjs setup-link"
+
 echo "[entrypoint] starting dashboard"
 exec "$@"

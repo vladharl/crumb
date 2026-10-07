@@ -2,6 +2,7 @@ import { getActiveWorkspace } from "@/lib/server";
 import { BrandingCard } from "./BrandingCard";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Branding · Settings" };
 
 export default async function BrandingPage() {
   const ws = await getActiveWorkspace();

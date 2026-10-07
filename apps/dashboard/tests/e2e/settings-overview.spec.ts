@@ -11,9 +11,10 @@ test("settings overview shows the setup checklist with derived states", async ({
   await expect(page).toHaveURL(/\/settings$/);
   await expect(page.getByText("Setup", { exact: true })).toBeVisible({ timeout: 10_000 });
 
-  // All five steps render.
+  // All six steps render.
   for (const label of [
     "Install the widget",
+    "Set your Product URL",
     "Invite your team",
     "Wire email delivery",
     "Connect a tool",
@@ -22,8 +23,9 @@ test("settings overview shows the setup checklist with derived states", async ({
     await expect(page.getByText(label, { exact: true })).toBeVisible();
   }
 
-  // Seed facts: items exist and 4 teammates are seeded → both done. The e2e
-  // env has no email provider and no integrations → at least those two todo.
+  // Seed facts: the widget has pinged (setup.ts stamps it) and 4 teammates are
+  // seeded → both done. The e2e env has no email provider and no integrations
+  // → at least those two todo.
   const checklist = page.locator(".card", { hasText: "Setup" }).first();
   await expect(checklist.locator("a", { hasText: "Install the widget" })).toContainText("Done");
   await expect(checklist.locator("a", { hasText: "Invite your team" })).toContainText("Done");

@@ -5,6 +5,7 @@ import { getActiveSession } from "@/lib/server";
 import { WebhooksPanel, type EndpointView } from "./WebhooksPanel";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Webhooks · Settings" };
 
 export default async function WebhooksPage() {
   const { workspace, user } = await getActiveSession();

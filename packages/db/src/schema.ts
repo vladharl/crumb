@@ -57,6 +57,10 @@ export const workspaces = pgTable("workspaces", {
   // Pixel nudge along the docked edge (positive = down from center), so the
   // tab can clear anything the host renders mid-edge.
   launcherOffsetY: integer("launcher_offset_y").notNull().default(0),
+  // When a widget embed first called GET /api/v1/me — the "widget installed"
+  // signal. Stamped once (only while NULL); the Install page's Try-it preview
+  // never sets it.
+  widgetFirstPingAt: timestamp("widget_first_ping_at", { withTimezone: true }),
   nextItemSeq: integer("next_item_seq").notNull().default(1),
   // HS256 secret used to verify widget identity JWTs. 64 hex chars = 32 bytes.
   signingSecret: text("signing_secret").notNull().default(sql`encode(gen_random_bytes(32), 'hex')`),

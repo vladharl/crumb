@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { db, accounts, accountUsers, items, initiatives } from "@crumb/db";
-import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { db, accounts, accountUsers, items, initiatives, workspaces } from "@crumb/db";
+import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { emailConfigured } from "@/lib/email";
+import { TEST_CUSTOMER_ACCOUNT } from "@/app/(app)/settings/install/test-customer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,6 +33,18 @@ export async function GET(req: Request) {
     .where(and(eq(accounts.workspaceId, workspace.id), eq(accounts.id, user.accountId)))
     .limit(1);
   if (!account) return fail(404, "account_not_found");
+
+  // The first real widget load marks the widget installed. One UPDATE, only
+  // while the stamp is unset (the IS NULL guard makes racing first pings a
+  // no-op); the Install page's Try-it preview signs in as the test account
+  // and doesn't count. Best-effort: a failed stamp retries on the next load.
+  if (!workspace.widgetFirstPingAt && account.name !== TEST_CUSTOMER_ACCOUNT) {
+    await db
+      .update(workspaces)
+      .set({ widgetFirstPingAt: new Date() })
+      .where(and(eq(workspaces.id, workspace.id), isNull(workspaces.widgetFirstPingAt)))
+      .catch(() => {});
+  }
 
   const isAdmin = user.role === "admin";
 

@@ -5,6 +5,7 @@ import { InboxTableSkeleton } from "./InboxTableSkeleton";
 import { ComposeActionsTile } from "./ComposeActionsTile";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Inbox" };
 
 export default function InboxPage() {
   return (

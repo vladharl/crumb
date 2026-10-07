@@ -44,8 +44,10 @@ const generalSans = localFont({
   fallback: ["GT Walsheim", "Söhne", "system-ui", "sans-serif"],
 });
 
+// Each page names itself ("Inbox", "FB-12 · Export to CSV") and the template
+// adds the product, so a row of open tabs reads as places, not one tagline.
 export const metadata: Metadata = {
-  title: "Crumb · Follow the trail",
+  title: { template: "%s · Crumb", default: "Crumb" },
   description: "Open-source B2B feedback platform. Embed, triage, ship, notify.",
 };
 

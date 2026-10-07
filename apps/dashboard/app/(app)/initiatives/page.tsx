@@ -6,6 +6,7 @@ import { InitiativesBoardTile } from "./InitiativesBoardTile";
 import { InitiativesTableSkeleton } from "./InitiativesTableSkeleton";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Initiatives" };
 
 export default async function InitiativesListPage() {
   // Session check is fast (cookie + sessions table) and gates the

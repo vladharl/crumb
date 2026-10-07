@@ -17,7 +17,7 @@ export async function bootstrapWorkspace(formData: FormData): Promise<OnboardRes
   // gate, so this works for the first use of any NEW workspace, not just the
   // first workspace on the instance.
   const setup = await findValidSetupToken(String(formData.get("token") ?? ""));
-  if (!setup) return { ok: false, error: "This setup link is invalid or expired. Generate a new one on the server." };
+  if (!setup) return { ok: false, error: "This setup link has expired. Reload the page to see how to get a fresh one." };
 
   const workspaceName = String(formData.get("workspaceName") ?? "").trim();
   const slugRaw       = String(formData.get("slug") ?? "").trim().toLowerCase();

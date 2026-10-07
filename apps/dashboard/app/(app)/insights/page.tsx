@@ -9,6 +9,7 @@ import { accountRiskSignals, atRiskAccounts, atRiskArrCents } from "@/lib/insigh
 import { loopOpenSql } from "@/lib/loop-sql";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Insights" };
 
 // Display order for the status breakdown: every status (the customer's own
 // "resolved" close included), so the bars add up to the item-count pill.
@@ -210,7 +211,7 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
   // Open loop = not closed (Set aside included), the same set as the inbox.
   const isOpen = loopOpenSql(sql`i.status`);
 
-  const [byStatusRows, byTypeRows, volRows, respRows, awaitingRows, trendRows, loopRows, openLoopRows, tierRows, themeRows, signals] = await Promise.all([
+  const [byStatusRows, byTypeRows, volRows, respRows, awaitingRows, trendRows, loopRows, openLoopRows, tierRows, themeRows, signals, anyRows] = await Promise.all([
     db.execute(sql`
       select i.status as status, count(*)::int as n from items i
       where i.workspace_id = ${ws}::uuid and i.merged_into_id is null and ${curW}
@@ -316,8 +317,11 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
       group by ini.name order by n desc limit 8
     `),
     accountRiskSignals(ws),
+    // Any feedback at all, ever. None means a brand-new workspace (empty state).
+    db.execute(sql`select exists (select 1 from items i where i.workspace_id = ${ws}::uuid) as found`),
   ]);
 
+  const anyFeedback = (anyRows as unknown as Array<{ found: boolean }>)[0]?.found ?? false;
   const byStatus = byStatusRows as unknown as Array<{ status: string; n: number }>;
   const byType = byTypeRows as unknown as Array<{ type: string; n: number }>;
   const vol = (volRows as unknown as Array<{ cur: number; prev: number }>)[0] ?? { cur: 0, prev: 0 };
@@ -350,32 +354,58 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
       ? `flat vs prior ${windowLabel}`
       : `${vol.cur - vol.prev > 0 ? "▲" : "▼"} ${Math.abs(vol.cur - vol.prev)} vs prior ${windowLabel}`;
 
+  const head = (
+    <PageHead
+      crumb="Insights"
+      title="Insights"
+      lede="How fast you close loops, from a customer speaking up to hearing the outcome."
+      actions={
+        <>
+          <div className="seg" role="group" aria-label="Time range">
+            {RANGE_KEYS.map(k => (
+              <Link key={k} href={k === DEFAULT_RANGE ? "/insights" : `/insights?range=${k}`} aria-selected={k === rangeKey} prefetch={false}>
+                {RANGES[k].short}
+              </Link>
+            ))}
+          </div>
+          {/* Anchors styled as buttons — a <button> inside <a> is invalid HTML
+              (causes a hydration mismatch), so use the .btn class directly. */}
+          <a href="/qbr" target="_blank" rel="noreferrer" className="btn sm row gap-2 center" style={{ textDecoration: "none" }}>
+            <Ic.doc style={{ width: 12, height: 12 }} /> QBR report
+          </a>
+          <a href="/insights/export" className="btn sm ghost row gap-2 center" style={{ textDecoration: "none" }}>
+            <DownloadIc /> Export CSV
+          </a>
+        </>
+      }
+    />
+  );
+
+  // Nothing has ever come in: name the next step instead of a page of zeros.
+  // (The .inbox-empty styles are the app's empty state.)
+  if (!anyFeedback) {
+    return (
+      <>
+        {head}
+        <Card>
+          <div className="inbox-empty">
+            <p className="inbox-empty-head">Nothing to measure yet</p>
+            <p className="inbox-empty-sub">
+              Once customers send feedback, this page shows how fast you answer
+              and close loops, and the ARR still waiting on you.
+            </p>
+            <Link href="/settings/install" className="inbox-empty-link">
+              Install the widget <Ic.chevR style={{ width: 11, height: 11 }} />
+            </Link>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
   return (
     <>
-      <PageHead
-        crumb="Insights"
-        title="Insights"
-        lede="How fast you close loops — from a customer speaking up to hearing the outcome."
-        actions={
-          <>
-            <div className="seg" role="group" aria-label="Time range">
-              {RANGE_KEYS.map(k => (
-                <Link key={k} href={k === DEFAULT_RANGE ? "/insights" : `/insights?range=${k}`} aria-selected={k === rangeKey} prefetch={false}>
-                  {RANGES[k].short}
-                </Link>
-              ))}
-            </div>
-            {/* Anchors styled as buttons — a <button> inside <a> is invalid HTML
-                (causes a hydration mismatch), so use the .btn class directly. */}
-            <a href="/qbr" target="_blank" rel="noreferrer" className="btn sm row gap-2 center" style={{ textDecoration: "none" }}>
-              <Ic.doc style={{ width: 12, height: 12 }} /> QBR report
-            </a>
-            <a href="/insights/export" className="btn sm ghost row gap-2 center" style={{ textDecoration: "none" }}>
-              <DownloadIc /> Export CSV
-            </a>
-          </>
-        }
-      />
+      {head}
 
       {/* Hero — the page's thesis metric, given weight and a direction. */}
       <Card>
@@ -403,7 +433,7 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
             </span>
           </div>
           <p className="text-sm muted" style={{ margin: 0, maxWidth: 300, lineHeight: 1.5 }}>
-            The time from a customer speaking up to hearing the outcome — shipped or declined. This is the loop.
+            The time from a customer speaking up to hearing the outcome: shipped or declined. This is the loop.
           </p>
         </div>
       </Card>

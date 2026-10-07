@@ -7,6 +7,9 @@ import { getActiveSession } from "@/lib/server";
 import { clusterConfigured } from "@/lib/ai/cluster";
 import { emailConfigured } from "@/lib/email";
 import { hasFeature } from "@/lib/entitlements";
+import { hasSampleData } from "@/lib/samples";
+import { SetupChecklist } from "@/components/SetupChecklist";
+import { TEST_CUSTOMER_ACCOUNT } from "@/app/(app)/settings/install/test-customer";
 import { InboxTable, type InboxRow, type Assignee, type InitiativeOption } from "./InboxTable";
 import { CaptureTriage } from "./CaptureTriage";
 import type { CaptureRow, AccountOption } from "../captures/CapturesList";
@@ -289,12 +292,17 @@ async function loadAssignees(workspaceId: string): Promise<Assignee[]> {
 
 export async function InboxTableTile() {
   const { workspace, user: me } = await getActiveSession();
-  const [rows, assignees, initiativeOptions, captureData] = await Promise.all([
+  const [rows, assignees, initiativeOptions, captureData, samples] = await Promise.all([
     loadItems(workspace.id),
     loadAssignees(workspace.id),
     loadInitiativeOptions(workspace.id),
     loadPendingCaptures(workspace.id),
+    hasSampleData(workspace.id),
   ]);
+  // First run: the samples a new Cloud workspace starts with are still there,
+  // or nothing but the Install page's Try-it messages has landed. The setup
+  // checklist leads until then.
+  const firstRun = samples || rows.every(r => r.accountName === TEST_CUSTOMER_ACCOUNT);
   const canManageInitiatives = me.role === "admin" || me.role === "pm";
   // Viewers are read-only — gates the bulk status/assign bar. (Same expr as
   // canManageInitiatives today, but kept distinct for clarity of intent.)
@@ -305,6 +313,7 @@ export async function InboxTableTile() {
 
   return (
     <>
+      {firstRun && <SetupChecklist workspace={workspace} isAdmin={me.role === "admin"} hasSamples={samples} />}
       <CaptureTriage captures={captureData.captures} accounts={captureData.accountOptions} canWrite={canWrite} />
       <InboxTable
         rows={rows}

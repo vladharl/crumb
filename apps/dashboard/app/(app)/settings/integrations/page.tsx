@@ -29,6 +29,7 @@ import { FeedbackConnectors } from "./FeedbackConnectors";
 import { listConnections } from "@/lib/integrations/feedback/connections";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Integrations · Settings" };
 
 // Every callback's session check (lib/integrations/callback.ts).
 const SESSION_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {

@@ -63,6 +63,7 @@ docker compose --profile tunnel up -d --build
 - `--build` compiles the community image (a few minutes on first run).
 - The `tunnel` profile starts cloudflared alongside dashboard + Postgres.
 - Migrations run automatically on dashboard startup.
+- While the database has no workspace, startup also prints a one-time setup link (step 7).
 
 Check it's healthy:
 ```bash
@@ -70,11 +71,26 @@ docker compose ps                         # all "healthy"/"running"
 docker compose logs -f dashboard          # watch boot + migrations
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/health/ready
 ```
-Then open **https://crumb.localhostlabs.net** in your browser.
+Then create your workspace (step 7).
 
-## 7. First login
-Auth is magic-link email. If you haven't configured email (`CRUMB_EMAIL_PROVIDER`
-unset), the link **prints to the logs** — grab it there:
+## 7. Create your workspace and sign in
+Sign-in is invite-only, so the first admin comes from a one-time setup link. While
+the database has no workspace, the dashboard prints one to its logs on every start,
+in a box headed "Crumb first run":
+```bash
+docker compose logs dashboard
+```
+Open the link, then create your workspace and admin account. You're signed in when
+you finish. The link works once and expires after 60 minutes. For a fresh one:
+```bash
+docker compose exec dashboard node packages/db/dist/cli.mjs setup-link
+```
+The link is built from `CRUMB_APP_URL` (step 4). If that's unset you get only the
+`/onboard?token=…` path, to open on your domain. Once a workspace exists, nothing
+more is printed and `/onboard` without a link sends visitors to sign in.
+
+After that, auth is magic-link email. If you haven't configured email
+(`CRUMB_EMAIL_PROVIDER` unset), sign-in and invite emails **print to the logs**:
 ```bash
 docker compose logs dashboard | grep -i "magic\|login\|http"
 ```

@@ -7,6 +7,7 @@ import { originFromHeaders } from "@/lib/origin";
 import { ApiKeysPanel, type KeyView } from "./ApiKeysPanel";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "API keys · Settings" };
 
 export default async function ApiKeysPage() {
   const { workspace, user } = await getActiveSession();

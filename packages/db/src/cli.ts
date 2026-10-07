@@ -2,6 +2,8 @@
 //   docker compose exec dashboard node packages/db/dist/cli.mjs <command>
 //
 //   setup-link [ttlMinutes=60]                       one-time link to /onboard
+//   first-run                                        setup link only while no workspace exists
+//                                                    (run by docker-entrypoint.sh on every start)
 //   add-user <workspace-slug> <email> <name> [role]  register a user + sign-in link
 //   list-users [slug]                                inspect workspaces + members
 //
@@ -10,11 +12,12 @@ import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "./client";
 import { workspaces, workspaceUsers, magicTokens } from "./schema";
-import { createSetupToken } from "./setup-tokens";
+import { createFirstRunSetupToken, createSetupToken, setupLinkFor } from "./setup-tokens";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_ROLES = new Set(["admin", "pm", "viewer"]);
 const SIGNIN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const SETUP_TTL_MIN = 60;
 
 function appUrl(): string {
   const url = (process.env.CRUMB_APP_URL ?? "").replace(/\/+$/, "");
@@ -32,15 +35,53 @@ function initialsOf(name: string): string {
   );
 }
 
+// The link, plus how to use it when CRUMB_APP_URL is unset and it's only a path.
+function setupLinkLines(token: string, ttlMin: number): string[] {
+  const link = setupLinkFor(token);
+  const lines = [`One-time setup link (works once, valid ${ttlMin} min):`, `  ${link}`];
+  if (link.startsWith("/")) {
+    lines.push(
+      "",
+      "CRUMB_APP_URL is not set, so that is only the path. Open it on your",
+      "dashboard's address, for example:",
+      `  http://localhost:3000${link}`,
+      "For full links, set CRUMB_APP_URL in .env (for example",
+      "CRUMB_APP_URL=https://crumb.example.com) and run docker compose up -d.",
+    );
+  }
+  return lines;
+}
+
 async function setupLink(ttlMinutesArg?: string): Promise<void> {
-  const base = appUrl();
-  const ttlMin = Number(ttlMinutesArg ?? "60");
+  const ttlMin = Number(ttlMinutesArg ?? SETUP_TTL_MIN);
   if (!Number.isFinite(ttlMin) || ttlMin <= 0) {
     console.error("ttlMinutes must be a positive number.");
     process.exit(1);
   }
   const token = await createSetupToken(ttlMin * 60 * 1000);
-  console.log(`\nOne-time setup link (valid ${ttlMin} min):\n  ${base}/onboard?token=${encodeURIComponent(token)}\n`);
+  console.log(["", ...setupLinkLines(token, ttlMin), ""].join("\n"));
+}
+
+// Container start hook: a fresh instance has no workspace and invite-only
+// sign-in, so print the way in where the operator is already looking (the
+// logs). Silent once any workspace exists.
+async function firstRun(): Promise<void> {
+  const token = await createFirstRunSetupToken(SETUP_TTL_MIN * 60 * 1000);
+  if (!token) return;
+  const rule = "=".repeat(72);
+  console.log([
+    "",
+    rule,
+    "Crumb first run: no workspace exists yet. Open this link to create",
+    "your workspace and its admin account.",
+    "",
+    ...setupLinkLines(token, SETUP_TTL_MIN),
+    "",
+    "Expired? Restart the dashboard, or make a fresh link with:",
+    "  docker compose exec dashboard node packages/db/dist/cli.mjs setup-link",
+    rule,
+    "",
+  ].join("\n"));
 }
 
 async function addUser(slug?: string, email?: string, name?: string, role = "pm"): Promise<void> {
@@ -108,12 +149,14 @@ async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
     case "setup-link": await setupLink(rest[0]); break;
+    case "first-run":  await firstRun(); break;
     case "add-user":   await addUser(rest[0], rest[1], rest[2], rest[3]); break;
     case "list-users": await listUsers(rest[0]); break;
     default:
       console.error(
         "Usage:\n" +
         "  setup-link [ttlMinutes=60]\n" +
+        "  first-run\n" +
         "  add-user <workspace-slug> <email> <name> [role=pm]\n" +
         "  list-users [slug]",
       );
