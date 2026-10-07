@@ -7,6 +7,7 @@ import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib
 import { createReplySchema, parseJsonBody } from "@/lib/validation";
 import { emitEvent } from "@/lib/webhooks";
 import { log } from "@/lib/log";
+import { signedAttachmentPath } from "@/lib/attachments/signed-url";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -120,6 +121,10 @@ export async function GET(req: Request, { params }: { params: { shortId: string 
     ...mappedEvents,
   ];
 
+  // Attachment links are signed + short-lived: the widget opens them in a new
+  // tab, which can't send the JWT, and the customer's email stays out of URLs.
+  const origin = dashboardOriginFromHeaders(req) ?? "";
+
   return cors(NextResponse.json({
     item: {
       short_id: item.shortId,
@@ -144,6 +149,7 @@ export async function GET(req: Request, { params }: { params: { shortId: string 
         filename: a.filename,
         content_type: a.contentType,
         size_bytes: a.sizeBytes,
+        url: origin + signedAttachmentPath(a.id, r.ctx.workspace.signingSecret),
       })),
     })),
     events: timeline,

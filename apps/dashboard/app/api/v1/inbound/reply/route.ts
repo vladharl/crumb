@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { secretMatches } from "@/lib/secret-match";
+import { and, desc, eq } from "drizzle-orm";
 import { db, items, accountUsers, replies, workspaces } from "@crumb/db";
-import { parseReplyAddress, verifyReplyToken } from "@/lib/reply-token";
+import { parseReplyAddress, pickReplyTarget } from "@/lib/reply-token";
 import { extractSender, stripQuotedTail } from "@/lib/inbound-text";
 import { notifyVendorsOfCustomerReply, dashboardOriginFromHeaders } from "@/lib/customer-reply-notify";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
@@ -26,6 +27,9 @@ export const runtime = "nodejs";
 // Auth (optional): set CRUMB_INBOUND_SECRET to require
 //   Authorization: Bearer <secret>
 // on every request. Leave unset in dev to skip the check.
+
+// Most items a reply address's shortId is checked against (see POST).
+const REPLY_CANDIDATE_CAP = 1000;
 
 type InboundPayload = {
   to?: string | string[];
@@ -52,7 +56,7 @@ function authorized(req: Request): boolean {
   if (!required) return true;
   const auth = req.headers.get("authorization");
   if (!auth || !auth.startsWith("Bearer ")) return false;
-  return auth.slice(7).trim() === required;
+  return secretMatches(auth.slice(7).trim(), required);
 }
 
 export async function POST(req: Request) {
@@ -87,8 +91,14 @@ export async function POST(req: Request) {
   // would just make the mail provider retry the same oversized payload.
   const body = stripped.length > LIMITS.reply ? stripped.slice(0, LIMITS.reply) : stripped;
 
-  // Look up the item by shortId, joining its workspace for the signing secret.
-  const [row] = await db
+  // FB numbers are only unique per workspace, so on Cloud this shortId can name
+  // an item in many workspaces. Load them all (joined to the workspace for its
+  // signing secret) and keep the one whose secret signed the token.
+  // ponytail: capped at REPLY_CANDIDATE_CAP workspaces sharing one FB number,
+  // newest activity first (replies answer recent notification emails), so past
+  // the cap only stale threads fall off. Upgrade path if that ever bites: match
+  // the HMAC in SQL (pgcrypto hmac()) or put a workspace hint in new addresses.
+  const candidates = await db
     .select({
       itemId: items.id,
       itemTitle: items.title,
@@ -101,11 +111,16 @@ export async function POST(req: Request) {
     .from(items)
     .innerJoin(workspaces, eq(workspaces.id, items.workspaceId))
     .where(eq(items.shortId, parsed.shortId))
-    .limit(1);
+    .orderBy(desc(items.updatedAt))
+    .limit(REPLY_CANDIDATE_CAP);
 
-  if (!row) return NextResponse.json({ error: "item_not_found" }, { status: 404 });
+  if (candidates.length === 0) return NextResponse.json({ error: "item_not_found" }, { status: 404 });
 
-  if (!verifyReplyToken(parsed.shortId, parsed.token, row.signingSecret)) {
+  const row = pickReplyTarget(parsed.shortId, parsed.token, candidates);
+  if (!row) {
+    if (candidates.length === REPLY_CANDIDATE_CAP) {
+      log.warn("inbound reply token matched none of the capped candidates", { scope: "crumb/inbound", shortId: parsed.shortId });
+    }
     return NextResponse.json({ error: "invalid_token" }, { status: 403 });
   }
 

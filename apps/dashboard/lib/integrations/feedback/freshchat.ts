@@ -2,12 +2,13 @@ import "server-only";
 import type { IntegrationConnection } from "@crumb/db";
 import { open } from "@/lib/crypto-at-rest";
 import { log } from "@/lib/log";
-import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfig, lookbackStart } from "./types";
+import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfig, lookbackStart, vendorBaseUrl } from "./types";
 
 // Freshchat — pull recently-updated conversations.
 //   https://developers.freshchat.com/api/
 // Auth: Bearer API token (the connection's sealed accessToken). The region base
-// URL (e.g. https://<domain>.freshchat.com/v2) lives in config.baseUrl.
+// URL (e.g. https://<domain>.freshchat.com/v2) lives in config.baseUrl and must
+// be on freshchat.com.
 //
 // NOTE: Freshchat is webhook-first; its public "list conversations updated since"
 // support is thin and account-dependent. This polling adapter tries the
@@ -49,7 +50,8 @@ export const freshchat: FeedbackAdapter = {
       return { records: [], nextCursor: cursor, done: true };
     }
 
-    const base = cfg.baseUrl.replace(/\/+$/, "");
+    const base = vendorBaseUrl(cfg.baseUrl, "freshchat.com");
+    if (!base) throw new Error("Freshchat API base URL must be on freshchat.com, like https://acme.freshchat.com/v2.");
     const since = cursor ?? lookbackStart().toISOString();
     const url = new URL(`${base}/conversations`);
     url.searchParams.set("updated_time", since);
@@ -57,7 +59,7 @@ export const freshchat: FeedbackAdapter = {
 
     let resp: Response;
     try {
-      resp = await fetch(url, { headers: { authorization: `Bearer ${token}`, accept: "application/json" } });
+      resp = await fetch(url, { headers: { authorization: `Bearer ${token}`, accept: "application/json" }, redirect: "manual" });
     } catch (err) {
       log.error("freshchat fetch failed", { scope: "crumb/freshchat", err });
       return { records: [], nextCursor: cursor, done: true };

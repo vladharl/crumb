@@ -202,6 +202,8 @@ CRUMB_RATE_LIMIT_REFILL_PER_SEC=1     # tokens per second
 
 Exhausted buckets return `429 rate_limited` with a `Retry-After` header. The limiter is process-local — fine for single-VM self-host. Cloud multi-instance swaps in a Redis-backed implementation behind the same helper.
 
+The source IP is read from `CF-Connecting-IP`, then `X-Real-IP`, then the last `X-Forwarded-For` hop, and the first two are trusted as sent. So keep the app reachable only through the Cloudflare Tunnel (leave `DASHBOARD_BIND` at `127.0.0.1`). Behind your own proxy instead, have it overwrite both headers with the client address (nginx: `proxy_set_header X-Real-IP $remote_addr;` and `proxy_set_header CF-Connecting-IP $remote_addr;`), or a client can claim a fresh IP on every request.
+
 ### Connecting integrations (one-click on Cloud)
 
 Slack, Linear, Jira, and GitHub all connect through a **single central OAuth app per provider**, read
@@ -235,7 +237,7 @@ Then register a Slack app at [api.slack.com/apps](https://api.slack.com/apps) wi
 
 Slack user lookups are by email — each workspace member is matched once to their Slack `user_id` and cached on first DM. Failed lookups (member's Slack email doesn't match their Crumb email) are retried after 24h.
 
-**Request sizing (@mention).** On Cloud (Team plan), Crumb sizes incoming requests right in Slack. @mention the bot on any message in a channel it belongs to and it replies in-thread with the request restated, the submitter's account ARR, similar open requests and their combined ARR at stake, and a rough T-shirt scope (S/M/L/XL) grounded in your connected GitHub repo's README + file tree, with a confidence level. It reads only — nothing is written to the inbox — and degrades gracefully: no account match, no repo, or AI unavailable each produce a plain note rather than a wrong answer. To enable it, add the `app_mentions:read` bot scope, then turn on **Event Subscriptions** with the Request URL `{dashboard origin}/api/integrations/slack/events` (the endpoint answers Slack's one-time challenge on save) and subscribe to the `app_mention` bot event. Because it adds a scope, workspaces connected before this shipped must re-connect from **Settings → Integrations** to grant it. Self-host builds answer the webhook but post a "needs Cloud AI" note; the sizing itself is Cloud-only.
+**Request sizing (@mention).** On Cloud (Team plan), Crumb sizes incoming requests right in Slack. @mention the bot on any message in a channel it belongs to and it replies in-thread with the request restated, the requester's account and its ARR, similar open requests and their combined ARR at stake, and a rough T-shirt scope (S/M/L/XL) grounded in your connected GitHub repo's README + file tree, with a confidence level. It reads only (nothing is written to the inbox) and degrades gracefully: no account match, no repo, or AI unavailable each produce a plain note rather than a wrong answer. Because the reply shows ARR and other accounts' requests, it answers only your teammates: the person mentioning it must be in the Slack workspace that installed Crumb and have the same email as a member of your Crumb workspace (anyone else gets a one-line refusal). The requester's account comes from the mentioner's email when it belongs to an account contact. A teammate's usually doesn't, so Crumb then matches the account the message names ("Acme wants SSO"). In a Slack Connect channel shared with another organization, every reply is visible only to the person who mentioned the bot. To enable it, add the `app_mentions:read` bot scope, then turn on **Event Subscriptions** with the Request URL `{dashboard origin}/api/integrations/slack/events` (the endpoint answers Slack's one-time challenge on save) and subscribe to the `app_mention` bot event. Because it adds a scope, workspaces connected before this shipped must re-connect from **Settings → Integrations** to grant it. Self-host builds answer the webhook but post a "needs Cloud AI" note; the sizing itself is Cloud-only.
 
 **Microsoft Teams.** Teams uses an incoming-webhook URL rather than OAuth: paste a channel's webhook under **Settings → Integrations** and Crumb posts the same close-the-loop events as Adaptive Cards. The `Test` button sends a sample card so you can confirm the wiring before going live.
 
@@ -246,8 +248,8 @@ Push Crumb items out as **Linear / Jira / GitHub** tickets from the thread sideb
 Cloud comes with all three apps registered. Self-host BYO. See `apps/dashboard/.env.local.example` for the full env stanzas; the short version:
 
 - **Linear**: register an OAuth app at `linear.app/settings/api` → `LINEAR_CLIENT_ID` / `LINEAR_CLIENT_SECRET` (+ optional `LINEAR_WEBHOOK_SECRET`). Redirect URL: `{dashboard origin}/api/integrations/linear/callback`.
-- **Jira**: register a 3LO app at `developer.atlassian.com` with scopes `read:jira-work write:jira-work read:jira-user offline_access` → `JIRA_CLIENT_ID` / `JIRA_CLIENT_SECRET` (+ `JIRA_WEBHOOK_SECRET`). Atlassian's per-tenant `cloud_id` is discovered automatically + re-checked on every token refresh so reinstalls against a different site don't silently 404.
-- **GitHub**: register a GitHub App (not an OAuth App) at `github.com/settings/apps` with permissions `Issues:rw + Contents:r + Metadata:r` and the `Issues` event → `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_PRIVATE_KEY` (PEM), plus `GITHUB_WEBHOOK_SECRET`. Installation tokens are minted per-call from the App's JWT and cached in module memory for 50 minutes.
+- **Jira**: register a 3LO app at `developer.atlassian.com` with scopes `read:jira-work write:jira-work read:jira-user offline_access` → `JIRA_CLIENT_ID` / `JIRA_CLIENT_SECRET` (+ `JIRA_WEBHOOK_SECRET`). Atlassian's per-tenant `cloud_id` is discovered automatically + re-checked on every token refresh so reinstalls against a different site don't silently 404. **Cloud** also needs the `manage:jira-webhook` scope on the app (add it before deploying, or Jira connect fails at consent): each connection registers its own status webhook, kept alive by the maintenance cron, and the shared `JIRA_WEBHOOK_SECRET` webhook is refused there. Jira connections made before that must reconnect once to keep status sync. Self-host keeps the manual webhook below.
+- **GitHub**: register a GitHub App (not an OAuth App) at `github.com/settings/apps` with permissions `Issues:rw + Contents:r + Metadata:r` and the `Issues` event → `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_PRIVATE_KEY` (PEM), plus `GITHUB_WEBHOOK_SECRET`. Installation tokens are minted per-call from the App's JWT and cached in module memory for 50 minutes. Also set `GITHUB_APP_CLIENT_ID` / `GITHUB_APP_CLIENT_SECRET` (the App's client ID and a client secret) and turn on **Request user authorization (OAuth) during installation**: Crumb then checks that the person finishing the install can access that installation. Without them it only accepts an installation created or updated in the last 10 minutes, so reconnecting an older one means reinstalling the App on GitHub.
 
 Webhook URLs (configure inside each provider's app settings):
 
@@ -299,9 +301,12 @@ When a customer drops feedback through the widget, Crumb Cloud can attach a vide
 
 Enable per-workspace at **Settings → Integrations → Session record**. When on, the widget injects a second small bundle (`/widget-record.js`) after `/me` resolves; the launcher itself stays lean. Captured chunks flush every ~5s via `fetch`, with a `sendBeacon` final-flush on `pagehide`.
 
-Privacy defaults (locked-in, not configurable in v1):
-- All `<input>` values are masked.
-- `password` / `email` input types are hard-blocked.
+What a replay contains, exactly:
+- Nothing until the customer ticks **Record my session** in the widget (remembered for that tab; unticking stops it).
+- The page's DOM as rendered (snapshot and changes), mouse movement, clicks, scrolling, the page URL (secret-looking query and fragment values redacted, as for requests below), browser user agent, and viewport and screen size.
+- For each `fetch` / XHR request the page makes: method, URL, status and timing. Query-string values whose names look secret (`password`, `token`, `secret`, `auth`, `…key`, `session`, `signature`, `code` and similar) are replaced with `[redacted]`, and `user:pass@` credentials are dropped. Headers and cookies are never recorded, and Crumb's own API calls aren't captured.
+- **No request or response bodies.** A host can opt in per embed with `data-record-network-bodies="true"` on the widget `<script>` tag. Bodies are then kept (truncated to 2 KB), with secret-looking keys still redacted in form-encoded, query-string and JSON bodies, and the widget's consent text says so.
+- Values typed into `<input>`, `<textarea>` and `<select>` fields are masked, password and email fields included. Text in rich-text editors (`contenteditable`) and hidden-input values are page markup and record as-is; add `class="crumb-mask"` (text) or `class="crumb-block"` (whole element) to keep them out.
 - The Crumb widget itself is blocked from recording (no recursive UI).
 - Vendors can opt out customer-side via `class="crumb-block"` (skip whole subtree) or `class="crumb-mask"` (mask text).
 
@@ -310,7 +315,7 @@ Cost guard-rails (capped per session):
 - 5,000 events
 - 30 minutes
 
-The recorder stops itself client-side at each cap; the server returns 413 if exceeded. Sessions are linked to a feedback item only after the customer submits with ≥1 chunk flushed — empty sessions stay orphan and can be swept later. **Per-plan retention is enforced by the sweep** — set `CRUMB_REPLAY_RETENTION_DAYS` (with `_FREE` / `_TEAM` / `_GROWTH` overrides) and aged sessions past the window are pruned; with no retention configured it's a no-op.
+The recorder stops itself client-side at each cap; the server returns 413 if exceeded. Sessions are linked to a feedback item only after the customer submits with ≥1 chunk flushed. Empty sessions stay orphan and can be swept later. **Replays are deleted after 30 days by default**, enforced by the cleanup sweep below. Set `CRUMB_REPLAY_RETENTION_DAYS` (with `_FREE` / `_TEAM` / `_GROWTH` overrides, which win) to change the window; `0` keeps replays forever.
 
 **CSP gotcha:** if the customer's site uses `script-src 'self'`, the recorder script tag won't load. Allow your Crumb origin in `script-src` to enable session record on that site.
 

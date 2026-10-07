@@ -1,9 +1,8 @@
-import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import { hubspot } from "@/lib/integrations/crm/hubspot";
 import { syncCrmAccounts } from "@/lib/integrations/crm/sync";
-import { verifyState } from "@/lib/integrations/state";
+import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
 import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
 import { seal } from "@/lib/crypto-at-rest";
 import { log } from "@/lib/log";
@@ -16,10 +15,7 @@ export const runtime = "nodejs";
 // account+ARR sync so the user sees data immediately, and redirect back.
 
 function redirectBack(req: Request, slug: string): Response {
-  const url = new URL(req.url);
-  url.pathname = "/settings/integrations";
-  url.search = `?hubspot=${slug}`;
-  return NextResponse.redirect(url);
+  return redirectToSettings(req, "hubspot", slug);
 }
 
 export async function GET(req: Request) {
@@ -31,8 +27,8 @@ export async function GET(req: Request) {
   const state = url.searchParams.get("state");
   if (!code || !state) return redirectBack(req, "error_missing_params");
 
-  const v = verifyState("hubspot", state);
-  if (!v.ok) return redirectBack(req, "error_bad_state");
+  const v = await verifyCallback(req, "hubspot", state);
+  if (!v.ok) return v.redirect;
 
   const [ws] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, v.workspaceId)).limit(1);
   if (!ws) return redirectBack(req, "error_workspace_gone");

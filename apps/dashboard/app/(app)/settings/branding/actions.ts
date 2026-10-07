@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import { revalidatePath } from "next/cache";
 import { requireSession } from "@/lib/auth";
+import { isDeliverableUrl } from "@/lib/webhooks";
 
 type SaveInput = {
   name?: string;
@@ -102,11 +103,15 @@ export type SitePreviewResult =
 
 const PREVIEW_TIMEOUT_MS = 8_000;
 const PREVIEW_MAX_BYTES = 2_000_000;
+const PREVIEW_MAX_REDIRECTS = 5;
 
 // SSRF guard: this action fetches an arbitrary URL with server credentials of
 // nothing — but it can still reach the box's own network. Block the obvious
 // internal targets; literal-IP + localhost coverage is enough for a
-// single-tenant box (no cloud metadata service to protect).
+// single-tenant box (no cloud metadata service to protect). On Cloud any
+// tenant admin can call this, so isDeliverableUrl also resolves the host and
+// refuses private addresses (internal DNS names included). Every redirect hop
+// is checked again: we follow them by hand.
 function isBlockedHost(host: string): boolean {
   if (/^(localhost|.*\.local|.*\.internal)$/i.test(host)) return true;
   if (host === "::1" || host.startsWith("[")) return true; // IPv6 literals
@@ -130,21 +135,34 @@ export async function fetchSitePreview(rawUrl: string): Promise<SitePreviewResul
     return { ok: false, error: "That doesn't look like a URL." };
   }
   if (!/^https?:$/.test(url.protocol)) return { ok: false, error: "Only http(s) URLs can be previewed." };
-  if (isBlockedHost(url.hostname)) return { ok: false, error: "That host can't be previewed." };
 
+  const signal = AbortSignal.timeout(PREVIEW_TIMEOUT_MS); // all hops together
   let res: Response;
-  try {
-    res = await fetch(url.toString(), {
-      signal: AbortSignal.timeout(PREVIEW_TIMEOUT_MS),
-      redirect: "follow",
-      headers: {
-        // A browsery UA — some sites serve bot-blocker pages to bare fetch UAs.
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml",
-      },
-    });
-  } catch {
-    return { ok: false, error: "Couldn't reach that site." };
+  for (let hop = 0; ; hop++) {
+    if (isBlockedHost(url.hostname) || !(await isDeliverableUrl(url.toString()))) {
+      return { ok: false, error: "That host can't be previewed." };
+    }
+    try {
+      res = await fetch(url.toString(), {
+        signal,
+        redirect: "manual",
+        headers: {
+          // A browsery UA — some sites serve bot-blocker pages to bare fetch UAs.
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml",
+        },
+      });
+    } catch {
+      return { ok: false, error: "Couldn't reach that site." };
+    }
+    const location = res.headers.get("location");
+    if (res.status < 300 || res.status >= 400 || !location) break;
+    if (hop === PREVIEW_MAX_REDIRECTS) return { ok: false, error: "That site redirects too many times." };
+    try {
+      url = new URL(location, url);
+    } catch {
+      return { ok: false, error: "Couldn't reach that site." };
+    }
   }
   if (!res.ok) return { ok: false, error: `The site answered ${res.status}.` };
   if (!(res.headers.get("content-type") ?? "").includes("text/html")) {
@@ -158,7 +176,7 @@ export async function fetchSitePreview(rawUrl: string): Promise<SitePreviewResul
 
   // Absolutize against the post-redirect URL. Quoted attributes only — that's
   // what real-world markup uses; an unquoted straggler just 404s its asset.
-  const finalUrl = res.url;
+  const finalUrl = url.toString();
   const abs = (v: string): string => {
     const t = v.trim();
     if (!t || /^(data:|blob:|mailto:|tel:|javascript:|#)/i.test(t)) return v;

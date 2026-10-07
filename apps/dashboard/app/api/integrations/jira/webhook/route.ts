@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, type SQL } from "drizzle-orm";
 import { db, items, workspaces } from "@crumb/db";
-import { verifyWebhook } from "@/lib/integrations/jira";
+import { verifyWebhook, verifyWebhookToken } from "@/lib/integrations/jira";
+import { isCloud } from "@/lib/tier";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
 
@@ -15,10 +16,16 @@ export const runtime = "nodejs";
 // status changes by inspecting the `changelog.items` array for an entry
 // whose `field` is "status".
 //
-// Project keys repeat across Jira sites and the signing secret is
-// deployment-wide, so updates are scoped to the workspace(s) connected to
-// the site the event came from: the origin of `issue.self`, which is the
-// same site URL stored as jiraSiteUrl at connect / token refresh.
+// Project keys repeat across Jira sites, so every delivery is scoped:
+//  - The webhook each Cloud install registers (ensureWebhook in
+//    lib/integrations/jira.ts) posts to ?ws=<workspaceId>&t=<token>. A valid
+//    token limits the update to that workspace's items.
+//  - A manual admin webhook signed with the deployment-wide
+//    JIRA_WEBHOOK_SECRET (self-host) is scoped to the workspace(s) connected
+//    to the site the event came from: the origin of `issue.self`, which is the
+//    same site URL stored as jiraSiteUrl at connect / token refresh. Cloud
+//    refuses it: every tenant would need that secret, and with it could sign
+//    an event naming another tenant's site.
 
 type JiraWebhookEvent = {
   webhookEvent: string;
@@ -33,14 +40,19 @@ type JiraWebhookEvent = {
 };
 
 export async function POST(req: Request) {
-  const rl = await checkRateLimitAsync(`jira-webhook:${callerIpFromRequest(req)}`);
-  if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
-
   const raw = await req.text();
-  const sig = req.headers.get("x-hub-signature");
-  if (!verifyWebhook(raw, sig)) {
+  const params = new URL(req.url).searchParams;
+  const workspaceId = params.get("ws");
+  const authed = workspaceId !== null
+    ? verifyWebhookToken(workspaceId, params.get("t"))
+    : !isCloud() && verifyWebhook(raw, req.headers.get("x-hub-signature"));
+  if (!authed) {
     return NextResponse.json({ error: "invalid_signature" }, { status: 400 });
   }
+  // Rate-limit after auth, per workspace: every tenant's deliveries arrive from
+  // Atlassian's shared egress IPs, so an IP key would let one tenant starve others.
+  const rl = await checkRateLimitAsync(`jira-webhook:${workspaceId ?? callerIpFromRequest(req)}`);
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
 
   let event: JiraWebhookEvent;
   try {
@@ -54,9 +66,18 @@ export async function POST(req: Request) {
   }
 
   const key = event.issue?.key;
-  const self = event.issue?.self;
-  if (!key || !self || !URL.canParse(self)) return NextResponse.json({ received: true });
-  const siteUrl = new URL(self).origin;
+  if (!key) return NextResponse.json({ received: true });
+  let scope: SQL;
+  if (workspaceId !== null) {
+    scope = eq(items.workspaceId, workspaceId);
+  } else {
+    const self = event.issue?.self;
+    if (!self || !URL.canParse(self)) return NextResponse.json({ received: true });
+    scope = inArray(items.workspaceId, db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(eq(workspaces.jiraSiteUrl, new URL(self).origin)));
+  }
 
   // Pull the new status either from the changelog (preferred — it has the
   // actual transition) or fall back to issue.fields.status.name.
@@ -72,10 +93,7 @@ export async function POST(req: Request) {
         updatedAt: new Date(),
       })
       .where(and(
-        inArray(items.workspaceId, db
-          .select({ id: workspaces.id })
-          .from(workspaces)
-          .where(eq(workspaces.jiraSiteUrl, siteUrl))),
+        scope,
         eq(items.externalProvider, "jira"),
         eq(items.externalTicketId, key),
       ));

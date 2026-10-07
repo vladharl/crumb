@@ -47,16 +47,18 @@ export async function resolveSlackUserId(opts: {
 
 // Single Slack message with text + a context line. `slackUserId` is any
 // conversation id — a DM user id OR a channel id. Pass `threadTs` to reply in a
-// thread (the Phase-0 sizing bot replies under the @mention).
+// thread (the Phase-0 sizing bot replies under the @mention). `ephemeralTo`
+// posts it in the channel visible to that user only (chat.postEphemeral).
 export async function sendDirectMessage(opts: {
   botToken: string;
   slackUserId: string;
   text: string;
   blocks?: SlackBlock[];
   threadTs?: string;
+  ephemeralTo?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   try {
-    const resp = await fetch("https://slack.com/api/chat.postMessage", {
+    const resp = await fetch(`https://slack.com/api/${opts.ephemeralTo ? "chat.postEphemeral" : "chat.postMessage"}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${opts.botToken}`,
@@ -64,6 +66,7 @@ export async function sendDirectMessage(opts: {
       },
       body: JSON.stringify({
         channel: opts.slackUserId,
+        user: opts.ephemeralTo,
         text: opts.text,
         blocks: opts.blocks,
         thread_ts: opts.threadTs,

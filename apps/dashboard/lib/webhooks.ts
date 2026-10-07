@@ -147,6 +147,9 @@ async function deliverOne(ep: WebhookEndpoint, eventType: EventType, body: strin
           "user-agent": "Crumb-Webhooks/1",
         },
         body,
+        // Never follow: the guard above vetted ep.url, not wherever a 30x
+        // points (e.g. 169.254.169.254). A 3xx counts as a failed delivery.
+        redirect: "manual",
         signal: ctrl.signal,
       });
       status = res.status;
@@ -172,7 +175,10 @@ async function deliverOne(ep: WebhookEndpoint, eventType: EventType, body: strin
     .where(eq(webhookEndpoints.id, ep.id));
 
   if (!ok) {
-    log.warn("webhook delivery failed", { scope: "crumb/webhooks", url: ep.url, status, failureCount });
+    log.warn("webhook delivery failed", {
+      scope: "crumb/webhooks", url: ep.url, status, failureCount,
+      ...(status >= 300 && status < 400 && { error: "redirect_not_followed" }),
+    });
   }
 }
 

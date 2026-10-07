@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
-import { db, workspaces, accounts } from "@crumb/db";
+import { db, accounts } from "@crumb/db";
 import { verifySlackSignature } from "@/lib/slack/verify";
+import { workspaceForSlackTeam } from "@/lib/slack/install";
 import { composeItem } from "@/lib/compose";
 import { log } from "@/lib/log";
 
@@ -51,7 +52,7 @@ export async function POST(req: Request) {
 
   const teamId = payload.team?.id;
   if (!teamId) return new NextResponse("", { status: 200 });
-  const [ws] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.slackTeamId, teamId)).limit(1);
+  const ws = await workspaceForSlackTeam(teamId);
   if (!ws) return new NextResponse("", { status: 200 });
 
   if (!title || !accountRaw) {

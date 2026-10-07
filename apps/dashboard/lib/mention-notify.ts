@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, workspaces, workspaceUsers, notificationPreferences } from "@crumb/db";
 import { sendMentionNotification } from "./email";
-import { resolveSlackUserId, sendDirectMessage } from "./slack/notify";
+import { escapeSlackText, resolveSlackUserId, sendDirectMessage } from "./slack/notify";
 import { openNullable } from "./crypto-at-rest";
 import { clearProviderInstall, isSlackRevokedError } from "./integrations/revoke";
 import { log } from "./log";
@@ -63,7 +63,8 @@ export async function notifyMentioned(opts: {
           lastFailedAt: u.slackLookupFailedAt, cachedUserId: u.slackUserId,
         });
         if (slackUserId) {
-          const text = `*${opts.byName}* mentioned you on _${opts.itemTitle}_ (${opts.itemShortId})`
+          // The title is customer-written; escaped so `<url|label>` stays text.
+          const text = `*${escapeSlackText(opts.byName)}* mentioned you on _${escapeSlackText(opts.itemTitle)}_ (${opts.itemShortId})`
             + (threadUrl ? `\n<${threadUrl}|Open thread →>` : "");
           const sent = await sendDirectMessage({ botToken, slackUserId, text });
           if (sent.ok) return;

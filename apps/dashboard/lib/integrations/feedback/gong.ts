@@ -2,13 +2,14 @@ import "server-only";
 import type { IntegrationConnection } from "@crumb/db";
 import { open } from "@/lib/crypto-at-rest";
 import { log } from "@/lib/log";
-import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfig, lookbackStart } from "./types";
+import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfig, lookbackStart, vendorBaseUrl } from "./types";
 
 // Gong — list calls since a timestamp, then pull their transcripts.
 //   https://gong.app.gong.io/settings/api/documentation
 // Auth: HTTP Basic with "<access-key>:<access-key-secret>" (accessToken /
 // refreshToken on the connection, both sealed). baseUrl in config (default
-// https://api.gong.io). A call transcript is the hardest case — one call can
+// https://api.gong.io; customer-specific https://<id>.api.gong.io also works,
+// nothing else does). A call transcript is the hardest case — one call can
 // contain several distinct feature requests, so the extraction gate fans it out.
 
 const DEFAULT_BASE = "https://api.gong.io";
@@ -41,14 +42,15 @@ export const gong: FeedbackAdapter = {
       log.error("gong connection incomplete", { scope: "crumb/gong", workspaceId: conn.workspaceId });
       return { records: [], nextCursor: cursor, done: true };
     }
-    const base = (readConfig(conn).baseUrl?.trim() || DEFAULT_BASE).replace(/\/+$/, "");
+    const base = vendorBaseUrl(readConfig(conn).baseUrl?.trim() || DEFAULT_BASE, "api.gong.io");
+    if (!base) throw new Error("Gong base URL must be on api.gong.io, like https://us-12345.api.gong.io.");
     const fromDateTime = cursor ?? lookbackStart().toISOString();
     const headers = { authorization: `Basic ${auth}`, "content-type": "application/json", accept: "application/json" };
 
     // 1. List calls in the window.
     const callsUrl = new URL(`${base}/v2/calls`);
     callsUrl.searchParams.set("fromDateTime", fromDateTime);
-    const callsResp = await fetch(callsUrl, { headers });
+    const callsResp = await fetch(callsUrl, { headers, redirect: "manual" });
     if (!callsResp.ok) {
       log.error("gong list calls failed", { scope: "crumb/gong", status: callsResp.status });
       return { records: [], nextCursor: cursor, done: true };
@@ -63,6 +65,7 @@ export const gong: FeedbackAdapter = {
     const tResp = await fetch(`${base}/v2/calls/transcript`, {
       method: "POST",
       headers,
+      redirect: "manual",
       body: JSON.stringify({ filter: { fromDateTime, callIds: calls.map((c) => c.id) } }),
     });
     const transcripts: Record<string, string> = {};

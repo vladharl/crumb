@@ -6,7 +6,7 @@ import { getActiveSession } from "@/lib/server";
 import { isCloud } from "@/lib/tier";
 import { SelfHostSetup } from "./SelfHostSetup";
 import { originFromHeaders } from "@/lib/origin";
-import { hasFeature, integrationsAllowed } from "@/lib/entitlements";
+import { hasFeature, integrationsAllowed, workspacePlan } from "@/lib/entitlements";
 import { slackConfigured } from "@/lib/slack/install";
 import { linearConfigured } from "@/lib/integrations/linear";
 import { jiraConfigured } from "@/lib/integrations/jira";
@@ -24,20 +24,30 @@ import {
 } from "./CrmActions";
 import { ConnectTeamsForm, TeamsConnectedActions } from "./TeamsActions";
 import { SessionRecordToggle } from "./SessionRecordToggle";
+import { retentionDaysForPlan } from "@/lib/replay/sweep";
 import { FeedbackConnectors } from "./FeedbackConnectors";
 import { listConnections } from "@/lib/integrations/feedback/connections";
 
 export const dynamic = "force-dynamic";
 
+// Every callback's session check (lib/integrations/callback.ts).
+const SESSION_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+  error_wrong_workspace: { kind: "err", text: "You're signed in to a different workspace than the one that started this connection. Switch workspaces and connect again." },
+  error_forbidden:       { kind: "err", text: "Only workspace admins can finish connecting an integration." },
+};
+
 const SLACK_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+  ...SESSION_BANNER,
   connected:                  { kind: "ok",  text: "Slack connected. Members can now choose Slack delivery in their notification preferences." },
   error_missing_params:       { kind: "err", text: "Slack didn't include a valid response. Please try again." },
   error_bad_state:            { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
   error_workspace_gone:       { kind: "err", text: "Workspace not found while finishing the install." },
   error_exchange_failed:      { kind: "err", text: "Slack rejected the token exchange. Check your app's client secret + scopes." },
+  error_team_already_connected: { kind: "err", text: "That Slack workspace is already connected to another Crumb workspace. Disconnect it there first." },
 };
 
 const LINEAR_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+  ...SESSION_BANNER,
   connected:             { kind: "ok",  text: "Linear connected. From any thread, click Create ticket in the Engineering panel to push the item out." },
   error_missing_params:  { kind: "err", text: "Linear didn't include a valid response. Please try again." },
   error_bad_state:       { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
@@ -46,7 +56,9 @@ const LINEAR_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
 };
 
 const JIRA_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+  ...SESSION_BANNER,
   connected:               { kind: "ok",  text: "Jira connected. From any thread, click Create ticket in the Engineering panel to push the item out." },
+  connected_no_sync:       { kind: "ok",  text: "Jira connected, but status sync couldn't be set up. Reconnect to retry; ticket creation works." },
   error_missing_params:    { kind: "err", text: "Jira didn't include a valid response. Please try again." },
   error_bad_state:         { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
   error_workspace_gone:    { kind: "err", text: "Workspace not found while finishing the install." },
@@ -56,14 +68,18 @@ const JIRA_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
 };
 
 const GITHUB_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+  ...SESSION_BANNER,
   connected:           { kind: "ok",  text: "GitHub connected. Create tickets from any thread; the AI draft also pulls README + repo structure for any provider's drafts." },
   error_missing_params:{ kind: "err", text: "GitHub didn't include a valid response. Please try again." },
   error_bad_state:     { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
   error_workspace_gone:{ kind: "err", text: "Workspace not found while finishing the install." },
   error_meta_failed:   { kind: "err", text: "Couldn't fetch the App installation metadata. Check that the App's private key is configured." },
+  error_install_taken: { kind: "err", text: "That GitHub installation is already connected to another Crumb workspace." },
+  error_not_owner:     { kind: "err", text: "GitHub couldn't confirm you can access that installation. Start again from this page; if the App was installed earlier, reinstall it, or set GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET with user authorization during installation turned on." },
 };
 
 const CRM_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+  ...SESSION_BANNER,
   connected:             { kind: "ok",  text: "CRM connected. Accounts and ARR are syncing, visible on the Accounts page. Manually-set ARR is preserved." },
   error_missing_params:  { kind: "err", text: "The CRM didn't include a valid response. Please try again." },
   error_bad_state:       { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
@@ -100,6 +116,7 @@ export default async function IntegrationsPage({
   // (integrationsAllowed → true); AI/session-record off. Cloud: plan-gated.
   const integrationsEntitled = integrationsAllowed(ws);
   const sessionRecordEntitled = hasFeature(ws, "session_record");
+  const replayRetentionDays = retentionDaysForPlan(workspacePlan(ws));
   // On Cloud, integrations need the plan; surface that distinctly from the
   // self-host "set ENV creds" message.
   const integrationsPlanLocked = cloud && !integrationsEntitled;
@@ -556,7 +573,10 @@ export default async function IntegrationsPage({
         />
         <div className="card-body col gap-3">
           <p className="text-sm muted note">
-            When a customer submits feedback, attach a video-like replay of their session so you can see what they were doing, no more guessing what "the page broke" means. All inputs are masked by default; password and email fields are never recorded. Sessions cap at 10 MB / 5,000 events / 30 minutes.
+            When a customer opts in from the widget, their feedback arrives with a video-like replay of their session so you can see what they were doing, no more guessing what "the page broke" means.
+          </p>
+          <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
+            <strong style={{ fontWeight: 500 }}>What's recorded:</strong> the page as the customer sees it, their clicks and scrolling, and each network request's method, URL, status and timing, with secret-looking query values (tokens, passwords, keys) redacted. Request and response bodies are left out unless your embed sets <span className="mono">data-record-network-bodies="true"</span>; then they're kept, with secret-looking form, query and JSON values redacted. Text typed into form fields is masked and password and email fields are never recorded; rich-text editors and hidden inputs record as-is unless you mark them (below). Sessions cap at 10 MB / 5,000 events / 30 minutes and {replayRetentionDays > 0 ? `are deleted after ${replayRetentionDays} days by the cleanup job` : "are kept indefinitely"}.
           </p>
           {sessionRecordEntitled ? (
             <div className="row gap-3 center">
@@ -573,7 +593,7 @@ export default async function IntegrationsPage({
             </p>
           ) : (
             <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-              Session record is available on Crumb Cloud. Self-host can wire it manually by setting a non-local <span className="mono">CRUMB_STORAGE_PROVIDER</span> and owning your own retention policy.
+              Session record is available on Crumb Cloud. Self-host can wire it manually by setting a non-local <span className="mono">CRUMB_STORAGE_PROVIDER</span>; the cleanup cron deletes replays after <span className="mono">CRUMB_REPLAY_RETENTION_DAYS</span> (default 30).
             </p>
           )}
           {!isAdmin && sessionRecordEntitled && (

@@ -37,6 +37,9 @@ type Config = {
    *  (positive = down from center) so the tab clears anything the host
    *  renders mid-edge. */
   offsetY?: number;
+  /** `data-record-network-bodies="true"`: session record also keeps request
+   *  and response bodies (secrets redacted). Off unless the host sets it. */
+  recordNetworkBodies: boolean;
 };
 
 // ─── public JS API ─────────────────────────────────────────
@@ -115,6 +118,8 @@ type ThreadAttachment = {
   filename: string;
   content_type: string;
   size_bytes: number;
+  /** Short-lived signed link from the thread payload (not on pending uploads). */
+  url?: string;
 };
 
 type ThreadMessage = {
@@ -227,6 +232,7 @@ function readConfig(): Config | null {
     apiBase,
     launcherOverride,
     offsetY,
+    recordNetworkBodies: d("recordNetworkBodies") === "true",
   };
 }
 
@@ -395,12 +401,12 @@ function writeRecordConsent(on: boolean): void {
 }
 
 let recorderInjected = false;
-function ensureRecorder(apiBase: string, workspaceSlug: string, sessionToken: string) {
+function ensureRecorder(apiBase: string, workspaceSlug: string, sessionToken: string, captureBodies: boolean) {
   if (recorderInjected) return;
   recorderInjected = true;
   const startIfReady = () => {
     if (window.__crumbRecord__) {
-      window.__crumbRecord__.start({ apiBase, workspaceSlug, sessionToken });
+      window.__crumbRecord__.start({ apiBase, workspaceSlug, sessionToken, captureBodies });
     }
   };
   if (window.__crumbRecord__) { startIfReady(); return; }
@@ -1418,7 +1424,9 @@ function init(config: Config) {
           <input type="checkbox" data-act="record-consent" ${hasRecordConsent() ? "checked" : ""} style="margin-top:2px;flex:none" />
           <span style="display:flex;flex-direction:column;gap:2px">
             <span style="font-size:13px;font-weight:600">Record my session to help us reproduce this</span>
-            <span style="font-size:11px;opacity:.65;line-height:1.45">Captures your actions and network requests on this page so the team can debug. What you type is hidden. You can turn this off anytime.</span>
+            <span style="font-size:11px;opacity:.65;line-height:1.45">${config.recordNetworkBodies
+              ? "Captures this page as you see it, your clicks and scrolling, and the page's network requests including their contents, with secret-looking values such as passwords and tokens removed."
+              : "Captures this page as you see it, your clicks and scrolling, and the address, status and timing of the page's network requests, but not their contents."} Text you type into standard form fields is masked; rich-text editors may be recorded. You can turn this off anytime.</span>
           </span>
         </label>` : ""}
 
@@ -1451,8 +1459,9 @@ function init(config: Config) {
       body = `<div class="err">${escapeHtml(threadState.message)}</div>`;
     } else if (thread) {
       const msgs = thread.messages.map(m => {
+        // Signed link: a new tab sends no credentials, so the bare path 403s.
         const atts = (m.attachments ?? []).map(a => `
-          <a class="attachment" href="${escapeHtml(config.apiBase)}/api/v1/uploads/${escapeHtml(a.id)}" target="_blank" rel="noreferrer">
+          <a class="attachment" href="${escapeHtml(new URL(a.url ?? `/api/v1/uploads/${a.id}`, config.apiBase).href)}" target="_blank" rel="noreferrer">
             ${ICONS.attach}
             <span class="filename">${escapeHtml(a.filename)}</span>
             <span class="size">${humanBytes(a.size_bytes)}</span>
@@ -1668,7 +1677,7 @@ function init(config: Config) {
       // session_token links to whatever they submit); unchecking stops it.
       const on = (target as HTMLInputElement).checked;
       writeRecordConsent(on);
-      if (on) ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken());
+      if (on) ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken(), config.recordNetworkBodies);
       else { try { window.__crumbRecord__?.stop(); } catch { /* ignore */ } }
       return;
     }
@@ -1790,7 +1799,7 @@ function init(config: Config) {
       // in earlier this tab. A fresh visitor records nothing until they tick
       // the box in the compose form.
       if (me.workspace.session_record_enabled && hasRecordConsent()) {
-        ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken());
+        ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken(), config.recordNetworkBodies);
       }
     }
   });

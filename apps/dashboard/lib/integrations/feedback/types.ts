@@ -64,3 +64,26 @@ export function lookbackStart(days = DEFAULT_LOOKBACK_DAYS): Date {
 export function readConfig(conn: IntegrationConnection): ConnectionConfig {
   return (conn.config as ConnectionConfig | null) ?? {};
 }
+
+// ─── outbound host guards ──────────────────────────────────────
+// Each pull carries the workspace's vendor credentials to a host built from
+// admin-typed config, so that config must not be able to steer the request
+// anywhere else ("evil.com/x?" as a Zendesk subdomain would otherwise send the
+// API token to evil.com; on Cloud an internal host would be an SSRF). Adapters
+// also fetch with redirect: "manual" so a 30x can't bounce them off-host.
+
+// A bare DNS label: the "acme" of acme.zendesk.com / acme.freshdesk.com.
+export function vendorSubdomain(raw: string | undefined): string | null {
+  const s = (raw ?? "").trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9-]{0,62}$/.test(s) ? s : null;
+}
+
+// An https URL on `apex` or a subdomain of it, default port. Returns origin +
+// path without a trailing slash (ready for `${base}/endpoint`), else null.
+export function vendorBaseUrl(raw: string | undefined, apex: string): string | null {
+  let u: URL;
+  try { u = new URL((raw ?? "").trim()); } catch { return null; }
+  const onApex = u.hostname === apex || u.hostname.endsWith(`.${apex}`);
+  if (u.protocol !== "https:" || !onApex || u.port) return null;
+  return u.origin + u.pathname.replace(/\/+$/, "");
+}

@@ -1,10 +1,12 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, isNotNull } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
-import { signState, verifyState } from "./state";
+import { signState } from "./state";
 import { seal, open } from "../crypto-at-rest";
 import { clearProviderInstall, IntegrationAuthError } from "./revoke";
+import { isCloud } from "../tier";
+import { log } from "../log";
 
 // Atlassian Cloud OAuth 2.0 (3LO).
 // Docs: https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/
@@ -22,7 +24,10 @@ const TOKEN_URL = "https://auth.atlassian.com/oauth/token";
 const RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources";
 
 // Minimum scopes for "list + create issues + read project metadata".
-// offline_access gets us the refresh token.
+// offline_access gets us the refresh token. Cloud also asks for
+// manage:jira-webhook to register each install's status webhook (see
+// ensureWebhook); self-host keeps the manual webhook, so its Atlassian app
+// needs no new scope.
 const SCOPES = [
   "read:jira-work",
   "write:jira-work",
@@ -45,17 +50,13 @@ export function buildAuthUrl(workspaceId: string, redirectUrl: string): string {
   const params = new URLSearchParams({
     audience: "api.atlassian.com",
     client_id: clientId,
-    scope: SCOPES,
+    scope: isCloud() ? `${SCOPES} manage:jira-webhook` : SCOPES,
     redirect_uri: redirectUrl,
     state: signState("jira", workspaceId),
     response_type: "code",
     prompt: "consent",
   });
   return `${AUTH_URL}?${params.toString()}`;
-}
-
-export function verifyJiraState(state: string): { ok: true; workspaceId: string } | { ok: false } {
-  return verifyState("jira", state);
 }
 
 type TokenResponse = {
@@ -307,8 +308,136 @@ export async function listRecentIssues(
   }));
 }
 
-// Webhook signature. Atlassian sends `X-Hub-Signature` with format
-// `sha256=<hex>` when the webhook is configured with a secret.
+// ─── Status webhook ─────────────────────────────────────────
+// OAuth 2.0 apps get no app-level webhook, so on Cloud each install
+// registers its own through the REST API ("dynamic webhooks"), pointed at
+// WEBHOOK_PATH?ws=<workspaceId>&t=<HMAC of the id under the client secret>.
+// The webhook route only touches the items of the workspace whose token it
+// verifies. Dynamic webhooks lapse 30 days after registration or the last
+// refresh, so the daily maintenance sweep (api/v1/internal/replay-sweep)
+// runs refreshWebhooks. Self-host instead takes a manual admin webhook
+// signed with JIRA_WEBHOOK_SECRET (verifyWebhook below).
+
+const WEBHOOK_PATH = "/api/integrations/jira/webhook";
+// Dynamic-webhook JQL has no OR and no EMPTY, so "every issue, new projects
+// included" is one webhook per operator against one existing project.
+const ANCHOR_OPS = ["=", "!="];
+
+function webhookToken(workspaceId: string): string | null {
+  const secret = JIRA_CLIENT_SECRET();
+  return secret ? createHmac("sha256", secret).update(`jira-webhook.${workspaceId}`).digest("base64url") : null;
+}
+
+export function webhookUrl(origin: string, workspaceId: string): string | null {
+  const t = webhookToken(workspaceId);
+  return t ? `${origin}${WEBHOOK_PATH}?ws=${workspaceId}&t=${t}` : null;
+}
+
+export function verifyWebhookToken(workspaceId: string, token: string | null): boolean {
+  const expected = webhookToken(workspaceId);
+  if (!expected || !token) return false;
+  const a = Buffer.from(token);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+export type WebhookResult = { ok: true } | { ok: false; reason: string };
+
+function notSetUp(workspaceId: string, reason: string): WebhookResult {
+  log.warn("jira status webhook not set up", { scope: "crumb/jira", workspaceId, reason });
+  return { ok: false, reason };
+}
+
+// Extend this install's webhooks when they are in place: both at the current
+// URL, anchored on a project that still exists. Otherwise (missing,
+// half-registered, anchor deleted, or stale after an origin change or a
+// rotated client secret) drop ours and register again; Jira allows one URL
+// per user per site. Only webhooks carrying this workspace's id are touched,
+// so another workspace connected to the same site keeps its own. With no
+// origin (the sweep without CRUMB_APP_URL) it only extends. Never throws:
+// the connection stands either way.
+export async function ensureWebhook(
+  workspaceId: string,
+  t: { accessToken: string; cloudId: string },
+  origin: string | null,
+): Promise<WebhookResult> {
+  const call = (method: string, path: string, body?: unknown) =>
+    fetch(`${apiBase(t.cloudId)}/webhook${path}`, {
+      method,
+      headers: { authorization: `Bearer ${t.accessToken}`, accept: "application/json", "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  try {
+    const list = await call("GET", "");
+    if (!list.ok) return notSetUp(workspaceId, `list_failed_${list.status}`);
+    const { values = [] } = (await list.json()) as { values?: Array<{ id: number; url: string; jqlFilter: string }> };
+    const ours = values.filter(w => URL.canParse(w.url) && new URL(w.url).searchParams.get("ws") === workspaceId);
+    const ids = ours.map(w => w.id);
+    const url = origin ? webhookUrl(origin, workspaceId) : null;
+    const projects = await listProjectsWithToken(t.cloudId, t.accessToken);
+
+    // Jira may hand the filter back normalized: match the anchor by key or id.
+    const inPlace = ours.length === ANCHOR_OPS.length && ours.every(w => w.url === url)
+      && projects.some(p => ours.every(w => new RegExp(`\\b(${p.key}|${p.id})\\b`).test(w.jqlFilter)));
+    if (inPlace || (!url && ids.length)) {
+      const r = await call("PUT", "/refresh", { webhookIds: ids });
+      return r.ok ? { ok: true } : notSetUp(workspaceId, `refresh_failed_${r.status}`);
+    }
+    if (!url) return notSetUp(workspaceId, "no_app_url");
+
+    if (ids.length) {
+      const r = await call("DELETE", "", { webhookIds: ids });
+      if (!r.ok) return notSetUp(workspaceId, `delete_failed_${r.status}`);
+    }
+    const [anchor] = projects;
+    if (!anchor) return notSetUp(workspaceId, "no_projects");
+    const r = await call("POST", "", {
+      url,
+      webhooks: ANCHOR_OPS.map(op => ({
+        events: ["jira:issue_updated"],
+        fieldIdsFilter: ["status"],
+        jqlFilter: `project ${op} "${anchor.key}"`,
+      })),
+    });
+    if (!r.ok) return notSetUp(workspaceId, `register_failed_${r.status}`);
+    const { webhookRegistrationResult = [] } = (await r.json()) as {
+      webhookRegistrationResult?: Array<{ errors?: string[] }>;
+    };
+    const errors = webhookRegistrationResult.flatMap(x => x.errors ?? []).join("; ");
+    // Atlassian's messages may quote the URL; keep its token out of the logs.
+    return errors
+      ? notSetUp(workspaceId, `register_rejected: ${errors.replace(/([?&]t=)[\w-]+/g, "$1***").slice(0, 200)}`)
+      : { ok: true };
+  } catch (err) {
+    return notSetUp(workspaceId, err instanceof Error ? err.message.slice(0, 200) : "error");
+  }
+}
+
+// The maintenance sweep's step. The origin is CRUMB_APP_URL alone: a cron
+// request's own host is the internal address.
+export async function refreshWebhooks(): Promise<Array<{ workspace: string } & WebhookResult>> {
+  if (!isCloud()) return [];
+  const origin = process.env.CRUMB_APP_URL?.trim().replace(/\/+$/, "") || null;
+  const rows = await db
+    .select({
+      id: workspaces.id,
+      slug: workspaces.slug,
+      jiraAccessToken: workspaces.jiraAccessToken,
+      jiraRefreshToken: workspaces.jiraRefreshToken,
+      jiraTokenExpiresAt: workspaces.jiraTokenExpiresAt,
+    })
+    .from(workspaces)
+    .where(isNotNull(workspaces.jiraAccessToken));
+  const results: Array<{ workspace: string } & WebhookResult> = [];
+  for (const ws of rows) {
+    const t = await getValidToken(ws).catch(() => null);
+    results.push({ workspace: ws.slug, ...(t ? await ensureWebhook(ws.id, t, origin) : notSetUp(ws.id, "no_token")) });
+  }
+  return results;
+}
+
+// Manual admin webhook (self-host). Atlassian sends `X-Hub-Signature` with
+// format `sha256=<hex>` when the webhook is configured with a secret.
 export function verifyWebhook(rawBody: string, signatureHeader: string | null): boolean {
   const secret = JIRA_WEBHOOK_SECRET();
   if (!secret || !signatureHeader) return false;

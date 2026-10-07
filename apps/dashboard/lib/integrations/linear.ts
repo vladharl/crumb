@@ -2,7 +2,7 @@ import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
-import { signState, verifyState } from "./state";
+import { signState } from "./state";
 import { open } from "../crypto-at-rest";
 import { clearProviderInstall, IntegrationAuthError } from "./revoke";
 import { log } from "@/lib/log";
@@ -63,10 +63,6 @@ export function buildAuthUrl(workspaceId: string, redirectUrl: string): string {
     prompt: "consent",
   });
   return `${AUTH_URL}?${params.toString()}`;
-}
-
-export function verifyLinearState(state: string): { ok: true; workspaceId: string } | { ok: false } {
-  return verifyState("linear", state);
 }
 
 type TokenResponse = {

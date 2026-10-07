@@ -43,6 +43,7 @@ Fill in at minimum:
 - `CRUMB_INTERNAL_SWEEP_SECRET` → `openssl rand -hex 32`
 - `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` / `SLACK_SIGNING_SECRET` (and any other integrations you've registered). `SLACK_SIGNING_SECRET` verifies Slack request signatures on the `/crumb` command and the events endpoint.
 - *(optional)* CRM sync — `HUBSPOT_CLIENT_ID`/`HUBSPOT_CLIENT_SECRET` and/or `SALESFORCE_CLIENT_ID`/`SALESFORCE_CLIENT_SECRET` to pull accounts + ARR. Redirect URLs: `…/api/integrations/hubspot/callback` and `…/api/integrations/salesforce/callback`.
+- *(GitHub App)* also `GITHUB_APP_CLIENT_ID`/`GITHUB_APP_CLIENT_SECRET`, with **Request user authorization (OAuth) during installation** turned on in the App. Without them Crumb only accepts an installation made in the last 10 minutes, so reconnecting an older one means reinstalling the App.
 - `CLOUDFLARE_TUNNEL_TOKEN` → from step 5
 
 `.env` is gitignored — never commit it.
@@ -84,6 +85,13 @@ In the app → **Settings → Integrations → Connect Slack**. Confirm the Slac
 redirect URL is exactly `https://crumb.localhostlabs.net/api/integrations/slack/callback`
 (it must match `CRUMB_APP_URL`). Repeat per provider you registered.
 
+**Jira on Cloud (`CRUMB_TIER=cloud`).** Add the `manage:jira-webhook` scope to the
+Atlassian app **before** deploying, or Jira connect fails at consent. Each Jira
+connection then registers its own status webhook (the maintenance cron keeps it
+alive), and the shared `JIRA_WEBHOOK_SECRET` webhook is refused. Jira connections
+made before this must reconnect once from Settings → Integrations to keep status
+sync. Self-host is unchanged: the manual webhook signed with `JIRA_WEBHOOK_SECRET`.
+
 **Enable @mention request sizing.** To let people @mention Crumb for an in-thread
 sizing reply, the Slack app needs the `app_mentions:read` bot scope and Event
 Subscriptions turned on: set the **Request URL** to
@@ -108,7 +116,7 @@ git pull && docker compose --profile tunnel up -d --build
 # daily at 03:00
 0 3 * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" http://127.0.0.1:3000/api/v1/internal/replay-sweep
 ```
-The same endpoint prunes `usage_events` older than `CRUMB_USAGE_EVENTS_RETENTION_DAYS` (default 180). If you instrument `crumb.track()` heavily, run this daily so the high-cardinality `usage_events` table stays bounded.
+The same endpoint prunes `usage_events` older than `CRUMB_USAGE_EVENTS_RETENTION_DAYS` (default 180). If you instrument `crumb.track()` heavily, run this daily so the high-cardinality `usage_events` table stays bounded. It also deletes session replays older than `CRUMB_REPLAY_RETENTION_DAYS` (default 30, so the first run removes every older replay; `0` keeps them forever) and, on Cloud, refreshes the Jira status webhooks.
 
 **CRM refresh cron** (optional, only if you connected HubSpot/Salesforce) — keeps accounts + ARR fresh. The "Sync now" button and connect-time sync work without it:
 ```bash
@@ -126,7 +134,7 @@ The same endpoint prunes `usage_events` older than `CRUMB_USAGE_EVENTS_RETENTION
 
 **pgvector upgrade note:** the Postgres image is `pgvector/pgvector:pg16` (needed for the embeddings / semantic-search features — the migration runs `CREATE EXTENSION vector`). It's a drop-in replacement for the stock `postgres:16` and reuses the same `crumb-pg-data` volume, but **take a backup before the first `up -d` that pulls it** (command above). If you run an **external/managed Postgres** instead of the bundled container, install the extension once as a superuser: `CREATE EXTENSION IF NOT EXISTS vector;` (most managed providers — RDS, Cloud SQL, Supabase — ship it).
 
-**Firewall:** with the tunnel, you can keep inbound 80/443 **closed** — cloudflared only needs outbound. Allow SSH only.
+**Firewall:** with the tunnel, you can keep inbound 80/443 **closed**: cloudflared only needs outbound. Allow SSH only. Keep `DASHBOARD_BIND` at `127.0.0.1` too: per-IP rate limits trust the `CF-Connecting-IP` header, which only Cloudflare should be able to set (README "Rate limiting").
 
 **Build elsewhere (optional, for low-RAM boxes):** the repo's release workflow
 publishes the community image to GHCR. Instead of building on the VPS, set the

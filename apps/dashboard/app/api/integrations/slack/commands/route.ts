@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { db, workspaces, accounts } from "@crumb/db";
+import { db, accounts } from "@crumb/db";
 import { verifySlackSignature } from "@/lib/slack/verify";
 import { buildCaptureModal, openView } from "@/lib/slack/commands";
+import { workspaceForSlackTeam } from "@/lib/slack/install";
 import { open } from "@/lib/crypto-at-rest";
 import { log } from "@/lib/log";
 
@@ -26,11 +27,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ response_type: "ephemeral", text: "Missing Slack fields." });
   }
 
-  const [ws] = await db
-    .select({ id: workspaces.id, slackBotToken: workspaces.slackBotToken })
-    .from(workspaces)
-    .where(eq(workspaces.slackTeamId, teamId))
-    .limit(1);
+  const ws = await workspaceForSlackTeam(teamId);
   if (!ws || !ws.slackBotToken) {
     return NextResponse.json({ response_type: "ephemeral", text: "This Slack workspace isn't connected to Crumb yet." });
   }
