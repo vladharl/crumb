@@ -9,6 +9,7 @@
 
 import { css } from "./styles"; // minified at build time (build.mjs)
 import { en, pickLocale, timeFormat, type Strings } from "./strings";
+import { redactUrl } from "./redact"; // the recorder's too: page URLs never carry secrets out
 
 // The customer's words, in the widget's language (init() picks it; English
 // until then, and in unit tests).
@@ -414,14 +415,13 @@ export function itemNews(it: ItemSummary, seenReplies = 0, seenStatus?: string):
   };
 }
 
-// The old unread map (crumb_seen:) held every message seen, the customer's own
-// too. A thread whose every message had been seen keeps its vendor replies
-// read; any other thread's vendor replies stay news, as they were.
-export function legacySeen(old: Record<string, number>, list: ItemSummary[]): Record<string, number> {
+// A returning customer's first load since unread moved to its own key (the old
+// crumb_seen: map counted every message, theirs too, so it can't say which
+// vendor replies they read): every vendor reply so far counts as read, so the
+// update lights nothing. Replies from here on are news as usual.
+export function seedSeen(list: ItemSummary[]): Record<string, number> {
   const seen: Record<string, number> = {};
-  for (const it of list) {
-    if ((old[it.short_id] ?? -1) >= it.reply_count) seen[it.short_id] = it.vendor_reply_count ?? 0;
-  }
+  for (const it of list) seen[it.short_id] = it.vendor_reply_count ?? 0;
   return seen;
 }
 
@@ -443,20 +443,6 @@ export function statusReason(it: ItemSummary): string {
   return it.status === "open" || it.status === "resolved" ? "" : it.status_reason?.trim() ?? "";
 }
 
-// Secret-looking key=value pairs (query, #fragment, ;matrix) and user:pass@
-// come out of a URL before it leaves the page. Same names as the server's
-// redactContextUrl in lib/validation.ts, which a unit test holds it to.
-const SECRET_PARAM = /pass|pwd|secret|token|auth|key$|code$|credential|signature|session|cookie|jwt|csrf|xsrf|otp|verifier|cvv|cvc|ssn|cardnumber|^(sig|sid|pin)$/;
-export function redactUrl(url: string): string {
-  return url
-    .replace(/^(https?:\/\/)[^/?#@]*@/i, "$1")
-    .replace(/(^|[?#&;])([^=&#;?]*)=([^&#;?]*)/g, (m, sep: string, k: string) => {
-      let name = k;
-      try { name = decodeURIComponent(k.replace(/\+/g, " ")); } catch { /* malformed escape: match it raw */ }
-      return SECRET_PARAM.test(name.toLowerCase().replace(/[^a-z0-9]/g, "")) ? `${sep}${k}=[redacted]` : m;
-    });
-}
-
 // The vendor's accent, when white text on it reads at 4.5:1 (it fills the
 // primary button and draws the focus ring); null keeps the panel's own ink.
 export function readableAccent(color: string | null | undefined): string | null {
@@ -471,10 +457,11 @@ export function readableAccent(color: string | null | undefined): string | null 
 }
 
 // A control's identity across a re-render (render() rebuilds the panel's
-// markup): its action plus the item, tab, type or setting it acts on.
+// markup): its action plus the item, tab, type or setting it acts on, else
+// its id (a heading focus was moved to).
 function controlKey(el: HTMLElement): string {
   const d = el.dataset;
-  return d.act ? [d.act, d.short, d.id, d.tab, d.type, d.key].join("|") : "";
+  return d.act ? [d.act, d.short, d.id, d.tab, d.type, d.key].join("|") : el.id ? `#${el.id}` : "";
 }
 
 // ─── fuzzy search ─────────────────────────────────────────
@@ -916,16 +903,17 @@ function init(config: Config) {
     writeStatusSeen(m);
   }
 
-  // Carry the marks over from the keys before this one, once, so an update
-  // doesn't light every thread already read: crumb_seen: counted every
-  // message seen, and status marks filed every token customer under ":jwt".
+  // Carry the marks over from the keys before these, once, so an update
+  // doesn't light every thread already read. A customer with the old reply
+  // map is a returning one: seed theirs (marks already on the new key, from a
+  // thread opened before the list loaded, win). Status marks filed every token
+  // customer under ":jwt". New customers have neither and start empty.
   function adoptLegacyMarks(list: ItemSummary[]) {
     const oldSeen = `crumb_seen:${config.workspace}:${config.userEmail || "jwt"}`;
     const oldStatus = `crumb_status_seen:${config.workspace}:jwt`;
     try {
-      const msgs = JSON.parse(localStorage.getItem(oldSeen) || "null");
-      if (msgs) {
-        seenCache = { ...legacySeen(msgs, list), ...getSeen() };
+      if (localStorage.getItem(oldSeen) !== null) {
+        seenCache = { ...seedSeen(list), ...getSeen() };
         localStorage.setItem(seenKey(), JSON.stringify(seenCache));
         localStorage.removeItem(oldSeen);
       }
@@ -1533,7 +1521,7 @@ function init(config: Config) {
     moveFocus = false;
     if (want ? opening || inPanel || lost : inPanel) {
       const same = want || !key ? undefined
-        : Array.from(panel.querySelectorAll<HTMLInputElement>("[data-act]")).find(el => controlKey(el) === key);
+        : Array.from(panel.querySelectorAll<HTMLInputElement>("[data-act], [id]")).find(el => controlKey(el) === key);
       if (same && !same.disabled) {
         same.focus();
         try { same.setSelectionRange(caret[0], caret[1]); } catch { /* not a text field */ }
@@ -1564,8 +1552,11 @@ function init(config: Config) {
     if (a ? !panel.contains(a) : document.activeElement !== document.body) return;
     const all = Array.from(panel.querySelectorAll<HTMLButtonElement>("a[href], button, input, textarea, [tabindex]"))
       .filter(el => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length > 0);
-    const i = a ? all.indexOf(a as HTMLButtonElement) : -1;
-    const to = e.shiftKey ? (i <= 0 ? all[all.length - 1] : null) : (i < 0 || i === all.length - 1 ? all[0] : null);
+    // Between two controls (focus may sit on a heading outside the Tab
+    // order), the browser's own order is right; past either end, wrap.
+    const side = (pos: number) => !!a && all.some(el => a.compareDocumentPosition(el) & pos);
+    const to = e.shiftKey ? (side(Node.DOCUMENT_POSITION_PRECEDING) ? null : all[all.length - 1])
+      : (side(Node.DOCUMENT_POSITION_FOLLOWING) ? null : all[0]);
     if (to) { e.preventDefault(); to.focus(); }
   }
 
@@ -1797,7 +1788,7 @@ function init(config: Config) {
       <div class="body">${tabbed("admin", `
         <section class="admin-card">
           <div class="admin-card-head">
-            <span class="admin-card-title">${t.members}</span>
+            <span class="admin-card-title" id="crumb-members-head" tabindex="-1">${t.members}</span>
             <span class="admin-card-sub">${escapeHtml(count)}</span>
           </div>
           ${memberMsg ? `<div class="err" data-live style="margin-bottom:10px">${escapeHtml(memberMsg)}</div>` : ""}
@@ -1807,7 +1798,7 @@ function init(config: Config) {
         ${isAdmin && config.jwt ? `
         <section class="admin-card">
           <div class="admin-card-head">
-            <span class="admin-card-title">${t.notifyChannel}</span>
+            <span class="admin-card-title" id="crumb-channels-head" tabindex="-1">${t.notifyChannel}</span>
             <span class="admin-card-sub">Slack / Teams</span>
           </div>
           <p class="set-sub" style="margin:0 2px">${t.channelHelp}</p>
@@ -2064,7 +2055,7 @@ function init(config: Config) {
             ${ICONS.attach}
           </button>
           <textarea class="field reply-box" data-act="reply" rows="1" maxlength="${MAX_LEN.reply}" aria-label="${t.yourReply}" placeholder="${uploadingAttachment ? t.uploading : t.replyHint}"></textarea>
-          <button class="primary" data-act="send-reply" ${submitting || uploadingAttachment ? "disabled" : ""}>
+          <button class="primary" data-act="send-reply" ${submitting ? `aria-label="${t.sending}"` : ""} ${submitting || uploadingAttachment ? "disabled" : ""}>
             ${ICONS.send}<span>${submitting ? "…" : t.send}</span>
           </button>
         </div>
@@ -2161,16 +2152,17 @@ function init(config: Config) {
       render();
       return;
     }
-    if (act === "member-remove") {
+    if (act === "member-remove" || act === "channel-remove") {
       const id = target.dataset.id;
+      // The row goes, and focus with it: on to the next row's Remove, else the
+      // list's heading. Never back up to the tabs.
+      const removes = Array.from(target.closest(".admin-card")?.querySelectorAll<HTMLElement>(`[data-act="remove-ask"], [data-act="${act}"]`) ?? []);
+      const next = removes.slice(removes.indexOf(target) + 1).find(el => el.dataset.act === "remove-ask");
+      moveFocus = next ? `[data-act="remove-ask"][data-id="${CSS.escape(next.dataset.id ?? "")}"]`
+        : act === "member-remove" ? "#crumb-members-head" : "#crumb-channels-head";
       askRemove = null;
-      if (id) removeMember(id);
-      return;
-    }
-    if (act === "channel-remove") {
-      const p = target.dataset.id;
-      askRemove = null;
-      if (p === "slack" || p === "teams") void removeChannel(p);
+      if (act === "member-remove" && id) removeMember(id);
+      if (act === "channel-remove" && (id === "slack" || id === "teams")) void removeChannel(id);
       return;
     }
     if (act === "save-channels") { void saveChannels(); return; }
@@ -2390,8 +2382,11 @@ function init(config: Config) {
     else render();
   }
   function closeApi() {
+    // Only an open panel hands focus back: from inside it, or from <body>
+    // where it fell while the panel was up. A host's crumb.close() on a
+    // closed panel leaves the customer's focus alone.
     const a = shadow.activeElement;
-    const ours = a ? panel.contains(a) : document.activeElement === document.body;
+    const ours = open && (a ? panel.contains(a) : document.activeElement === document.body);
     if (open && view.kind === "list") markAllStatusesSeen();
     open = false;
     expanded = false;

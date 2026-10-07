@@ -45,11 +45,13 @@ async function loadMergeGroup(itemId: string): Promise<{ combinedArrCents: numbe
   };
 }
 
-// The Details card's "Submitted from": a link to the page the customer was on
-// and one device line, e.g. "Chrome 129 · macOS 14.5 · 1440×900 · en-GB · App 4.2.1".
+// The Details card's "Submitted from": a link to the page the customer was on,
+// one device line, e.g. "Chrome 129 · macOS 14.5 · 1440×900 · en-GB · App 4.2.1",
+// and the host that sent them there.
 function contextView(c: ItemContext | null): ThreadData["item"]["context"] {
   if (!c) return null;
   let page: { url: string; label: string } | null = null;
+  let referrerHost: string | null = null;
   try {
     // http(s) and redacted at write; re-checked here because it renders as a link.
     if (c.page_url && /^https?:\/\//i.test(c.page_url)) {
@@ -57,6 +59,7 @@ function contextView(c: ItemContext | null): ThreadData["item"]["context"] {
       page = { url: c.page_url, label: `${u.host}${u.pathname}` };
     }
   } catch { /* unparseable: no link */ }
+  try { referrerHost = c.referrer ? new URL(c.referrer).host || null : null; } catch { /* unparseable: none */ }
   const ua = parseUserAgent(c.user_agent);
   const device = [
     ua.browserName && (ua.browserVersion ? `${ua.browserName} ${ua.browserVersion.split(".")[0]}` : ua.browserName),
@@ -65,13 +68,14 @@ function contextView(c: ItemContext | null): ThreadData["item"]["context"] {
     c.locale,
     c.app_version && `App ${c.app_version}`,
   ].filter(Boolean).join(" · ");
-  if (!page && !c.page_title && !device) return null;
+  if (!page && !c.page_title && !device && !referrerHost) return null;
   return {
     pageUrl: page?.url ?? null,
     pageLabel: page?.label ?? null,
     pageTitle: c.page_title ?? null,
     device: device || null,
     userAgent: c.user_agent ?? null,
+    referrerHost,
   };
 }
 

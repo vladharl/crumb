@@ -38,6 +38,14 @@ describe("install snippets", () => {
       expect(code).not.toContain("your-crumb-host");
     }
   });
+
+  it("the JavaScript API snippet lists every call a host can make, and the optional tag attributes", () => {
+    const { api } = installSnippets(new Headers({ host: "crumb.test" }), "acme");
+    for (const call of ["crumb.open(", "crumb.close(", "crumb.toggle(", "crumb.onUnread(", "crumb.identify({ jwt",
+      "crumb.shutdown(", "crumb.onTokenExpired(", "crumb.setContext({", "data-app-version=", "data-locale="]) {
+      expect(api).toContain(call);
+    }
+  });
 });
 
 describe("Try it test token", () => {

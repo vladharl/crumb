@@ -81,7 +81,7 @@ export const en = {
   statusHeading: "Status",
   noHistory: "No history yet.",
   closeThis: "Close this request",
-  closeAsk: "Close this request? We’ll let the team know you’re all set.",
+  closeAsk: "All set? Closing this request marks it Resolved.",
   closeRequest: "Close request",
   closing: "Closing…",
   cancel: "Cancel",

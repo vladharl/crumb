@@ -132,13 +132,15 @@ export type ThreadData = {
     source: string | null;
     sourceUrl: string | null;
     // Where the customer was when they wrote in (widget submissions): an
-    // http(s) page link and one device line. Null when nothing was captured.
+    // http(s) page link, one device line and the referring host. Null when
+    // nothing was captured.
     context: {
       pageUrl: string | null;
       pageLabel: string | null;
       pageTitle: string | null;
       device: string | null;
       userAgent: string | null;
+      referrerHost: string | null;
     } | null;
   };
   notifyPlan: ItemNotifyPlan;
@@ -516,6 +518,9 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                     )}
                     {item.context.device && (
                       <span className="text-xs muted" title={item.context.userAgent ?? undefined}>{item.context.device}</span>
+                    )}
+                    {item.context.referrerHost && (
+                      <span className="text-xs muted truncate">Came from {item.context.referrerHost}</span>
                     )}
                   </div>
                 </>

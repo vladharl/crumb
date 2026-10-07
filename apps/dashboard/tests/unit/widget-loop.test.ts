@@ -1,5 +1,8 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { redactContextUrl } from "@/lib/validation";
+import { redactUrl } from "../../../widget/src/redact";
 
 // The customer's side of the loop in the widget (audits #49, #50, #71, #77):
 // unread counts only the vendor's replies, the status reason shows in plain
@@ -32,13 +35,17 @@ describe("unread", () => {
     expect(w.itemNews(item({ vendor_reply_count: 1 })).reply).toBe(true);
   });
 
-  it("carries the old every-message marks over without lighting threads already read", () => {
+  it("seeds a returning customer's marks from the replies so far, so the update lights nothing", () => {
     const list = [
-      item({ short_id: "FB-1", reply_count: 3, vendor_reply_count: 1 }), // read through before the update
-      item({ short_id: "FB-2", reply_count: 4, vendor_reply_count: 2 }), // Sam answered after the last look
-      item({ short_id: "FB-3", reply_count: 2, vendor_reply_count: 1 }), // never opened on this device
+      item({ short_id: "FB-1", reply_count: 3, vendor_reply_count: 1 }),
+      item({ short_id: "FB-2", reply_count: 4, vendor_reply_count: 2 }),
+      item({ short_id: "FB-3", reply_count: 1 }), // no vendor reply yet
     ];
-    expect(w.legacySeen({ "FB-1": 3, "FB-2": 3 }, list)).toEqual({ "FB-1": 1 });
+    const seen = w.seedSeen(list);
+    expect(seen).toEqual({ "FB-1": 1, "FB-2": 2, "FB-3": 0 });
+    for (const it of list) expect(w.itemNews(it, seen[it.short_id]).reply, it.short_id).toBe(false);
+    // The next vendor reply is news again.
+    expect(w.itemNews({ ...list[2]!, vendor_reply_count: 1 }, seen["FB-3"]).reply).toBe(true);
   });
 
   it("flags a status move worth interrupting for until it's seen", () => {
@@ -70,18 +77,28 @@ describe("status reason", () => {
   });
 });
 
-describe("submission context", () => {
-  it("takes the same secrets out of the page URL as the server does", () => {
+describe("page URLs (submissions, crumb.track and the recorder)", () => {
+  it("lose the same secrets in the browser as on the server", () => {
     const urls = [
       "https://app.acme.co/settings?tab=billing&access_token=abc123#usage",
       "https://maya:hunter2@app.acme.co/cb?code=xyz&state=ok",
       "https://app.acme.co/cb#id_token=eyJ.x.y&expires_in=3600",
       "https://app.acme.co/p;jsessionid=ABC?q=dark+mode&X-Amz-Signature=deadbeef",
+      "https://app.acme.co/join?invite_code=K3Y&X-Api-Key=k1&sig=s&lang=en",
       "https://app.acme.co/reports/42",
     ];
-    for (const u of urls) expect(w.redactUrl(u)).toBe(redactContextUrl(u));
-    expect(w.redactUrl(urls[0]!)).toBe("https://app.acme.co/settings?tab=billing&access_token=[redacted]#usage");
-    expect(w.redactUrl(urls[1]!)).toBe("https://app.acme.co/cb?code=[redacted]&state=ok");
+    for (const u of urls) expect(redactUrl(u)).toBe(redactContextUrl(u));
+    expect(redactUrl(urls[0]!)).toBe("https://app.acme.co/settings?tab=billing&access_token=[redacted]#usage");
+    expect(redactUrl(urls[1]!)).toBe("https://app.acme.co/cb?code=[redacted]&state=ok");
+    expect(redactUrl(urls[4]!)).toBe("https://app.acme.co/join?invite_code=[redacted]&X-Api-Key=[redacted]&sig=[redacted]&lang=en");
+  });
+
+  it("go through one redactor in the widget and its recorder", () => {
+    const src = (f: string) => readFileSync(resolve(__dirname, "../../../widget/src", f), "utf8");
+    for (const f of ["widget.ts", "widget-record.ts"]) {
+      expect(src(f), f).toMatch(/import \{[^}]*\bredactUrl\b[^}]*\} from "\.\/redact"/);
+      expect(src(f), f).not.toMatch(/function redact(Url|Pairs)|SECRET_(KEY|PARAM) =/);
+    }
   });
 });
 

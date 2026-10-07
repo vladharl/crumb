@@ -4,6 +4,7 @@
 // driven by the main widget after `/me` confirms `session_record_enabled`.
 
 import { record, EventType, type eventWithTime } from "rrweb";
+import { isSecretKey, redactPairs, redactUrl } from "./redact";
 
 type StartOpts = {
   apiBase: string;
@@ -206,28 +207,9 @@ function clip(s: string): string {
   return s.length > MAX_NET_BODY ? s.slice(0, MAX_NET_BODY) + "…[truncated]" : s;
 }
 
-// Names whose values are redacted wherever they show up (query string, form
-// body, JSON key), matched on the lowercased name with separators stripped so
-// access_token, accessToken and X-Amz-Signature all hit.
-// ponytail: name heuristic that errs toward redacting (author, sessions); a
-// secret under an innocent name still records when bodies are on.
-const SECRET_KEY = /pass|pwd|secret|token|auth|key$|credential|signature|session|cookie|jwt|csrf|xsrf|otp|verifier|cvv|cvc|ssn|cardnumber|^(code|sig|sid|pin)$/;
-
-function isSecretKey(k: string): boolean {
-  let name = k;
-  try { name = decodeURIComponent(k.replace(/\+/g, " ")); } catch { /* malformed escape: match it raw */ }
-  return SECRET_KEY.test(name.toLowerCase().replace(/[^a-z0-9]/g, ""));
-}
-
-// key=value pairs in a query string, #fragment, ;matrix param or form body.
-const PAIR = /(^|[?#&;])([^=&#;?]*)=([^&#;?]*)/g;
-function redactPairs(s: string): string {
-  return s.replace(PAIR, (m, sep: string, k: string) => (isSecretKey(k) ? `${sep}${k}=[redacted]` : m));
-}
-
-export function redactUrl(url: string): string {
-  return redactPairs(url.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#@]*@/i, "$1")); // drops user:pass@ too
-}
+// Secret-named values (query string, form body, JSON key) go by the names in
+// ./redact, the same ones the widget's page URLs and the server use. With
+// bodies on, a secret under an innocent name still records.
 
 // Parsed JSON: secret-keyed values go, strings get the pair pass (a presigned
 // URL inside a response, say).

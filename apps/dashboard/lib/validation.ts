@@ -37,9 +37,10 @@ const optEmail = z.string().trim().max(LIMITS.email).regex(/.+@.+/, "invalid_ema
 // query/fragment values.
 export const CONTEXT_LIMITS = { url: 2_048, title: 300, userAgent: 512, locale: 35, appVersion: 64 } as const;
 
-// The widget recorder's name heuristic (apps/widget/src/widget-record.ts) plus
-// anything ending in "code". Matched lowercased with separators stripped, so
-// access_token, accessToken and X-Api-Key all hit.
+// The names the widget and its recorder redact before sending
+// (apps/widget/src/redact.ts; a unit test holds the two together). Matched
+// lowercased with separators stripped, so access_token, accessToken and
+// X-Api-Key all hit.
 // ponytail: errs toward redacting (author, zipcode); an innocently named secret still lands.
 const SECRET_PARAM = /pass|pwd|secret|token|auth|key$|code$|credential|signature|session|cookie|jwt|csrf|xsrf|otp|verifier|cvv|cvc|ssn|cardnumber|^(sig|sid|pin)$/;
 
