@@ -39,6 +39,12 @@ const vector1024 = customType<{ data: number[]; driverData: string }>({
 });
 
 // ─── workspaces (vendor side) ────────────────────────────────
+// workspaces.integration_alerts, keyed by provider id ("slack", "jira",
+// "hubspot", ...). `reason` is a short code the UI maps to a sentence (never
+// shown raw); `at` is an ISO-8601 timestamp.
+export type IntegrationAlert = { reason: string; at: string };
+export type IntegrationAlerts = Partial<Record<string, IntegrationAlert>>;
+
 export const workspaces = pgTable("workspaces", {
   id: uuid("id").primaryKey().defaultRandom(),
   slug: varchar("slug", { length: 64 }).notNull().unique(),
@@ -139,6 +145,13 @@ export const workspaces = pgTable("workspaces", {
   teamsWebhookUrl:   text("teams_webhook_url"),
   teamsConnectedAt:  timestamp("teams_connected_at", { withTimezone: true }),
 
+  // ── Automatic disconnects ────────────────────────────────────
+  // When Crumb drops an integration on its own (revoked token, failed
+  // refresh), the install columns above go null and this records why, keyed
+  // by provider, so Settings can say so instead of it silently vanishing.
+  // Null (or a missing key) means nothing to report; reconnecting clears it.
+  integrationAlerts: jsonb("integration_alerts").$type<IntegrationAlerts>(),
+
   // ── Session Record (Cloud only) ──────────────────────────────
   // Vendor-side opt-in. The widget receives this flag in /me's response
   // and only injects the rrweb recorder bundle when true.
@@ -203,7 +216,10 @@ export const accounts = pgTable("accounts", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  arrCents: integer("arr_cents").notNull().default(0),
+  // bigint: enterprise ARR passes int4's ~$21M ceiling. mode "number" keeps
+  // the JS surface a plain number (exact below 2^53 cents, ~$90T). Raw-SQL
+  // reads and SUMs arrive from the driver as strings: Number() them.
+  arrCents: bigint("arr_cents", { mode: "number" }).notNull().default(0),
   // Where arrCents came from. "manual" (a PM typed it) is never overwritten by
   // a CRM sync unless the workspace opts into letting the CRM win; "crm" rows
   // are kept fresh on each sync. Surfaced in the UI as a "from HubSpot" badge.
@@ -993,6 +1009,35 @@ export const webhookEndpoints = pgTable("webhook_endpoints", {
 }));
 
 export type WebhookEndpoint = typeof webhookEndpoints.$inferSelect;
+
+// ─── webhook deliveries (per-attempt delivery log) ───────────
+// One row per POST attempt (retries included), so settings can show what was
+// sent and why it failed; webhook_endpoints keeps only the latest status.
+// http_status is null when no response came back (timeout, network error,
+// refused target); error is a short reason, never the response body.
+// Retention: rows older than 30 days are pruned in batches on created_at,
+// like usage_events.
+// ponytail: no created_at-only index, the prune scans a table retention keeps
+// small. Add one if deliveries reach millions of rows.
+export const webhookDeliveries = pgTable("webhook_deliveries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  endpointId: uuid("endpoint_id").notNull().references(() => webhookEndpoints.id, { onDelete: "cascade" }),
+  eventId: text("event_id").notNull(),       // the emitted event's stable id
+  eventType: varchar("event_type", { length: 64 }).notNull(),
+  attempt: integer("attempt").notNull(),     // 1-based
+  httpStatus: integer("http_status"),
+  ok: boolean("ok").notNull(),
+  error: text("error"),
+  durationMs: integer("duration_ms"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  // Newest N for an endpoint: WHERE endpoint_id = $1 ORDER BY created_at DESC
+  // LIMIT n is a bounded backward scan of this index.
+  byEndpointCreated: index("webhook_deliveries_endpoint_created_idx").on(t.endpointId, t.createdAt),
+}));
+
+export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type NewWebhookDelivery = typeof webhookDeliveries.$inferInsert;
 
 // ─── API keys (workspace-scoped bearer tokens for MCP / API access) ──
 // A vendor mints a key from settings and hands it to an external client (an
