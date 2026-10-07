@@ -48,7 +48,8 @@ test("MCP key mints, tools work, and a status write fans out an event", async ({
   await page.goto("/settings/api-keys");
   await page.getByPlaceholder(/Key name/i).fill("e2e-mcp");
   await page.getByRole("button", { name: /Create key/i }).click();
-  const rawLoc = page.locator("text=/crumb_sk_/").first();
+  // The page's setup snippet also mentions "crumb_sk_…"; match the revealed key itself.
+  const rawLoc = page.getByText(/^crumb_sk_\w/).first();
   await expect(rawLoc).toBeVisible({ timeout: 10_000 });
   const key = (await rawLoc.textContent())!.trim();
   expect(key.startsWith("crumb_sk_")).toBeTruthy();

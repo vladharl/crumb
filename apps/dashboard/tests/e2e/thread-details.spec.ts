@@ -8,7 +8,8 @@ test("thread Details card edits assignee and type in place", async ({ page }) =>
   const firstRowId = page.locator("text=/FB-\\d+/").first();
   await expect(firstRowId).toBeVisible({ timeout: 10_000 });
   const shortId = (await firstRowId.innerText()).trim();
-  await firstRowId.click();
+  // The row's title link covers the row, so click it rather than the id cell.
+  await page.locator(`a.row-link[href="/thread/${shortId}"]`).first().click();
   await expect(page).toHaveURL(new RegExp(`/thread/${shortId}$`), { timeout: 60_000 });
 
   const details = page.locator(".card", { hasText: "Details" }).first();

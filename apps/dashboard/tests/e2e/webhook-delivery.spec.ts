@@ -28,8 +28,10 @@ test.afterAll(async () => {
 
 test("vendor Teams webhook delivers an Adaptive Card", async ({ page }) => {
   await page.goto("/settings/integrations");
-  await page.getByPlaceholder(/webhook\.office\.com/i).fill(`http://localhost:${PORT}/teams-vendor`);
-  await page.getByRole("button", { name: /^Connect$/ }).click();
+  const teamsInput = page.getByPlaceholder(/webhook\.office\.com/i);
+  await teamsInput.fill(`http://localhost:${PORT}/teams-vendor`);
+  // Several integration cards have a Connect button; use the one in the Teams form.
+  await page.locator("div.col", { has: teamsInput }).last().getByRole("button", { name: /^Connect$/ }).click();
   await page.getByRole("button", { name: /Send test/i }).click();
   await expect(page.getByText("Sent a test card.")).toBeVisible({ timeout: 15_000 });
 

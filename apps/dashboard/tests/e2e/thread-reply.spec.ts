@@ -7,7 +7,8 @@ test("opening a thread and posting a vendor reply adds a new message", async ({ 
   const firstRowId = page.locator("text=/FB-\\d+/").first();
   await expect(firstRowId).toBeVisible({ timeout: 10_000 });
   const shortId = (await firstRowId.innerText()).trim();
-  await firstRowId.click();
+  // The row's title link covers the row, so click it rather than the id cell.
+  await page.locator(`a.row-link[href="/thread/${shortId}"]`).first().click();
 
   // Land on /thread/{shortId}. The crumb shows the same id. The generous
   // timeout absorbs Next dev's cold first-compile of the /thread/[shortId]
