@@ -5,7 +5,8 @@ import { randomBytes } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { db, magicTokens, workspaceUsers } from "@crumb/db";
 import { requireSession } from "@/lib/auth";
-import { sendMagicLink } from "@/lib/email";
+import { sendInvite } from "@/lib/email";
+import { originFromHeaders } from "@/lib/origin";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const INVITE_TTL_DAYS = 7;
@@ -14,14 +15,6 @@ const VALID_ROLES = new Set(["admin", "pm", "viewer"]);
 export type InviteResult =
   | { ok: true; link: string; email: string }
   | { ok: false; error: string };
-
-function originFromHeaders(): string | null {
-  const h = headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  const proto = h.get("x-forwarded-proto") ?? "http";
-  if (!host) return null;
-  return `${proto}://${host}`;
-}
 
 export async function inviteTeammate(formData: FormData): Promise<InviteResult> {
   const { workspace, user: me } = await requireSession();
@@ -35,7 +28,7 @@ export async function inviteTeammate(formData: FormData): Promise<InviteResult> 
   if (!name)                 return { ok: false, error: "Name is required." };
   if (!VALID_ROLES.has(role)) return { ok: false, error: "Pick a valid role." };
 
-  const origin = originFromHeaders();
+  const origin = originFromHeaders(headers());
   if (!origin) return { ok: false, error: "Could not determine host." };
 
   // Avoid creating a duplicate user when the email already exists in the workspace.
@@ -79,7 +72,7 @@ export async function inviteTeammate(formData: FormData): Promise<InviteResult> 
   // Fire the email shim too — in dev that logs to stdout; in prod (later) it
   // dispatches via the configured provider. Either way, the admin can copy
   // the returned link directly.
-  await sendMagicLink({ to: email, link, ttlMinutes: INVITE_TTL_DAYS * 24 * 60, workspaceName: workspace.name });
+  await sendInvite({ to: email, link, ttlMinutes: INVITE_TTL_DAYS * 24 * 60, workspaceName: workspace.name, inviterName: me.name });
 
   return { ok: true, link, email };
 }
@@ -95,7 +88,7 @@ export async function resendInvite(workspaceUserId: string): Promise<InviteResul
     .limit(1);
   if (!u) return { ok: false, error: "User not found." };
 
-  const origin = originFromHeaders();
+  const origin = originFromHeaders(headers());
   if (!origin) return { ok: false, error: "Could not determine host." };
 
   await db
@@ -111,7 +104,7 @@ export async function resendInvite(workspaceUserId: string): Promise<InviteResul
   });
 
   const link = `${origin}/login/verify?token=${encodeURIComponent(token)}`;
-  await sendMagicLink({ to: u.email, link, ttlMinutes: INVITE_TTL_DAYS * 24 * 60, workspaceName: workspace.name });
+  await sendInvite({ to: u.email, link, ttlMinutes: INVITE_TTL_DAYS * 24 * 60, workspaceName: workspace.name, inviterName: me.name });
 
   return { ok: true, link, email: u.email };
 }

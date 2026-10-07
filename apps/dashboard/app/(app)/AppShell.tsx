@@ -34,8 +34,8 @@ const PRIMARY: NavLink[] = [
     match: p => p === "/insights" },
 ];
 
-// AI-gated "Ask your feedback" (feature 5). Inserted after Insights when the
-// workspace has the AI feature (Cloud + plan). On self-host it stays hidden.
+// "Ask your feedback" (feature 5), after Insights on Cloud. Workspaces without
+// the AI plan see it too and land on its upgrade notice. Self-host hides it.
 const ASK_LINK: NavLink = {
   id: "ask", href: "/ask", label: "Ask", icon: Ic.sparkle,
   match: p => p === "/ask",
@@ -79,7 +79,7 @@ function greetTheConsole() {
   );
 }
 
-export function AppShell({ user, aiEnabled = false, tourDone = true, supportEnabled = false, children }: { user: ShellUser; aiEnabled?: boolean; tourDone?: boolean; supportEnabled?: boolean; children: ReactNode }) {
+export function AppShell({ user, showAsk = false, tourDone = true, supportEnabled = false, children }: { user: ShellUser; showAsk?: boolean; tourDone?: boolean; supportEnabled?: boolean; children: ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -95,7 +95,7 @@ export function AppShell({ user, aiEnabled = false, tourDone = true, supportEnab
   // Close it on navigation.
   useEffect(() => { setOpen(false); }, [pathname]);
 
-  const tabs = aiEnabled ? [...PRIMARY, ASK_LINK] : PRIMARY;
+  const tabs = showAsk ? [...PRIMARY, ASK_LINK] : PRIMARY;
   const active = tabs.find(n => (n.match ?? (p => p === n.href))(pathname));
   const label = active?.label ?? "";
 

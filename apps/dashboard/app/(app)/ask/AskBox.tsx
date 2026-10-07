@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { Btn, Card, Ic, Pill } from "@crumb/ui";
 
@@ -15,7 +15,6 @@ const EXAMPLES: string[] = [
 
 function errText(code: string | undefined, status: number): string {
   switch (code) {
-    case "ai_cap_reached": return "You've reached this month's AI limit.";
     case "no_data":        return "There's no feedback to search yet.";
     case "not_entitled":   return "AI features aren't enabled on this workspace.";
     case "unclear":        return "Couldn't map that to a usage metric. Try naming a tracked event, e.g. \"how many accounts used export last week?\"";
@@ -25,9 +24,17 @@ function errText(code: string | undefined, status: number): string {
   }
 }
 
-export function AskBox({ usageEnabled = false }: { usageEnabled?: boolean }) {
+// notice: this month's AI-budget banner (null under 80%). capNotice: the
+// "paused until" notice, swapped in when a question hits the cap. Both are
+// rendered by the page (they read the plan + role on the server).
+export function AskBox({ usageEnabled = false, notice, capNotice }: {
+  usageEnabled?: boolean;
+  notice?: ReactNode;
+  capNotice?: ReactNode;
+}) {
   // usageEnabled retained for API compatibility; routing is now server-side.
   void usageEnabled;
+  const [capped, setCapped] = useState(false);
   const [q, setQ] = useState("");
   const [pending, start] = useTransition();
   const [answer, setAnswer] = useState<string | null>(null);
@@ -52,7 +59,8 @@ export function AskBox({ usageEnabled = false }: { usageEnabled?: boolean }) {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          setError(errText(data?.error, res.status));
+          if (data?.error === "ai_cap_reached") setCapped(true);
+          else setError(errText(data?.error, res.status));
           return;
         }
         setAnswer(typeof data.answer === "string" ? data.answer : "");
@@ -65,6 +73,7 @@ export function AskBox({ usageEnabled = false }: { usageEnabled?: boolean }) {
 
   return (
     <div className="col gap-4">
+      {capped ? capNotice : notice}
       <Card>
         <div className="card-body col gap-3">
           <div className="row gap-2 center" style={{

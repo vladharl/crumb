@@ -22,6 +22,7 @@ export function makeResendProvider(env: { apiKey: string; from: string }): Email
           subject: m.subject,
           html: m.html,
           text: m.text,
+          headers: m.headers, // List-Unsubscribe + threading; dropped by JSON when unset
         }),
       });
 

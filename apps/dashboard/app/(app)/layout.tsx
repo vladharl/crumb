@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { requireSession } from "@/lib/auth";
-import { hasFeature } from "@/lib/entitlements";
+import { isCloud } from "@/lib/tier";
 import { supportContactEnabled } from "@/lib/email";
 import { AppShell } from "./AppShell";
 
@@ -14,7 +14,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         initials: user.initials,
         workspaceName: workspace.name,
       }}
-      aiEnabled={hasFeature(workspace, "ai")}
+      showAsk={isCloud()}
       tourDone={user.guideCompletedAt != null}
       supportEnabled={supportContactEnabled()}
     >

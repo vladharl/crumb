@@ -1,6 +1,7 @@
 import "server-only";
 import Stripe from "stripe";
 import { isCloud } from "./tier";
+import { log } from "./log";
 
 // Lazy client — we don't want module import to throw on self-host where
 // Stripe creds are absent. Each helper that needs the client calls
@@ -86,6 +87,47 @@ export async function priceIdForPlan(plan: PaidPlan, interval: BillingInterval):
   if (!price) return null;
   priceIdCache.set(key, price.id);
   return price.id;
+}
+
+// Display prices for the in-app plan picker, in minor units. List prices from
+// the public pricing page ($19/mo billed annually or $24 monthly for Team,
+// $39 or $49 for Growth) stand in when Stripe isn't configured, a price is
+// missing, or the lookup fails. Checkout always charges the real Stripe price.
+export type PlanPrice = { amount: number; currency: string };
+export type PlanPrices = Record<PaidPlan, Record<BillingInterval, PlanPrice>>;
+const LIST_PRICES: PlanPrices = {
+  team: { month: { amount: 2_400, currency: "usd" }, year: { amount: 22_800, currency: "usd" } },
+  growth: { month: { amount: 4_900, currency: "usd" }, year: { amount: 46_800, currency: "usd" } },
+};
+const PRICE_TTL_MS = 5 * 60_000;
+let pricesCache: { at: number; prices: PlanPrices } | null = null;
+
+export async function planPrices(): Promise<PlanPrices> {
+  const stripe = stripeClient();
+  if (!stripe) return LIST_PRICES;
+  if (pricesCache && Date.now() - pricesCache.at < PRICE_TTL_MS) return pricesCache.prices;
+  const plans = ["team", "growth"] as const;
+  const intervals = ["month", "year"] as const;
+  const keys = plans.flatMap(p => intervals.map(i => lookupKeyFor(p, i)));
+  try {
+    // Display only: fail fast rather than hold the billing page on Stripe.
+    const res = await stripe.prices.list(
+      { lookup_keys: keys, active: true, limit: keys.length },
+      { timeout: 4_000, maxNetworkRetries: 0 },
+    );
+    const prices = structuredClone(LIST_PRICES);
+    for (const p of plans) {
+      for (const i of intervals) {
+        const price = res.data.find(x => x.lookup_key === lookupKeyFor(p, i));
+        if (price?.unit_amount != null) prices[p][i] = { amount: price.unit_amount, currency: price.currency };
+      }
+    }
+    pricesCache = { at: Date.now(), prices };
+    return prices;
+  } catch (err) {
+    log.warn("stripe price lookup failed, showing list prices", { scope: "crumb/stripe", err });
+    return LIST_PRICES;
+  }
 }
 
 // Subscription statuses we treat as "the workspace has paid access".

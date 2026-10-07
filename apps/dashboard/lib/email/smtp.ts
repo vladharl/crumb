@@ -35,6 +35,10 @@ export function makeSmtpProvider(env: {
           subject: m.subject,
           html: m.html,
           text: m.text,
+          // List-Unsubscribe + threading. Nodemailer keeps a Message-ID given
+          // here (it only generates one when none is set) and brackets
+          // In-Reply-To / References itself, so no messageId/inReplyTo fields.
+          headers: m.headers,
         });
         return { ok: true as const, providerMessageId: info.messageId ?? null };
       } catch (e: unknown) {

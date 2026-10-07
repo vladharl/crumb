@@ -1,5 +1,6 @@
 import "server-only";
 import { statusLabel } from "@crumb/ui";
+import { originFromHeaders } from "@/lib/origin";
 
 export type MagicLinkVars = {
   workspaceName?: string;
@@ -9,6 +10,9 @@ export type MagicLinkVars = {
 
 const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ESC[c] ?? c);
+
+// Crumb's mark as text: Gmail and Outlook drop inline SVG.
+const EMBER_MARK = `<span style="color:#E27D3A;font-size:22px;line-height:1">&#9679;</span>`;
 
 function ttlPhrase(min: number): string {
   if (min < 60) return `${min} minute${min === 1 ? "" : "s"}`;
@@ -33,15 +37,7 @@ export function renderMagicLinkHtml(v: MagicLinkVars): string {
           <tr><td style="padding:0 8px 24px">
             <table role="presentation" cellpadding="0" cellspacing="0">
               <tr>
-                <td style="padding-right:10px">
-                  <svg width="28" height="28" viewBox="-5 -5 42 42" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="16" cy="3"  r="3.0" fill="#E27D3A" fill-opacity="0.45"/>
-                    <circle cx="28" cy="11" r="3.5" fill="#E27D3A" fill-opacity="0.62"/>
-                    <circle cx="28" cy="22" r="4.0" fill="#E27D3A" fill-opacity="0.80"/>
-                    <circle cx="17" cy="29" r="4.5" fill="#E27D3A" fill-opacity="0.94"/>
-                    <circle cx="4"  cy="22" r="5.0" fill="#E27D3A"/>
-                  </svg>
-                </td>
+                <td style="padding-right:10px">${EMBER_MARK}</td>
                 <td>
                   <div style="font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</div>
                   <div style="font-size:12px;color:#6B5C50">Follow the trail${workspace ? ` ${workspace}` : "."}</div>
@@ -114,15 +110,7 @@ export function renderSignupVerifyHtml(v: SignupVerifyVars): string {
           <tr><td style="padding:0 8px 24px">
             <table role="presentation" cellpadding="0" cellspacing="0">
               <tr>
-                <td style="padding-right:10px">
-                  <svg width="28" height="28" viewBox="-5 -5 42 42" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="16" cy="3"  r="3.0" fill="#E27D3A" fill-opacity="0.45"/>
-                    <circle cx="28" cy="11" r="3.5" fill="#E27D3A" fill-opacity="0.62"/>
-                    <circle cx="28" cy="22" r="4.0" fill="#E27D3A" fill-opacity="0.80"/>
-                    <circle cx="17" cy="29" r="4.5" fill="#E27D3A" fill-opacity="0.94"/>
-                    <circle cx="4"  cy="22" r="5.0" fill="#E27D3A"/>
-                  </svg>
-                </td>
+                <td style="padding-right:10px">${EMBER_MARK}</td>
                 <td>
                   <div style="font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</div>
                   <div style="font-size:12px;color:#6B5C50">Follow the trail.</div>
@@ -171,26 +159,65 @@ ${v.link}
 Didn't sign up for Crumb? You can safely ignore this email.`;
 }
 
-// ─── Reply notification ─────────────────────────────────────
-// Sent to the customer when a vendor (PM) replies on a thread.
-// The email is fully self-contained — no clickable "open in widget"
-// link yet, since the widget lives inside the customer's product
-// at an unknown URL. The customer reads the reply here, then opens
-// the widget in their product when they want to respond.
+// ─── Team invite ────────────────────────────────────────────
+// A teammate added you to their workspace. The button is a regular magic link
+// (it signs you in), so the copy says so and when it runs out.
 
-export type ReplyNotificationVars = {
-  workspaceName: string;     // e.g. "Southbeam"
-  vendorName: string;        // e.g. "Lina Rivers"
-  itemShortId: string;       // e.g. "FB-247"
-  itemTitle: string;
-  replyBody: string;
-  /** Brief status (e.g. "In review") — optional. */
-  statusLabel?: string;
-  /** When set, the email shows a "View thread" button pointing at the host product. */
-  threadUrl?: string | null;
-  /** One-click unsubscribe link (per-customer token). Adds a footer link. */
-  unsubscribeUrl?: string | null;
+export type InviteVars = {
+  workspaceName: string;
+  inviterName: string;
+  link: string;
+  ttlMinutes: number;
 };
+
+const invitePitch = (ws: string) =>
+  `Crumb is where ${ws} keeps customer feedback, decides what to build, and tells customers how it turned out.`;
+const inviteExpiry = (min: number) => `The button signs you in. It works once and expires in ${ttlPhrase(min)}.`;
+
+export function renderInviteHtml(v: InviteVars): string {
+  const link = escapeHtml(v.link);
+  return `<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"></head>
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%">
+          <tr><td style="padding:0 8px 24px;font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</td></tr>
+          <tr><td style="padding:0 8px">
+            <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(`${v.inviterName} invited you to ${v.workspaceName}`)}</h1>
+            <p style="margin:0 0 24px;font-size:14px;color:#4A2E1F">${escapeHtml(invitePitch(v.workspaceName))}</p>
+            ${buttonHtml(v.link, `Join ${v.workspaceName}`)}
+            <p style="margin:16px 0 8px;font-size:12px;color:#6B5C50">${escapeHtml(inviteExpiry(v.ttlMinutes))} Or paste this into your browser:</p>
+            <p style="margin:0;font-size:12px;color:#4A2E1F;word-break:break-all"><a href="${link}" style="color:#4A2E1F">${link}</a></p>
+          </td></tr>
+          <tr><td style="padding:32px 8px 0">
+            <p style="margin:0;padding-top:20px;border-top:1px solid rgba(28,24,21,0.08);font-size:11px;color:#8A7C70">Not expecting this? You can ignore it. Nothing happens until you click.</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export function renderInviteText(v: InviteVars): string {
+  return [
+    `${v.inviterName} invited you to ${v.workspaceName} on Crumb`,
+    invitePitch(v.workspaceName),
+    `Join ${v.workspaceName}: ${v.link}`,
+    inviteExpiry(v.ttlMinutes),
+    "Not expecting this? You can ignore it. Nothing happens until you click.",
+  ].join("\n\n");
+}
+
+// ─── Customer-facing shell ───────────────────────────────────
+// What a vendor's customer receives comes from the vendor: their name leads,
+// with their Branding dot color as a text mark when the sender passes it (Gmail
+// and Outlook drop inline SVG). Crumb appears once, in the footer, linked to
+// this deployment's CRUMB_APP_URL, or unlinked when that's unset.
+
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 
 // Footer fragment: appends a one-click unsubscribe link to the standard
 // "you're getting this because…" line. Empty when no URL is provided.
@@ -203,8 +230,9 @@ function unsubLineText(url?: string | null): string {
   return url ? `\n\nUnsubscribe: ${url}` : "";
 }
 
-function truncate(s: string, max = 600): string {
-  if (s.length <= max) return s;
+// Never cut text short without a link to the whole of it.
+function truncate(s: string, link?: string | null, max = 600): string {
+  if (!link || s.length <= max) return s;
   return s.slice(0, max - 1) + "…";
 }
 
@@ -216,75 +244,57 @@ function paragraphsToHtml(body: string): string {
     .join("");
 }
 
-export function renderReplyNotificationHtml(v: ReplyNotificationVars): string {
-  const ws = escapeHtml(v.workspaceName);
-  const vendor = escapeHtml(v.vendorName);
-  const shortId = escapeHtml(v.itemShortId);
-  const title = escapeHtml(v.itemTitle);
-  const body = paragraphsToHtml(truncate(v.replyBody));
-  const status = v.statusLabel ? `<span style="margin-left:8px;padding:2px 8px;border:1px solid rgba(28,24,21,0.18);border-radius:999px;font-size:11px;color:#4A2E1F">${escapeHtml(v.statusLabel)}</span>` : "";
+// No request here, so this is CRUMB_APP_URL or null (never a guessed host).
+const appOrigin = () => originFromHeaders(new Headers());
 
+function buttonHtml(url: string, label: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="border-radius:8px;background:#4A2E1F">
+              <a href="${escapeHtml(url)}" style="display:inline-block;padding:9px 18px;font-size:13px;font-weight:500;color:#FBF7F0;text-decoration:none;border-radius:8px">${escapeHtml(label)}</a>
+            </td></tr></table>`;
+}
+
+function noteHtml(text: string, top = 0): string {
+  return `<p style="margin:${top}px 0 0;font-size:13px;color:#4A2E1F">${escapeHtml(text)}</p>`;
+}
+
+// The vendor's words (a reply, a reason) on a paper card.
+function cardHtml(body: string): string {
+  return `
+          <tr><td style="padding:0 8px">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FDFAF4;border:1px solid rgba(74,46,31,0.15);border-radius:10px">
+              <tr><td style="padding:16px 18px 4px">${paragraphsToHtml(body)}</td></tr>
+            </table>
+          </td></tr>`;
+}
+
+const sentFor = {
+  item: (ws: string) => `You're getting this because you sent feedback to ${ws}.`,
+  asked: (ws: string) => `You're getting this because you asked ${ws} for this.`,
+  follow: (ws: string) => `You're getting this because you follow this on ${ws}'s roadmap.`,
+};
+
+function customerShell(v: {
+  workspaceName: string;
+  accent?: string | null;
+  rows: string;
+  /** Why they got it, plain text (escaped here). */
+  reason: string;
+  unsubscribeUrl?: string | null;
+}): string {
+  const mark = v.accent && HEX_COLOR.test(v.accent) ? `<span style="color:${v.accent};margin-right:8px">&#9679;</span>` : "";
+  const app = appOrigin();
+  const via = app ? `Sent via <a href="${escapeHtml(app)}" style="color:#8A7C70">Crumb</a>.` : "Sent via Crumb.";
   return `<!doctype html>
 <html lang="en">
+  <head><meta charset="utf-8"></head>
   <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
       <tr><td align="center" style="padding:48px 16px">
         <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%">
-          <tr><td style="padding:0 8px 20px">
-            <table role="presentation" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="padding-right:10px">
-                  <svg width="26" height="26" viewBox="-5 -5 42 42" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="16" cy="3"  r="3.0" fill="#E27D3A" fill-opacity="0.45"/>
-                    <circle cx="28" cy="11" r="3.5" fill="#E27D3A" fill-opacity="0.62"/>
-                    <circle cx="28" cy="22" r="4.0" fill="#E27D3A" fill-opacity="0.80"/>
-                    <circle cx="17" cy="29" r="4.5" fill="#E27D3A" fill-opacity="0.94"/>
-                    <circle cx="4"  cy="22" r="5.0" fill="#E27D3A"/>
-                  </svg>
-                </td>
-                <td>
-                  <div style="font-weight:600;font-size:17px;letter-spacing:-0.01em">${ws}</div>
-                  <div style="font-size:11px;color:#6B5C50;font-family:ui-monospace,JetBrains Mono,Menlo,monospace">${shortId}${status}</div>
-                </td>
-              </tr>
-            </table>
-          </td></tr>
-
-          <tr><td style="padding:0 8px 8px">
-            <h1 style="margin:0 0 6px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${vendor} replied to your feedback</h1>
-            <p style="margin:0 0 20px;font-size:14px;color:#4A2E1F">
-              On <strong style="font-weight:500">${title}</strong>:
-            </p>
-          </td></tr>
-
-          <tr><td style="padding:0 8px">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1C1815;border-radius:10px">
-              <tr><td style="padding:16px 18px;color:#FBF7F0">
-                ${body.replace(/color:#1C1815/g, "color:#FBF7F0")}
-              </td></tr>
-            </table>
-          </td></tr>
-
-          ${v.threadUrl ? `
-          <tr><td style="padding:24px 8px 0">
-            <table role="presentation" cellpadding="0" cellspacing="0">
-              <tr><td style="border-radius:8px;background:#4A2E1F">
-                <a href="${escapeHtml(v.threadUrl)}" style="display:inline-block;padding:9px 18px;font-size:13px;font-weight:500;color:#FBF7F0;text-decoration:none;border-radius:8px">
-                  View thread →
-                </a>
-              </td></tr>
-            </table>
-          </td></tr>` : `
-          <tr><td style="padding:24px 8px 0">
-            <p style="margin:0 0 8px;font-size:13px;color:#6B5C50">
-              To reply, open Crumb inside ${ws} where you submitted this.
-            </p>
-          </td></tr>`}
-
-          <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08);margin-top:32px">
-            <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
-              You're getting this because you submitted feedback to ${ws} on Crumb. Follow the trail at <a href="https://crumb.localhostlabs.net" style="color:#8A7C70">crumb.localhostlabs.net</a>.${unsubLinkHtml(v.unsubscribeUrl)}
-            </p>
+          <tr><td style="padding:0 8px 20px;font-size:17px;font-weight:600;letter-spacing:-0.01em">${mark}${escapeHtml(v.workspaceName)}</td></tr>
+${v.rows}
+          <tr><td style="padding:32px 8px 0">
+            <p style="margin:0;padding-top:20px;border-top:1px solid rgba(28,24,21,0.08);font-size:11px;color:#8A7C70">${escapeHtml(v.reason)} ${via}${unsubLinkHtml(v.unsubscribeUrl)}</p>
           </td></tr>
         </table>
       </td></tr>
@@ -293,144 +303,135 @@ export function renderReplyNotificationHtml(v: ReplyNotificationVars): string {
 </html>`;
 }
 
-// ─── Status change notification ──────────────────────────────
-// Sent to the customer when the PM moves an item to a new status.
-// "Won't ship" and "Set aside" carry the most weight; "Shipped" is the
-// joyful one. The email leans on the same dark Crumb-ink block style
-// so it feels like a sibling of the reply notification.
+function customerFooterText(reason: string, unsubscribeUrl?: string | null): string {
+  const app = appOrigin();
+  return `${reason} ${app ? `Sent via Crumb: ${app}` : "Sent via Crumb."}${unsubLineText(unsubscribeUrl)}`;
+}
 
-export type StatusChangeVars = {
+// Where the customer goes from an item email. Never a dead end: the product's
+// Feedback tab when Branding has a Product URL, else the hosted read-only copy
+// of the thread (viewUrl, app/t), else directions to the Feedback tab; plus
+// reply-by-email when inbound mail is wired.
+type NextStep = { workspaceName: string; threadUrl?: string | null; viewUrl?: string | null; replyByEmail?: boolean };
+
+function nextStepHtml(v: NextStep): string {
+  const go = v.threadUrl
+    ? buttonHtml(v.threadUrl, "Open the Feedback tab")
+    : v.viewUrl
+      ? buttonHtml(v.viewUrl, "View the conversation")
+      : noteHtml(`Open ${v.workspaceName}'s Feedback tab to read and reply.`);
+  return `
+          <tr><td style="padding:24px 8px 0">
+            ${go}${v.replyByEmail ? noteHtml("Reply to this email to answer.", 12) : ""}
+          </td></tr>`;
+}
+
+function nextStepText(v: NextStep): string {
+  const go = v.threadUrl
+    ? `Open the Feedback tab: ${v.threadUrl}`
+    : v.viewUrl
+      ? `View the conversation: ${v.viewUrl}`
+      : `Open ${v.workspaceName}'s Feedback tab to read and reply.`;
+  return v.replyByEmail ? `${go}\nReply to this email to answer.` : go;
+}
+
+// ─── Reply notification ─────────────────────────────────────
+// Sent to the customer when a vendor (PM) replies on a thread. Carries the
+// whole reply, so the email reads complete without opening anything.
+
+export type ReplyNotificationVars = NextStep & {
+  workspaceName: string;     // e.g. "Southbeam"
+  vendorName: string;        // e.g. "Lina Rivers"
+  itemTitle: string;
+  replyBody: string;
+  /** Brief status (e.g. "In review") — optional. */
+  statusLabel?: string;
+  /** One-click unsubscribe link (per-customer token). Adds a footer link. */
+  unsubscribeUrl?: string | null;
+  /** The workspace's Branding dot color (#RRGGBB). */
+  accent?: string | null;
+};
+
+export function renderReplyNotificationHtml(v: ReplyNotificationVars): string {
+  const status = v.statusLabel ? `<span style="margin-left:8px;padding:2px 8px;border:1px solid rgba(28,24,21,0.18);border-radius:999px;font-size:11px;color:#4A2E1F">${escapeHtml(v.statusLabel)}</span>` : "";
+  return customerShell({
+    workspaceName: v.workspaceName,
+    accent: v.accent,
+    reason: sentFor.item(v.workspaceName),
+    unsubscribeUrl: v.unsubscribeUrl,
+    rows: `
+          <tr><td style="padding:0 8px 16px">
+            <h1 style="margin:0 0 6px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(v.vendorName)} replied to your feedback</h1>
+            <p style="margin:0;font-size:14px;color:#4A2E1F">On <strong style="font-weight:500">${escapeHtml(v.itemTitle)}</strong>${status}</p>
+          </td></tr>${v.replyBody.trim() ? cardHtml(v.replyBody) : ""}${nextStepHtml(v)}`,
+  });
+}
+
+export function renderReplyNotificationText(v: ReplyNotificationVars): string {
+  const status = v.statusLabel ? ` (${v.statusLabel})` : "";
+  return [
+    `${v.vendorName} replied to your feedback on "${v.itemTitle}"${status}${v.replyBody.trim() ? ":" : "."}`,
+    v.replyBody.trim(),
+    nextStepText(v),
+    customerFooterText(sentFor.item(v.workspaceName), v.unsubscribeUrl),
+  ].filter(Boolean).join("\n\n");
+}
+
+// ─── Status change notification ──────────────────────────────
+// Sent to the customer when the PM moves an item to a new status. The outcome
+// leads (subject and heading); the blurbs state what the status means and
+// never promise anything the vendor didn't say.
+
+export type StatusChangeVars = NextStep & {
   workspaceName: string;
   vendorName: string;
-  itemShortId: string;
   itemTitle: string;
   fromStatus: string | null;
   toStatus: string;
   reason?: string | null;
-  /** When set, the email shows a "View thread" button pointing at the host product. */
-  threadUrl?: string | null;
   /** One-click unsubscribe link (per-customer token). Adds a footer link. */
   unsubscribeUrl?: string | null;
+  /** The workspace's Branding dot color (#RRGGBB). */
+  accent?: string | null;
 };
 
 const STATUS_BLURBS: Record<string, string> = {
-  review:    "A PM is scoping this with the team.",
-  planned:   "Picked up for an upcoming release.",
-  progress:  "Engineering has started work.",
-  shipped:   "Live now. Thanks for pushing on this one.",
-  declined:  "We're not building this. Open the thread for the reasoning.",
-  deferred:  "Set aside for now. We'll revisit and ping you.",
-  duplicate: "We're tracking this under another item.",
+  review:    "Nothing is decided yet.",
+  planned:   "Work hasn't started yet.",
+  progress:  "Work on it has started.",
+  shipped:   "It's live now.",
+  declined:  "It isn't going to be built.",
+  deferred:  "It's on hold, with no decision yet.",
+  duplicate: "It's tracked under another request.",
 };
 
+function statusLine(v: StatusChangeVars): string {
+  const from = v.fromStatus ? ` from ${statusLabel(v.fromStatus)}` : "";
+  return `${v.vendorName} moved this${from} to ${statusLabel(v.toStatus)}. ${STATUS_BLURBS[v.toStatus] ?? ""}`.trim();
+}
+
 export function renderStatusChangeHtml(v: StatusChangeVars): string {
-  const ws = escapeHtml(v.workspaceName);
-  const vendor = escapeHtml(v.vendorName);
-  const shortId = escapeHtml(v.itemShortId);
-  const title = escapeHtml(v.itemTitle);
-  const toLabel = escapeHtml(statusLabel(v.toStatus));
-  const fromLabel = v.fromStatus ? escapeHtml(statusLabel(v.fromStatus)) : "";
-  const blurb = escapeHtml(STATUS_BLURBS[v.toStatus] ?? "");
-
-  return `<!doctype html>
-<html lang="en">
-  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
-      <tr><td align="center" style="padding:48px 16px">
-        <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%">
-          <tr><td style="padding:0 8px 20px">
-            <table role="presentation" cellpadding="0" cellspacing="0">
-              <tr>
-                <td style="padding-right:10px">
-                  <svg width="26" height="26" viewBox="-5 -5 42 42" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="16" cy="3"  r="3.0" fill="#E27D3A" fill-opacity="0.45"/>
-                    <circle cx="28" cy="11" r="3.5" fill="#E27D3A" fill-opacity="0.62"/>
-                    <circle cx="28" cy="22" r="4.0" fill="#E27D3A" fill-opacity="0.80"/>
-                    <circle cx="17" cy="29" r="4.5" fill="#E27D3A" fill-opacity="0.94"/>
-                    <circle cx="4"  cy="22" r="5.0" fill="#E27D3A"/>
-                  </svg>
-                </td>
-                <td>
-                  <div style="font-weight:600;font-size:17px;letter-spacing:-0.01em">${ws}</div>
-                  <div style="font-size:11px;color:#6B5C50;font-family:ui-monospace,JetBrains Mono,Menlo,monospace">${shortId}</div>
-                </td>
-              </tr>
-            </table>
-          </td></tr>
-
-          <tr><td style="padding:0 8px 8px">
-            <h1 style="margin:0 0 6px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${title}</h1>
-            <p style="margin:0 0 16px;font-size:14px;color:#4A2E1F">
-              ${vendor} moved this${fromLabel ? ` from <strong style="font-weight:500">${fromLabel}</strong>` : ""} to <strong style="font-weight:500">${toLabel}</strong>.
-            </p>
-          </td></tr>
-
-          <tr><td style="padding:0 8px">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1C1815;border-radius:10px">
-              <tr><td style="padding:16px 18px;color:#FBF7F0;font-size:14px;line-height:1.55">
-                <strong style="display:block;font-weight:500;margin-bottom:4px">${toLabel}</strong>
-                ${blurb}
-                ${v.reason ? `<div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(251,247,240,0.12);font-size:13px;color:#DCC9B6">${escapeHtml(v.reason).replace(/\n/g, "<br>")}</div>` : ""}
-              </td></tr>
-            </table>
-          </td></tr>
-
-          ${v.threadUrl ? `
-          <tr><td style="padding:24px 8px 0">
-            <table role="presentation" cellpadding="0" cellspacing="0">
-              <tr><td style="border-radius:8px;background:#4A2E1F">
-                <a href="${escapeHtml(v.threadUrl)}" style="display:inline-block;padding:9px 18px;font-size:13px;font-weight:500;color:#FBF7F0;text-decoration:none;border-radius:8px">
-                  View thread →
-                </a>
-              </td></tr>
-            </table>
-          </td></tr>` : `
-          <tr><td style="padding:24px 8px 0">
-            <p style="margin:0 0 8px;font-size:13px;color:#6B5C50">
-              Open Crumb inside ${ws} to read the full thread or reply.
-            </p>
-          </td></tr>`}
-
-          <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08);margin-top:32px">
-            <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
-              You're getting this because you submitted feedback to ${ws} on Crumb. <a href="https://crumb.localhostlabs.net" style="color:#8A7C70">crumb.localhostlabs.net</a>${unsubLinkHtml(v.unsubscribeUrl)}
-            </p>
-          </td></tr>
-        </table>
-      </td></tr>
-    </table>
-  </body>
-</html>`;
+  return customerShell({
+    workspaceName: v.workspaceName,
+    accent: v.accent,
+    reason: sentFor.item(v.workspaceName),
+    unsubscribeUrl: v.unsubscribeUrl,
+    rows: `
+          <tr><td style="padding:0 8px 16px">
+            <h1 style="margin:0 0 6px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(`${statusLabel(v.toStatus)}: ${v.itemTitle}`)}</h1>
+            <p style="margin:0;font-size:14px;color:#4A2E1F">${escapeHtml(statusLine(v))}</p>
+          </td></tr>${v.reason?.trim() ? cardHtml(v.reason) : ""}${nextStepHtml(v)}`,
+  });
 }
 
 export function renderStatusChangeText(v: StatusChangeVars): string {
-  const toLabel = statusLabel(v.toStatus);
-  const fromLabel = v.fromStatus ? statusLabel(v.fromStatus) : null;
-  const blurb = STATUS_BLURBS[v.toStatus] ?? "";
-  return `${v.workspaceName} · ${v.itemShortId}
-${v.itemTitle}
-
-${v.vendorName} moved this${fromLabel ? ` from ${fromLabel}` : ""} to ${toLabel}.
-
-${toLabel}: ${blurb}${v.reason ? `\n\n${v.reason}` : ""}
-
-${v.threadUrl ? `View thread: ${v.threadUrl}` : `Open Crumb inside ${v.workspaceName} to read the full thread or reply.`}${unsubLineText(v.unsubscribeUrl)}`;
-}
-
-// (intentionally placed below renderReplyNotificationHtml; the text-mode
-// version follows the same vars shape and surfaces threadUrl as a plain line.)
-export function renderReplyNotificationText(v: ReplyNotificationVars): string {
-  const status = v.statusLabel ? `   [${v.statusLabel}]` : "";
-  return `${v.vendorName} replied to your feedback on Crumb.
-
-${v.workspaceName} · ${v.itemShortId}${status}
-${v.itemTitle}
-
----
-${truncate(v.replyBody)}
----
-
-${v.threadUrl ? `View thread: ${v.threadUrl}` : `To reply, open Crumb inside ${v.workspaceName} where you submitted this.`}${unsubLineText(v.unsubscribeUrl)}`;
+  return [
+    `${statusLabel(v.toStatus)}: ${v.itemTitle}`,
+    statusLine(v),
+    v.reason?.trim() ?? "",
+    nextStepText(v),
+    customerFooterText(sentFor.item(v.workspaceName), v.unsubscribeUrl),
+  ].filter(Boolean).join("\n\n");
 }
 
 // ─── Mention notification (to a tagged teammate) ────────────
@@ -450,7 +451,7 @@ export function renderMentionHtml(v: MentionVars): string {
   const by = escapeHtml(v.byName);
   const shortId = escapeHtml(v.itemShortId);
   const title = escapeHtml(v.itemTitle);
-  const body = paragraphsToHtml(truncate(v.noteBody));
+  const body = paragraphsToHtml(truncate(v.noteBody, v.dashboardThreadUrl));
   return `<!doctype html>
 <html lang="en">
   <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
@@ -492,7 +493,7 @@ ${v.workspaceName} · ${v.itemShortId}
 ${v.itemTitle}
 
 ---
-${truncate(v.noteBody)}
+${truncate(v.noteBody, v.dashboardThreadUrl)}
 ---
 
 ${v.dashboardThreadUrl ? `Open thread: ${v.dashboardThreadUrl}` : `Open Crumb to read the note.`}`;
@@ -521,7 +522,7 @@ export function renderCustomerReplyNotificationHtml(v: CustomerReplyNotification
   const account = escapeHtml(v.accountName);
   const shortId = escapeHtml(v.itemShortId);
   const title = escapeHtml(v.itemTitle);
-  const body = paragraphsToHtml(truncate(v.replyBody));
+  const body = paragraphsToHtml(truncate(v.replyBody, v.dashboardThreadUrl));
 
   return `<!doctype html>
 <html lang="en">
@@ -532,15 +533,7 @@ export function renderCustomerReplyNotificationHtml(v: CustomerReplyNotification
           <tr><td style="padding:0 8px 20px">
             <table role="presentation" cellpadding="0" cellspacing="0">
               <tr>
-                <td style="padding-right:10px">
-                  <svg width="26" height="26" viewBox="-5 -5 42 42" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="16" cy="3"  r="3.0" fill="#E27D3A" fill-opacity="0.45"/>
-                    <circle cx="28" cy="11" r="3.5" fill="#E27D3A" fill-opacity="0.62"/>
-                    <circle cx="28" cy="22" r="4.0" fill="#E27D3A" fill-opacity="0.80"/>
-                    <circle cx="17" cy="29" r="4.5" fill="#E27D3A" fill-opacity="0.94"/>
-                    <circle cx="4"  cy="22" r="5.0" fill="#E27D3A"/>
-                  </svg>
-                </td>
+                <td style="padding-right:10px">${EMBER_MARK}</td>
                 <td>
                   <div style="font-weight:600;font-size:17px;letter-spacing:-0.01em">${ws}</div>
                   <div style="font-size:11px;color:#6B5C50;font-family:ui-monospace,JetBrains Mono,Menlo,monospace">${shortId} · ${account}</div>
@@ -594,7 +587,7 @@ ${v.workspaceName} · ${v.itemShortId}
 ${v.itemTitle}
 
 ---
-${truncate(v.replyBody)}
+${truncate(v.replyBody, v.dashboardThreadUrl)}
 ---
 
 ${v.dashboardThreadUrl ? `Open in Crumb: ${v.dashboardThreadUrl}` : `Open the thread in your Crumb dashboard to reply.`}`;
@@ -665,58 +658,85 @@ ${v.billingUrl ? `Update payment method: ${v.billingUrl}` : "Open your Crumb das
 export type RoadmapUpdateVars = {
   workspaceName: string;
   initiativeName: string;
-  change: string; // e.g. "moved to Now" / "shipped"
+  change: string; // e.g. "moved to Now"
   productUrl?: string | null;
   unsubscribeUrl?: string | null;
+  /** The workspace's Branding dot color (#RRGGBB). */
+  accent?: string | null;
 };
 
+const roadmapReason = (ws: string) => `${sentFor.follow(ws)} Unfollow it from the Feedback tab.`;
+
 export function renderRoadmapUpdateHtml(v: RoadmapUpdateVars): string {
-  const ws = escapeHtml(v.workspaceName);
-  const name = escapeHtml(v.initiativeName);
-  const change = escapeHtml(v.change);
-  const url = v.productUrl ? escapeHtml(v.productUrl) : null;
-  return `<!doctype html>
-<html lang="en">
-  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
-      <tr><td align="center" style="padding:48px 16px">
-        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%">
-          <tr><td style="padding:0 8px 24px">
-            <div style="font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</div>
-            <div style="font-size:12px;color:#6B5C50">Roadmap · ${ws}</div>
-          </td></tr>
+  return customerShell({
+    workspaceName: v.workspaceName,
+    accent: v.accent,
+    reason: roadmapReason(v.workspaceName),
+    unsubscribeUrl: v.unsubscribeUrl,
+    rows: `
           <tr><td style="padding:0 8px">
-            <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">A roadmap item you follow was updated</h1>
-            <p style="margin:0 0 20px;font-size:14px;color:#4A2E1F">
-              <strong style="font-weight:600">${name}</strong>: ${change}.
-            </p>
-            ${url ? `
-            <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
-              <tr><td style="border-radius:8px;background:#1C1815">
-                <a href="${url}" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:500;color:#FBF7F0;text-decoration:none;border-radius:8px">View the roadmap</a>
-              </td></tr>
-            </table>` : ""}
+            <h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">A roadmap item you follow was updated</h1>
+            <p style="margin:0;font-size:14px;color:#4A2E1F"><strong style="font-weight:600">${escapeHtml(v.initiativeName)}</strong>: ${escapeHtml(v.change)}.</p>
           </td></tr>
-          <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08)">
-            <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">
-              You're getting this because you follow this item on ${ws}'s roadmap. Open the widget to unfollow.${unsubLinkHtml(v.unsubscribeUrl)}
-            </p>
-          </td></tr>
-        </table>
-      </td></tr>
-    </table>
-  </body>
-</html>`;
+          <tr><td style="padding:24px 8px 0">
+            ${v.productUrl ? buttonHtml(v.productUrl, "View the roadmap") : noteHtml(`Open ${v.workspaceName}'s Feedback tab to see the roadmap.`)}
+          </td></tr>`,
+  });
 }
 
 export function renderRoadmapUpdateText(v: RoadmapUpdateVars): string {
-  return `A roadmap item you follow was updated
+  return [
+    "A roadmap item you follow was updated",
+    `${v.initiativeName}: ${v.change}.`,
+    v.productUrl ? `View the roadmap: ${v.productUrl}` : `Open ${v.workspaceName}'s Feedback tab to see the roadmap.`,
+    customerFooterText(roadmapReason(v.workspaceName), v.unsubscribeUrl),
+  ].join("\n\n");
+}
 
-${v.initiativeName}: ${v.change}.
+// ─── Shipped announcement (published changelog entry) ───────
+// The loop's last beat: an initiative shipped and the vendor published the
+// news. Goes to everyone who asked (item submitters) and everyone following
+// it, so the footer says which one this reader is.
 
-${v.productUrl ? `View the roadmap: ${v.productUrl}` : "Open the widget in your product to see the roadmap."}
+export type ShippedAnnouncementVars = {
+  workspaceName: string;
+  /** The changelog entry's title (defaults to the initiative's name). */
+  title: string;
+  /** The vendor's announcement text; may be empty. */
+  body: string;
+  reason: "asked" | "follow";
+  productUrl?: string | null;
+  unsubscribeUrl?: string | null;
+  /** The workspace's Branding dot color (#RRGGBB). */
+  accent?: string | null;
+};
 
-You're getting this because you follow this item on ${v.workspaceName}'s roadmap.${unsubLineText(v.unsubscribeUrl)}`;
+const shippedBody = (v: ShippedAnnouncementVars) => v.body.trim() || "It's live now.";
+
+export function renderShippedAnnouncementHtml(v: ShippedAnnouncementVars): string {
+  return customerShell({
+    workspaceName: v.workspaceName,
+    accent: v.accent,
+    reason: sentFor[v.reason](v.workspaceName),
+    unsubscribeUrl: v.unsubscribeUrl,
+    rows: `
+          <tr><td style="padding:0 8px">
+            <h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(`${v.workspaceName} shipped ${v.title}`)}</h1>
+            ${paragraphsToHtml(shippedBody(v))}
+          </td></tr>${v.productUrl ? `
+          <tr><td style="padding:12px 8px 0">
+            ${buttonHtml(v.productUrl, `Open ${v.workspaceName}`)}
+          </td></tr>` : ""}`,
+  });
+}
+
+export function renderShippedAnnouncementText(v: ShippedAnnouncementVars): string {
+  return [
+    `${v.workspaceName} shipped ${v.title}`,
+    shippedBody(v),
+    v.productUrl ? `Open ${v.workspaceName}: ${v.productUrl}` : "",
+    customerFooterText(sentFor[v.reason](v.workspaceName), v.unsubscribeUrl),
+  ].filter(Boolean).join("\n\n");
 }
 
 // ─── New-signup notification (to the operator) ───────────────

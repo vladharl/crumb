@@ -27,6 +27,7 @@ import { SessionRecordToggle } from "./SessionRecordToggle";
 import { retentionDaysForPlan } from "@/lib/replay/sweep";
 import { FeedbackConnectors } from "./FeedbackConnectors";
 import { listConnections } from "@/lib/integrations/feedback/connections";
+import { UpgradeNotice } from "@/components/UpgradeNotice";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Integrations · Settings" };
@@ -181,12 +182,7 @@ export default async function IntegrationsPage({
 
   return (
     <>
-      {integrationsPlanLocked && (
-        <Banner
-          kind="ok"
-          text="Engineering ticket sync (Linear / Jira / GitHub) and Slack are available on the Team and Growth plans. Upgrade from Settings → Billing to connect them."
-        />
-      )}
+      {integrationsPlanLocked && <UpgradeNotice feature="integrations" isAdmin={isAdmin} />}
 
       {/* ─── Linear ─────────────────────────────────────────── */}
       <Card>
@@ -589,9 +585,7 @@ export default async function IntegrationsPage({
               </span>
             </div>
           ) : cloud ? (
-            <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-              Session record is on the <strong style={{ fontWeight: 500 }}>Growth</strong> plan. Upgrade from <a href="/settings/billing" style={{ color: "var(--ink)" }}>Settings → Billing</a> to enable it.
-            </p>
+            <UpgradeNotice feature="session_record" isAdmin={isAdmin} />
           ) : (
             <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
               Session record is available on Crumb Cloud. Self-host can wire it manually by setting a non-local <span className="mono">CRUMB_STORAGE_PROVIDER</span>; the cleanup cron deletes replays after <span className="mono">CRUMB_REPLAY_RETENTION_DAYS</span> (default 30).
