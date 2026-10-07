@@ -203,7 +203,7 @@ export async function sendMagicLink(m: MagicLink): Promise<void> {
     subject,
     html: renderMagicLinkHtml({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
     text: renderMagicLinkText({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
-    previewLine: `expires in ${m.ttlMinutes} minutes`,
+    previewLine: `expires in ${ttlText(m.ttlMinutes)}`,
     link: m.link,
   });
 
@@ -222,6 +222,13 @@ export type Invite = {
   inviterName: string;
 };
 
+// "15 minutes", "24 hours", "7 days" for the stdout preview operators read.
+function ttlText(minutes: number): string {
+  if (minutes % 1440 === 0) return `${minutes / 1440} day${minutes === 1440 ? "" : "s"}`;
+  if (minutes % 60 === 0) return `${minutes / 60} hour${minutes === 60 ? "" : "s"}`;
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
 export async function sendInvite(m: Invite): Promise<void> {
   const { provider } = selectProvider();
   const result = await provider.send({
@@ -229,7 +236,7 @@ export async function sendInvite(m: Invite): Promise<void> {
     subject: `${m.inviterName} invited you to ${m.workspaceName} on Crumb`,
     html: renderInviteHtml(m),
     text: renderInviteText(m),
-    previewLine: `invite to ${m.workspaceName}, expires in ${m.ttlMinutes} minutes`,
+    previewLine: `invite to ${m.workspaceName}, expires in ${ttlText(m.ttlMinutes)}`,
     link: m.link,
   });
 
@@ -257,7 +264,7 @@ export async function sendSignupVerify(m: SignupVerify): Promise<boolean> {
     subject: `Confirm your email · ${m.workspaceName}`,
     html: renderSignupVerifyHtml({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
     text: renderSignupVerifyText({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
-    previewLine: `confirm to create ${m.workspaceName} — expires in ${m.ttlMinutes} minutes`,
+    previewLine: `confirm to create ${m.workspaceName}, expires in ${ttlText(m.ttlMinutes)}`,
     link: m.link,
   });
 
