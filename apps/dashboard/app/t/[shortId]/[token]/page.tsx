@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { StatusPill, type Status } from "@crumb/ui";
 import { loadHostedThread } from "@/lib/hosted-thread";
+import { customerStatusOf } from "@/lib/customer-status";
 import { formatDate } from "@/lib/timefmt";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +25,8 @@ export default async function HostedThreadPage({ params }: { params: { shortId: 
   if (!thread) notFound();
   const { item, messages } = thread;
   const accent = /^#[0-9a-f]{6}$/i.test(item.accent) ? item.accent : null;
+  // A request merged into another reads like that one: its status, nothing else.
+  const shown = await customerStatusOf(item.id);
 
   return (
     <main style={{ minHeight: "100vh", padding: "48px 16px" }}>
@@ -37,9 +40,10 @@ export default async function HostedThreadPage({ params }: { params: { shortId: 
           <header className="col gap-2">
             <h1 style={{ fontSize: "var(--fs-xl)", lineHeight: 1.25 }}>{item.title}</h1>
             <span className="row gap-2" style={{ flexWrap: "wrap" }}>
-              <StatusPill status={item.status as Status} />
+              <StatusPill status={(shown?.status ?? item.status) as Status} />
               <span className="text-xs muted">Sent {day(item.createdAt)}</span>
             </span>
+            {shown?.merged && <p className="text-sm muted" style={{ margin: 0 }}>Combined with a matching request.</p>}
           </header>
           {item.body && <p className="text-md" style={TEXT}>{item.body}</p>}
 

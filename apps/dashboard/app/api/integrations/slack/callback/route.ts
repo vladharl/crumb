@@ -1,5 +1,5 @@
 import { and, eq, isNotNull, ne } from "drizzle-orm";
-import { db, workspaces } from "@crumb/db";
+import { db, workspaces, workspaceUsers } from "@crumb/db";
 import { exchangeCode, SLACK_REDIRECT_URL } from "@/lib/slack/install";
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
 import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
@@ -15,7 +15,8 @@ export const runtime = "nodejs";
 //      the workspace it was issued for
 //   2. exchange ?code for a bot token
 //   3. refuse a Slack team another workspace already holds
-//   4. persist the token + team metadata on the workspace
+//   4. persist the token + team metadata on the workspace (a different team
+//      drops the cached Slack user ids)
 //   5. send the admin back to /settings/integrations with a result flag
 
 function redirectBack(req: Request, slug: string): Response {
@@ -40,7 +41,7 @@ export async function GET(req: Request) {
   // Look up the workspace early to make sure it still exists before
   // burning the (single-use) auth code.
   const [ws] = await db
-    .select({ id: workspaces.id })
+    .select({ id: workspaces.id, slackTeamId: workspaces.slackTeamId })
     .from(workspaces)
     .where(eq(workspaces.id, v.workspaceId))
     .limit(1);
@@ -74,6 +75,16 @@ export async function GET(req: Request) {
   if (holder) {
     log.warn("slack team already connected to another workspace", { scope: "crumb/slack", teamId: result.team.id, workspaceId: ws.id });
     return redirectBack(req, "error_team_already_connected");
+  }
+
+  // Cached Slack user ids belong to the team they were looked up in, so a
+  // different team drops them (as a disconnect does), first: DMs and /crumb
+  // must never use an old team's id with the new team's token.
+  if (ws.slackTeamId !== result.team.id) {
+    await db
+      .update(workspaceUsers)
+      .set({ slackUserId: null, slackLookupFailedAt: null })
+      .where(eq(workspaceUsers.workspaceId, ws.id));
   }
 
   await db

@@ -4,7 +4,6 @@ import {
   workspacePlan,
   integrationsAllowed,
   usageAnalyticsAllowed,
-  workspaceFeatures,
 } from "@/lib/entitlements";
 
 // `isCloud()` / `isActiveStatus()` read process.env live (no caching), so we
@@ -31,11 +30,9 @@ describe("lib/entitlements", () => {
       expect(hasFeature(w, "integrations")).toBe(false);
     });
 
-    it("reports plan 'free' and no features", () => {
+    it("reports plan 'free'", () => {
       setTier("self_host");
-      const w = ws("growth", "active");
-      expect(workspacePlan(w)).toBe("free");
-      expect(workspaceFeatures(w)).toEqual([]);
+      expect(workspacePlan(ws("growth", "active"))).toBe("free");
     });
 
     it("allows integrations (creds-gated separately by *Configured())", () => {
@@ -74,8 +71,7 @@ describe("lib/entitlements", () => {
     it("growth plan unlocks everything", () => {
       setTier("cloud");
       const w = ws("growth", "active");
-      expect(workspaceFeatures(w).sort()).toEqual(["ai", "integrations", "session_record", "usage_analytics"]);
-      expect(hasFeature(w, "session_record")).toBe(true);
+      for (const f of ["ai", "integrations", "session_record", "usage_analytics"] as const) expect(hasFeature(w, f)).toBe(true);
     });
 
     it("usage analytics requires the plan feature on cloud", () => {

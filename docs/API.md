@@ -245,6 +245,7 @@ Response `200`:
       "body": "Anything over 50k rows fails after a minute.",
       "type": "bug",
       "status": "planned",
+      "merged": false,
       "created_at": "2026-01-01T12:00:00.000Z",
       "updated_at": "2026-01-03T09:30:00.000Z",
       "reply_count": 3,
@@ -258,6 +259,7 @@ Response `200`:
 }
 ```
 
+- `merged` is true when your team merged this request into another. `status` is then that request's status (or `duplicate` once that request's own submitter closed it), and `turn` follows it.
 - `reply_count` counts visible messages, including the customer's own (their original text is the first message).
 - `last_reply_side`: who moved last. `"vendor"` when your team's latest touch is newer than the customer's latest message (a reply, a status email that was delivered, or setting the request aside), `"customer"` when the customer wrote last, or `null` when neither has happened.
 - `turn` is from your team's side: `"yours"` (your team owes the next move), `"waiting"` (your team moved last, per `last_reply_side`) or `"closed"`.
@@ -319,6 +321,7 @@ Response `200`:
     "title": "CSV export times out on large accounts",
     "type": "bug",
     "status": "declined",
+    "merged": false,
     "created_at": "2026-01-01T12:00:00.000Z",
     "updated_at": "2026-01-03T09:30:00.000Z",
     "status_reason": "Exports over 50k rows move to the scheduled-report flow.",
@@ -353,6 +356,7 @@ Response `200`:
 
 - `kind` is `"vendor"` for your team and `"customer"` for anyone on the customer's account.
 - `status_reason` and `status_changed_at` belong to the current status (null when it was set without one).
+- `merged` is true when your team merged this request into another. `status` is then that request's status (or `duplicate` once that request's own submitter closed it), and `status_reason`, `status_changed_at` and the merge event's `reason` are null.
 - `events` always starts with the submission. `by_name` is the teammate who made the change, or null (the submission, and the customer closing it).
 - Attachment `url`s are signed links that work for one hour without any other credential.
 
@@ -426,7 +430,7 @@ Errors: `400 bad_id`, `403 forbidden`, `404 not_found`, `404 bytes_not_found`.
 
 ### `GET /api/v1/roadmap`
 
-The workspace's public roadmap: initiatives your team marked public and placed in a column.
+The workspace's public roadmap: initiatives your team marked public and placed in Now, Next or Later, in board order, then the 10 public initiatives that shipped most recently, newest first. A shipped initiative is in `shipped` whatever its column.
 
 Response `200`:
 
@@ -434,15 +438,18 @@ Response `200`:
 {
   "columns": {
     "now": [
-      { "id": "1c9e…", "short_id": "IN-7", "name": "Faster exports", "description": "Exports that include every row.", "status": "in_progress", "following": true }
+      { "id": "1c9e…", "short_id": "IN-7", "name": "Faster exports", "description": "Exports that include every row.", "status": "in_progress", "lane": "now", "shipped_at": null, "following": true }
     ],
     "next": [],
-    "later": []
+    "later": [],
+    "shipped": [
+      { "id": "7b2d…", "short_id": "IN-4", "name": "SAML sign-in", "description": null, "status": "shipped", "lane": "shipped", "shipped_at": "2026-01-10T15:00:00.000Z", "following": false }
+    ]
   }
 }
 ```
 
-`following` says whether the caller follows the initiative.
+`lane` is the column the entry is in. `shipped_at` is when it shipped, `null` outside `shipped`. `following` says whether the caller follows the initiative.
 
 ### `POST /api/v1/roadmap`
 
@@ -460,7 +467,7 @@ Response `200`:
 { "ok": true, "following": true }
 ```
 
-Errors: `400 invalid_json`, `400 invalid_request` (missing `initiative_id` or a non-boolean `follow`), `404 initiative_not_found` (unknown or not public), the token errors, `429 rate_limited`.
+Errors: `400 invalid_json`, `400 invalid_request` (missing `initiative_id` or a non-boolean `follow`), `404 initiative_not_found` (unknown, not public, or not on the roadmap: a public initiative that is neither shipped nor in Now, Next or Later), the token errors, `429 rate_limited`.
 
 ### `GET /api/v1/changelog`
 
@@ -580,11 +587,11 @@ Request: `{ "workspace_slug", "sequence", "started_at", "ended_at", "events": [ 
 
 Response `201`: `{ "session_id": "…", "chunk_id": "…" }`
 
-Errors: `400 invalid_json`, `bad_sequence`, `missing_workspace_slug`, `missing_timing`, `bad_timing`, `missing_events`, `empty_events`, `bad_token`; `403 session_record_not_entitled`, `403 session_record_disabled`; `404 workspace_not_found`; `409 duplicate_sequence`; `410 session_record_cloud_only`; `413 session_too_long`, `session_size_exceeded`, `session_events_exceeded`; `429 replay_monthly_quota_exceeded`, `429 rate_limited`.
+Errors: `400 invalid_json`, `bad_sequence`, `missing_workspace_slug`, `missing_timing`, `bad_timing`, `missing_events`, `empty_events`, `bad_token`; `403 session_record_not_entitled`, `403 session_record_disabled`, `403 session_token_taken` (another workspace already holds that token); `404 workspace_not_found`; `409 duplicate_sequence`; `410 session_record_cloud_only`; `413 session_too_long`, `session_size_exceeded`, `session_events_exceeded`; `429 replay_monthly_quota_exceeded`, `429 rate_limited`.
 
 ### `POST /api/v1/captures`
 
-Capture feedback from a browser or email extension into your **Captures** queue, where your team confirms it onto an account or discards it. It doesn't create an item by itself.
+Capture feedback from a browser or email extension into the pending captures at the top of your Inbox, where your team confirms it onto an account or discards it. It doesn't create an item by itself.
 
 Auth is the workspace's capture address rather than a customer token. With `CRUMB_INBOUND_DOMAIN` and `CRUMB_INBOUND_SECRET` set, **Settings → Install** shows an address `inbox+<slug>.<token>@<domain>`; send its `<slug>` and `<token>` parts.
 
@@ -603,7 +610,7 @@ Request:
 
 `subject` (up to 300 characters) or `body` (up to 20,000) is required.
 
-Response `200`: `{ "ok": true, "captureId": "a91f…" }`
+Response `200`: `{ "ok": true, "captureId": "a91f…" }`. When the sender was marked as spam the capture is dropped and the answer is still `200`: `{ "ok": true, "accepted": false, "reason": "blocked" }`.
 
 Errors: `400 bad_json`, `400 empty`, `401 unauthorized` (wrong token, or `CRUMB_INBOUND_SECRET` is unset), `404 workspace_not_found`, `429 rate_limited`. Not CORS-enabled: call it from an extension or a server.
 
@@ -796,13 +803,14 @@ Returns `{ count, items, next_cursor }`, with items shaped like `list_items` min
 
 #### `list_roadmap`
 
-No arguments. Every initiative, grouped:
+No arguments. Every initiative, grouped as the board shows it: `now`, `next` and `later` in board order, `shipped` newest first whatever its column, and `unscheduled`. `shipped_at` is `null` outside `shipped`.
 
 ```json
 {
-  "now": [{ "short_id": "IN-7", "name": "Faster exports", "description": "Exports that include every row.", "status": "in_progress", "column": "now", "is_public": true }],
+  "now": [{ "short_id": "IN-7", "name": "Faster exports", "description": "Exports that include every row.", "status": "in_progress", "column": "now", "is_public": true, "shipped_at": null }],
   "next": [],
   "later": [],
+  "shipped": [{ "short_id": "IN-4", "name": "SAML sign-in", "description": null, "status": "shipped", "column": "later", "is_public": true, "shipped_at": "2026-01-10T15:00:00.000Z" }],
   "unscheduled": []
 }
 ```
@@ -831,10 +839,10 @@ Highest ARR first:
 | `reason` | string | Required for `declined`, `deferred` and `duplicate`. The customer sees it. |
 
 ```json
-{ "ok": true, "short_id": "FB-42", "status": "planned", "emailed": true }
+{ "ok": true, "short_id": "FB-42", "status": "planned", "emailed": true, "merged_emailed": 0 }
 ```
 
-Only `planned`, `progress`, `shipped`, `declined` and `deferred` email the customer, and only when they can be emailed: they wrote in through the widget, have an address, haven't opted out, and the workspace can send email. `emailed` says whether that email actually went out.
+Only `planned`, `progress`, `shipped`, `declined` and `deferred` email the customer, and only when they can be emailed: they wrote in through the widget, have an address, haven't opted out, and the workspace can send email. `emailed` says whether that email actually went out. Customers whose requests were merged into this one get that status email too, on the same terms but without the reason; `merged_emailed` counts them.
 
 #### `reply_to_item`
 
@@ -884,7 +892,7 @@ Crumb POSTs a signed JSON event to your endpoints when something happens in your
 
 **Setup.** Workspace admins add endpoints under **Settings → Webhooks** (up to 10 per workspace):
 
-- The URL must be `http` or `https`. On Cloud it must resolve to a public address (private, loopback and link-local targets are refused).
+- The URL must be `http` or `https`. On Cloud its host must resolve, and only to public addresses: private (`10/8`, `172.16/12`, `192.168/16`), loopback, unspecified (`0.0.0.0/8`, `::`), link-local (cloud metadata included), carrier-grade NAT (`100.64/10`), multicast and reserved (`224.0.0.0` and up), and IPv6 unique-local (`fc00::/7`) targets are refused.
 - Pick the event types to receive. Every type is ticked to start with, and you can change the selection later. Event types added in later releases aren't ticked on existing endpoints.
 - Copy the signing secret when it's shown. Admins can reveal it again or rotate it later.
 - **Send test** posts a sample of the endpoint's first subscribed event right away, and each endpoint's delivery log shows its recent attempts with their outcome.
@@ -938,7 +946,7 @@ app.post("/crumb-webhook", express.raw({ type: "application/json" }), (req, res)
 
 - **Success** is any `2xx` within 10 seconds. Acknowledge first and do slow work afterwards.
 - **Redirects** are not followed and count as failures. Use the final URL.
-- **Retries:** a timeout, a connection error, a refused target, `429` or any `5xx` is retried twice, about 2 and 10 seconds later, with the same id and body. Other responses (`3xx`, other `4xx`) are final.
+- **Retries:** a timeout, a connection error, a refused target, `429` or any `5xx` is retried twice with the same id and body: a second attempt about 2 seconds after the first, and a third about 10 seconds after the second. Other responses (`3xx`, other `4xx`) are final.
 - **Duplicates and order:** a retry can arrive after you already processed the event, and events can arrive out of order. Deduplicate on the id and use `at` for ordering.
 - **No replay:** retries are held by the running app, so a restart drops any that are pending, and spent events aren't resent.
 - **Auto-pause:** after 15 failed events in a row the endpoint is paused. Resume it from **Settings → Webhooks** once your receiver is healthy; that resets the count.
@@ -1046,7 +1054,7 @@ The statuses are the tracker's own names. Either can be `null`.
 { "type": "capture.created", "capture": { "id": "9a3e5c71-2b84-4d6f-8e10-6c4b2a9d7f58", "source": "email", "subject": "Exports keep failing", "status": "pending" } }
 ```
 
-`source` says where it came from: `email`, `slack`, `extension`, or a connector (`gong`, `zendesk`, `intercom`, `freshdesk`, `freshchat`). `status` is usually `pending`; Autopilot can land one already decided.
+`source` says where it came from: `email`, `slack`, `extension`, or a connector (`gong`, `zendesk`, `intercom`, `freshdesk`, `freshchat`). It fires only for captures waiting for review, so `status` is always `pending`; ones Autopilot lands already accepted or dismissed don't send it.
 
 ---
 
@@ -1062,17 +1070,28 @@ Point your mail provider's inbound webhook (Resend Inbound, SendGrid Inbound Par
 Authorization: Bearer <CRUMB_INBOUND_SECRET>
 ```
 
-Both take the same JSON shape: `{ "to": string | string[], "from": string, "text": string, "subject"?: string, "html"?: string, "message_id"?: string }`. Quoted earlier messages are stripped from `text`, and bodies are cut to 20,000 characters. Rate limit 120 / 2 per IP.
+Both take the same JSON shape: `{ "to": string | string[], "from": string, "text": string, "subject"?: string, "html"?: string, "message_id"?: string }` (`messageId` works too). Quoted earlier messages are stripped from `text`, and bodies are cut to 20,000 characters. Rate limit 120 / 2 per IP.
 
-**`POST /api/v1/inbound/reply`** turns a customer's emailed reply into a reply on the thread. `to` must contain the signed reply address (`reply+<shortId>.<token>@<domain>`) that every notification email uses as Reply-To, and the sender must be a person on that item's customer account.
+Always send `message_id`, the email's `Message-ID`: it's how a provider's retry is recognized. A retry of a message that already landed changes nothing and answers `reason: "duplicate"` (below). Without it, a retry posts or captures the message a second time.
 
-- `200 { "ok": true, "accepted": true, "shortId": "FB-42" }`
-- `200 { "ok": true, "accepted": false, "reason": "unknown_sender" }`: dropped on purpose, without an error, so the provider doesn't retry.
-- Errors: `400 bad_json`, `no_reply_address`, `no_sender`, `empty_body`, `empty_after_quote_strip`; `401 unauthorized`; `403 invalid_token`; `404 item_not_found`.
+A `200` with `"accepted": false` is final, never an error, so the provider doesn't retry it.
+
+**`POST /api/v1/inbound/reply`** turns a customer's emailed reply into a reply on the thread. `to` must contain the signed reply address (`reply+<shortId>.<token>@<domain>`) that every notification email uses as Reply-To.
+
+- `200 { "ok": true, "accepted": true, "shortId": "FB-42" }`: posted on the thread. The sender is a person on that item's customer account.
+- `200 { "ok": true, "accepted": false, "reason": … }`, where `reason` is one of:
+  - `unknown_sender`: the sender isn't on the item's account (a colleague not added yet, a personal address, an auto-responder). The reply waits in your Inbox as a pending capture naming the thread it answered, and the response carries its `captureId`.
+  - `item_deleted`: the item was deleted (or marked as spam) after the email went out.
+  - `blocked`: the sender's feedback was marked as spam. Nothing is posted or captured.
+  - `duplicate`: a retry of a `message_id` that already landed.
+- Errors: `400 bad_json`, `no_reply_address`, `no_sender`, `empty_body`, `empty_after_quote_strip`; `401 unauthorized`; `403 invalid_token` (items with that FB number exist, but no workspace that holds one signed the address); `404 item_not_found` (no workspace has an item with that FB number, and none that deleted one signed the address).
 
 **`POST /api/v1/inbound/email`** turns mail sent or forwarded to the capture address (`inbox+<slug>.<token>@<domain>`, shown on **Settings → Install**) into a pending capture.
 
 - `200 { "ok": true, "captureId": "a91f…" }`
+- `200 { "ok": true, "accepted": false, "reason": … }`, where `reason` is one of:
+  - `blocked`: the sender (for a forward, the customer it came from) had their feedback marked as spam. Nothing is captured.
+  - `duplicate`: a retry of a `message_id` that already landed.
 - Errors: `400 bad_json`, `no_inbox_address`, `empty`; `401 unauthorized`; `403 invalid_token`; `404 workspace_not_found`.
 
 ### Maintenance jobs
@@ -1086,7 +1105,7 @@ X-Crumb-Sweep-Secret: <CRUMB_INTERNAL_SWEEP_SECRET>
 
 | Job | Does | Suggested cadence |
 | --- | --- | --- |
-| `replay-sweep` | Prunes unlinked replay sessions, unattached uploads and aged usage events, and renews Jira status webhooks on Cloud. Optional body `{ "graceMs": 86400000, "limit": 500 }`. | Hourly |
+| `replay-sweep` | Prunes unlinked replay sessions, expired replays, unattached uploads, aged usage events and public-page follows left unconfirmed (or unsubscribed) once their 7-day confirmation link lapses, and renews Jira status webhooks on Cloud. Optional body `{ "graceMs": 86400000, "limit": 500 }`. | Hourly |
 | `crm-sync` | Refreshes accounts and ARR from connected HubSpot or Salesforce. | Every 6 hours |
 | `feedback-sync` | Pulls new conversations from connected feedback sources (Autopilot). | Every 15 to 60 minutes |
 | `digest` | Emails each teammate's daily or weekly digest (at most one per period), then embeds items AI-entitled workspaces still lack on Cloud. | Daily |
@@ -1104,4 +1123,4 @@ They answer `503 sweep_secret_unset` until the secret is set and `401 unauthoriz
 
 ### Dashboard-internal routes
 
-`/api/v1/feed`, `/api/v1/ask` and the replay viewer's `GET`/`POST` routes under `/api/v1/replay-sessions/{id}/` serve the dashboard itself, need a signed-in dashboard session, and may change without notice. Don't build on them.
+`/api/v1/feed`, `GET /api/v1/palette` (the ⌘K search), `/api/v1/ask` and the replay viewer's `GET`/`POST` routes under `/api/v1/replay-sessions/{id}/` serve the dashboard itself, need a signed-in dashboard session, and may change without notice. Don't build on them.

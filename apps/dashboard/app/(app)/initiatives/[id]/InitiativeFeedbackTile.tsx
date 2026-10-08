@@ -2,13 +2,16 @@ import Link from "next/link";
 import { Card, CardHead, StatusPill, TypeChip } from "@crumb/ui";
 import type { Status, TypeKind } from "@crumb/ui";
 import { db, accounts, accountUsers, items } from "@crumb/db";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
+import { notMergedSql } from "@/lib/loop-sql";
 import { ageFrom, getActiveSession } from "@/lib/server";
 import { AddItemsButton } from "./AddItemsButton";
 
 const GRID = "64px 86px 1fr 140px 110px 90px 56px";
 
-async function loadFeedback(initiativeId: string) {
+// Merged duplicates are left out, as in the header's count: the inbox folds
+// them under the request they were merged into.
+async function loadFeedback(workspaceId: string, initiativeId: string) {
   return db
     .select({
       id: items.id,
@@ -23,12 +26,13 @@ async function loadFeedback(initiativeId: string) {
     .from(items)
     .innerJoin(accounts, eq(accounts.id, items.accountId))
     .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
-    .where(eq(items.initiativeId, initiativeId))
+    .where(and(eq(items.workspaceId, workspaceId), eq(items.initiativeId, initiativeId), notMergedSql(items.mergedIntoId)))
     .orderBy(desc(items.updatedAt));
 }
 
 export async function InitiativeFeedbackTile({ id }: { id: string }) {
-  const [{ user }, feedback] = await Promise.all([getActiveSession(), loadFeedback(id)]);
+  const { workspace, user } = await getActiveSession();
+  const feedback = await loadFeedback(workspace.id, id);
   const total = feedback.length;
   const canManage = user.role === "admin" || user.role === "pm";
 

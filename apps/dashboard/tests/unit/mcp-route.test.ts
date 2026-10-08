@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { db, accounts, accountUsers, apiKeys, items, workspaces, workspaceUsers } from "@crumb/db";
 import { newApiKey } from "@/lib/api-keys";
-import { likeContains } from "@/lib/mcp/tools";
+import { likeContains } from "@/lib/like";
 import { POST } from "@/app/api/mcp/route";
 
 // The MCP endpoint end to end against Postgres (DATABASE_URL, migrated):

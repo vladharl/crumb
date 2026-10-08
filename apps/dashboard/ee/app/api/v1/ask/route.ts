@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getActiveSession } from "@/lib/server";
 import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
-import { aistackChat } from "@/lib/ai/aistack";
 import { askFeedback } from "@/lib/ai/ask";
 import { askUsage } from "@/lib/ai/ask-usage";
 
@@ -12,31 +11,23 @@ export const runtime = "nodejs";
 // cloud builds and stripped on community (404 on self-host). One smart box: the
 // server auto-routes each question to "feedback" (RAG over the feedback corpus)
 // or "usage" (a safe metric catalog over usage_events). Entitlement + monthly
-// metering happen inside the lib (withAiBudget). classifyAsk stays in this ee/
-// file so the aistack client never enters the community bundle.
+// metering happen inside the lib (withAiBudget).
 
-// Cheap intent regex — strong usage signals. Used as the primary fast path and
-// as the fallback when the LLM classifier is unavailable/ambiguous.
+// Strong usage signals.
 const USAGE_RE = /\b(how many|how much|active (users|accounts)|adoption|trend(ing)?|usage|used|using|count of|number of|\bMAU\b|\bDAU\b|last (week|month|\d+ days)|past \d+ days)\b/i;
 // Words that make a counting, revenue or time question about what customers
 // asked for ("how much ARR is asking for SSO?", "how many requests last
 // month?"). The feedback engine answers those from SQL totals.
 const FEEDBACK_RE = /\b(feedback|requests?|requested|ask(s|ed|ing)? for|asking|want(s|ed)?|bugs?|complain\w*|said|mention\w*)\b/i;
 
-// Decide feedback vs usage. Defaults to "feedback" (broadly applicable, safe)
-// on any uncertainty. The LLM call is tiny and best-effort; the regex is the
-// floor so routing still works when aistack is down.
-async function classifyAsk(question: string): Promise<"feedback" | "usage"> {
-  const heuristic: "feedback" | "usage" =
-    USAGE_RE.test(question) && !FEEDBACK_RE.test(question) ? "usage" : "feedback";
-  const out = await aistackChat(
-    `Classify this question as exactly one word. "usage" if it asks about product analytics (counts, active users or accounts, adoption, trends over time), or "feedback" if it asks about what customers said (themes, requests, bugs, sentiment). Questions about what customers asked for are "feedback" even when they ask for a count, revenue or a time window.\n\nQuestion: ${question}\n\nAnswer with only "usage" or "feedback".`,
-    { maxTokens: 4, temperature: 0, scope: "ask_classify" },
-  );
-  const v = out?.toLowerCase() ?? "";
-  if (v.includes("usage")) return "usage";
-  if (v.includes("feedback")) return "feedback";
-  return heuristic; // null/ambiguous → trust the regex
+// Decide feedback vs usage: "usage" on a usage signal with no feedback word,
+// otherwise "feedback" (broadly applicable, safe).
+// ponytail: keywords only. The LLM router this replaces had a 4-token budget,
+// which a reasoning model spends thinking, so the regex decided anyway, one
+// model round trip later. Route with a model (a few hundred tokens) if the
+// regex misroutes.
+function classifyAsk(question: string): "feedback" | "usage" {
+  return USAGE_RE.test(question) && !FEEDBACK_RE.test(question) ? "usage" : "feedback";
 }
 
 export async function POST(req: Request) {
@@ -54,7 +45,7 @@ export async function POST(req: Request) {
   // Usage analytics needs both the AI stack and the usage_analytics entitlement.
   // Without it, every question goes to the feedback engine.
   const usageEnabled = hasFeature(workspace, "ai") && usageAnalyticsAllowed(workspace);
-  const route = usageEnabled ? await classifyAsk(question) : "feedback";
+  const route = usageEnabled ? classifyAsk(question) : "feedback";
 
   if (route === "usage") {
     const r = await askUsage(workspace, question);

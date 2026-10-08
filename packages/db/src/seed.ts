@@ -22,6 +22,8 @@ async function main() {
   const [southbeam] = await db.insert(workspaces).values({
     slug: "southbeam",
     name: "Southbeam",
+    // Its feedback came in through the widget, so the widget reads installed.
+    widgetFirstPingAt: new Date(),
   }).returning();
   if (!southbeam) throw new Error("workspace insert failed");
 

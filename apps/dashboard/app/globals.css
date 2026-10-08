@@ -1115,8 +1115,12 @@ select.input { appearance: auto; }  /* keep the native arrow */
   background: var(--text);
   transition: transform .15s, background .15s;
 }
-.switch.on { background: var(--accent); border-color: var(--accent); }
+/* --focus-ring (ember-deep), not --accent: bright ember is 2.7:1 on cream and
+   the white knob on it 2.9:1, under the 3:1 a control's state needs. The ring
+   then sits 2px out, so it doesn't merge into an on track of its own color. */
+.switch.on { background: var(--focus-ring); border-color: var(--focus-ring); }
 .switch.on::after { transform: translateX(14px); background: white; }
+.switch:focus-visible { outline-offset: 2px; }
 
 /* segmented control */
 .seg {
@@ -1251,9 +1255,11 @@ select.input { appearance: auto; }  /* keep the native arrow */
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
 }
+/* minmax(0, …): a wide child (a .code block's pre line) scrolls inside its
+   card instead of stretching the column and the page with it. */
 .cols-aside {
   display: grid;
-  grid-template-columns: 200px 1fr;
+  grid-template-columns: 200px minmax(0, 1fr);
   gap: 32px;
 }
 @media (max-width: 1024px) {
@@ -1261,7 +1267,7 @@ select.input { appearance: auto; }  /* keep the native arrow */
 }
 @media (max-width: 768px) {
   .cols-3 { grid-template-columns: 1fr; }
-  .cols-aside { grid-template-columns: 1fr; gap: 18px; }
+  .cols-aside { grid-template-columns: minmax(0, 1fr); gap: 18px; }
 }
 
 /* Thread: at the width where .cols-2-1 stacks, the side column (status,

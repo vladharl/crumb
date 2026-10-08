@@ -18,7 +18,8 @@ export type CaptureActionResult = { ok: true; shortId?: string } | { ok: false; 
 export async function createItemFromCapture(input: {
   captureId: string;
   accountName: string;
-  submitterEmail: string;
+  // Blank when the capture has no sender address and nobody typed one.
+  submitterEmail?: string;
   submitterName?: string;
   type: string;
   title: string;
@@ -45,13 +46,18 @@ export async function createItemFromCapture(input: {
     sourceUrl = null;
   }
 
+  // No sender address (a Gong call, a Freshdesk ticket, a forward that carried
+  // only a name) still makes a request: filed under a reserved .invalid
+  // placeholder, one per capture, as Slack does. Nobody is emailed at it
+  // (lib/email, customerNotifyPlan) and Mark as spam never blocks it.
+  const typedEmail = input.submitterEmail?.trim() ?? "";
   const r = await composeItem({
     workspaceId: workspace.id,
     workspace,
     actorWorkspaceUserId: user.id,
     accountName: input.accountName,
-    submitterEmail: input.submitterEmail,
-    submitterName: input.submitterName,
+    submitterEmail: typedEmail || `${cap.source}-${cap.id}@capture.invalid`,
+    submitterName: input.submitterName?.trim() || (typedEmail ? undefined : "Unknown sender"),
     type: input.type,
     title: input.title,
     body: input.body,
@@ -65,7 +71,6 @@ export async function createItemFromCapture(input: {
     .set({ status: "accepted", createdItemId: r.itemId, decidedAt: new Date(), decidedByWorkspaceUserId: user.id })
     .where(eq(inboundCaptures.id, cap.id));
 
-  revalidatePath("/captures");
   revalidatePath("/inbox");
   return { ok: true, shortId: r.shortId };
 }

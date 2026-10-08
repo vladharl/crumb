@@ -3,6 +3,8 @@ import { and, eq } from "drizzle-orm";
 import { db, accounts, workspaceUsers } from "@crumb/db";
 import { verifySlackSignature } from "@/lib/slack/verify";
 import { workspaceForSlackTeam } from "@/lib/slack/install";
+import { slackTeammate } from "@/lib/slack/notify";
+import { open } from "@/lib/crypto-at-rest";
 import { integrationsAllowed } from "@/lib/entitlements";
 import { composeItem } from "@/lib/compose";
 import { SLACK_SOURCE } from "@/lib/feedback/source";
@@ -17,7 +19,7 @@ type StateEl = { value?: string; selected_option?: { value?: string } };
 type ViewSubmission = {
   type?: string;
   team?: { id?: string };
-  user?: { id?: string; username?: string };
+  user?: { id?: string; username?: string; team_id?: string };
   view?: { state?: { values?: Record<string, Record<string, StateEl>> } };
 };
 
@@ -55,13 +57,35 @@ export async function POST(req: Request) {
   const teamId = payload.team?.id;
   if (!teamId) return new NextResponse("", { status: 200 });
   const ws = await workspaceForSlackTeam(teamId);
-  if (!ws) return new NextResponse("", { status: 200 });
+  if (!ws || !ws.slackBotToken) return new NextResponse("", { status: 200 });
   // A form opened before a downgrade can't create items after it.
   if (!integrationsAllowed(ws)) {
     return NextResponse.json({
       response_action: "errors",
       errors: { title: "Capturing from Slack is paused on this workspace's current Crumb plan. A Crumb admin can upgrade in Settings, then Billing." },
     });
+  }
+
+  // Only this workspace's teammates create items here (as /crumb only opens the
+  // form for them), matched by Slack email even if Crumb never DMed them: the
+  // item is their Trail entry, and they get no new-submission alert for it.
+  const slackUserId = payload.user?.id;
+  const [cached] = slackUserId
+    ? await db
+        .select({ id: workspaceUsers.id })
+        .from(workspaceUsers)
+        .where(and(eq(workspaceUsers.workspaceId, ws.id), eq(workspaceUsers.slackUserId, slackUserId)))
+        .limit(1)
+    : [];
+  const teammate = cached ?? await slackTeammate({
+    workspaceId: ws.id,
+    installTeamId: teamId,
+    botToken: open(ws.slackBotToken),
+    slackUserId,
+    userTeamId: teamId, // the same rule /crumb applies
+  });
+  if (!teammate) {
+    return NextResponse.json({ response_action: "errors", errors: { title: "Only teammates in this Crumb workspace can log feedback from Slack." } });
   }
 
   if (!title || !accountRaw) {
@@ -81,15 +105,6 @@ export async function POST(req: Request) {
   }
 
   const submitterEmail = emailIn || `slack-${payload.user?.id ?? "unknown"}@slack.invalid`;
-  // The teammate who ran /crumb, once their Slack id is known (it's cached the
-  // first time they're DMed): their Trail entry, and no alert to themselves.
-  const [teammate] = payload.user?.id
-    ? await db
-        .select({ id: workspaceUsers.id })
-        .from(workspaceUsers)
-        .where(and(eq(workspaceUsers.workspaceId, ws.id), eq(workspaceUsers.slackUserId, payload.user.id)))
-        .limit(1)
-    : [];
   const r = await composeItem({
     workspaceId: ws.id,
     accountName,
@@ -100,7 +115,7 @@ export async function POST(req: Request) {
     body: bodyText,
     // The customer never opted into Crumb's loop here: don't auto-email them.
     source: SLACK_SOURCE,
-    actorWorkspaceUserId: teammate?.id ?? null,
+    actorWorkspaceUserId: teammate.id,
   });
   if (!r.ok) {
     log.warn("slack compose failed", { scope: "crumb/slack", error: r.error });

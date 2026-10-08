@@ -9,6 +9,7 @@ import { WIDGET_SOURCE } from "@/lib/feedback/source";
 import { createItemSchema, parseJsonBody } from "@/lib/validation";
 import { loopTurn } from "@/lib/loop";
 import { lastTurnSideSql } from "@/lib/loop-sql";
+import { customerStatusSql, mergedSql } from "@/lib/customer-status";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +43,9 @@ export async function GET(req: Request) {
       title: items.title,
       body: items.body,
       type: items.type,
-      status: items.status,
+      // A request merged into another reads like that one (lib/customer-status).
+      status: customerStatusSql(),
+      merged: mergedSql(),
       createdAt: items.createdAt,
       updatedAt: items.updatedAt,
       // Fully-qualified raw refs, NOT ${items.id}/${replies.*}: inside a raw
@@ -117,6 +120,7 @@ export async function GET(req: Request) {
         body: row.body,
         type: row.type,
         status: row.status,
+        merged: row.merged,
         created_at: row.createdAt,
         updated_at: row.updatedAt,
         reply_count: row.replyCount,

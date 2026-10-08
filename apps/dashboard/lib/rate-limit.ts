@@ -1,4 +1,5 @@
 import "server-only";
+import { isIPv6 } from "node:net";
 
 // Token-bucket rate limiter, keyed on caller fingerprint (e.g. IP +
 // endpoint). Each key has a fixed capacity, refilled at a per-second rate.
@@ -175,6 +176,7 @@ export async function checkRateLimitAsync(
 // X-Forwarded-For hop (the one the nearest proxy appended; earlier entries are
 // whatever the client sent). Falls back to "anon" so the limiter still applies
 // (whole population shares the bucket — fine for tiny self-host instances).
+// An IPv6 caller is keyed on its /64 (see ipBucket).
 // ponytail: the first two are trusted as sent, so the app must only be
 // reachable through Cloudflare or a proxy that overwrites both (README "Rate
 // limiting"). Gate them behind an opt-in env if that ever can't hold.
@@ -184,12 +186,46 @@ export function callerIpFromRequest(req: Request): string {
 
 // Same, for server actions (next/headers) that have no Request.
 export function callerIpFromHeaders(h: { get(name: string): string | null }): string {
+  const ip = clientIpFromHeaders(h);
+  return ip ? ipBucket(ip) : "anon";
+}
+
+// The client's own address from the same headers, unbucketed, or null: for
+// what's stored or passed on as an address (a replay's details, Turnstile's
+// remoteip), never a limiter key.
+export function clientIpFromHeaders(h: { get(name: string): string | null }): string | null {
   return (
     h.get("cf-connecting-ip")?.trim() ||
     h.get("x-real-ip")?.trim() ||
     h.get("x-forwarded-for")?.split(",").pop()?.trim() ||
-    "anon"
+    null
   );
+}
+
+// One client holds a whole IPv6 /64 (any VPS gets one), so keying on the full
+// address handed it 2^64 buckets: an IPv6 address becomes its /64's network
+// address ("2001:db8:1:2::"), still a valid address. An IPv4-mapped one
+// (::ffff:203.0.113.7) is the IPv4 client it carries. Anything else is unchanged.
+function ipBucket(ip: string): string {
+  if (!isIPv6(ip)) return ip;
+  let host: string;
+  try {
+    // The URL parser canonicalizes: lowercase, no leading zeros, a dotted IPv4 tail as hex.
+    host = new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+  } catch {
+    return ip; // a zone id ("fe80::1%eth0"), never a remote client
+  }
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+  if (mapped) {
+    const hi = parseInt(mapped[1], 16);
+    const lo = parseInt(mapped[2], 16);
+    return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  }
+  const [head, tail] = host.split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const groups = tail === undefined ? left : [...left, ...Array(8 - left.length - right.length).fill("0"), ...right];
+  return `${groups.slice(0, 4).join(":")}::`;
 }
 
 // Helper that produces the standard 429 NextResponse shape used by the

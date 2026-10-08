@@ -30,6 +30,10 @@ type Patch = {
   trackedEventNames?: string[] | null;
 };
 
+// A throw (a dropped connection, a stale action after a redeploy) is handled
+// as a refusal, so the error shows instead of the edit sitting there as saved.
+const THREW = { ok: false as const, error: "" };
+
 function humanError(code: string): string {
   switch (code) {
     case "name_required":        return "Name can't be empty.";
@@ -125,7 +129,7 @@ export function EditPanel({
     setError(null);
     setSaved(false);
     startTransition(async () => {
-      const r = await updateInitiative(initiative.id, patch);
+      const r = await updateInitiative(initiative.id, patch).catch(() => THREW);
       if (r.ok) { setSaved(true); if (r.announce) setAnnounce(r.announce); router.refresh(); }
       else setError(humanError(r.error));
     });
@@ -182,7 +186,7 @@ export function EditPanel({
     setError(null);
     setSaved(false);
     startTransition(async () => {
-      const r = await setInitiativePublic(initiative.id, next);
+      const r = await setInitiativePublic(initiative.id, next).catch(() => THREW);
       if (r.ok) { setSaved(true); router.refresh(); }
       else { setIsPublic(!next); setError(humanError(r.error)); }
     });

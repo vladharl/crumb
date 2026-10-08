@@ -57,26 +57,31 @@ export async function ensureUniqueSlug(base: string): Promise<string> {
 
 // Create a workspace and its first admin user. The new workspace defaults to
 // the free plan (schema default); upgrading happens later via Billing. Caller
-// owns slug uniqueness and session creation. Returns null if either insert
-// produced no row (e.g. a slug unique-constraint violation surfaces as a throw,
-// which the caller catches).
+// owns slug uniqueness and session creation. Both rows or neither: a failed
+// insert (a slug unique-constraint violation, say) throws, which the caller
+// catches, and leaves no admin-less workspace behind for a retry to trip on.
 export async function createWorkspaceWithAdmin(
   input: ProvisionInput,
 ): Promise<{ workspace: Workspace; user: WorkspaceUser } | null> {
-  const [ws] = await db.insert(workspaces).values({
-    slug: input.slug,
-    name: input.name,
-  }).returning();
-  if (!ws) return null;
+  const created = await db.transaction(async (tx) => {
+    const [ws] = await tx.insert(workspaces).values({
+      slug: input.slug,
+      name: input.name,
+    }).returning();
+    if (!ws) return null;
 
-  const [user] = await db.insert(workspaceUsers).values({
-    workspaceId: ws.id,
-    email: input.adminEmail,
-    name: input.adminName,
-    role: "admin",
-    initials: initialsFrom(input.adminName).slice(0, 4),
-  }).returning();
-  if (!user) return null;
+    const [user] = await tx.insert(workspaceUsers).values({
+      workspaceId: ws.id,
+      email: input.adminEmail,
+      name: input.adminName,
+      role: "admin",
+      initials: initialsFrom(input.adminName).slice(0, 4),
+    }).returning();
+    if (!user) tx.rollback();
+    return { workspace: ws, user: user! };
+  });
+  if (!created) return null;
+  const { workspace: ws, user } = created;
 
   // Cloud: seed a small sample set so the inbox, the tour and Insights aren't
   // empty on day one (lib/samples). Best-effort: a failed seed never blocks

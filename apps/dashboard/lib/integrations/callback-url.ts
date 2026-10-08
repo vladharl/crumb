@@ -1,5 +1,6 @@
 import "server-only";
 import { headers } from "next/headers";
+import { originFromHeaders } from "@/lib/origin";
 
 // Single source of truth for an OAuth provider's redirect_uri.
 //
@@ -11,7 +12,9 @@ import { headers } from "next/headers";
 //      knob on Cloud / behind a proxy, where guessing from forwarded headers is
 //      brittle.
 //   2. the provider's explicit *_REDIRECT_URL override (tunnels / odd setups).
-//   3. the incoming request host (x-forwarded-host / Host) — zero-config default.
+//   3. the incoming request host (x-forwarded-host / Host, as lib/origin reads
+//      it) — zero-config default. Never req.url: behind a proxy that is the
+//      internal address (http://0.0.0.0:3000), which the authorize step never used.
 
 function appUrl(): string | null {
   const raw = process.env.CRUMB_APP_URL?.trim();
@@ -27,11 +30,9 @@ export function callbackUrlFromHeaders(provider: string, override: string | null
   const app = appUrl();
   if (app) return `${app}${callbackPath(provider)}`;
   if (override) return override;
-  const h = headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  if (!host) throw new Error("cannot_resolve_host");
-  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  return `${proto}://${host}${callbackPath(provider)}`;
+  const origin = originFromHeaders(headers());
+  if (!origin) throw new Error("cannot_resolve_host");
+  return `${origin}${callbackPath(provider)}`;
 }
 
 // Used by the callback route (token exchange) — has the incoming Request.
@@ -39,5 +40,5 @@ export function callbackUrlFromRequest(provider: string, override: string | null
   const app = appUrl();
   if (app) return `${app}${callbackPath(provider)}`;
   if (override) return override;
-  return `${new URL(req.url).origin}${callbackPath(provider)}`;
+  return `${originFromHeaders(req.headers) ?? new URL(req.url).origin}${callbackPath(provider)}`;
 }

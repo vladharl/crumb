@@ -187,4 +187,18 @@ describe.skipIf(!reachable && !process.env.CI)("GitHub install callback binds on
     expect(await installOf(ws)).toBe(fresh);
     expect(logLines().filter(line => line.includes("install recency"))).toHaveLength(1);
   });
+
+  it("without them on Cloud, binds nothing: any tenant could claim a fresh install there", async () => {
+    vi.stubEnv("GITHUB_APP_CLIENT_ID", "");
+    vi.stubEnv("GITHUB_APP_CLIENT_SECRET", "");
+    vi.stubEnv("CRUMB_TIER", "cloud");
+    const fresh = newInstallId();
+    installedAt.set(fresh, minutesAgo(1));
+    const ws = await workspace();
+
+    expect(await finish(ws, `installation_id=${fresh}&setup_action=install`)).toBe("error_not_owner");
+    expect(await installOf(ws)).toBeNull();
+    expect(logLines().some(line => line.includes("required on Cloud"))).toBe(true);
+    vi.stubEnv("CRUMB_TIER", "self_host");
+  });
 });

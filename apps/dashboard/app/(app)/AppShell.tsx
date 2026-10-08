@@ -43,16 +43,18 @@ const ASK_LINK: NavLink = {
 };
 
 // ⌘K actions. `roles` hides what a role can't do: viewers can't compose or
-// create initiatives, and only admins invite. /inbox and /initiatives open
-// their form when they see the param.
+// create initiatives, and only admins invite. /inbox, /initiatives and
+// /settings/team open their form when they see the param.
 const ACTIONS: CommandItem[] = [
   { label: "Compose feedback", href: "/inbox?compose=1", keywords: "new create log on behalf customer email call", roles: ["admin", "pm"] },
   { label: "New initiative", href: "/initiatives?new=1", keywords: "create theme roadmap", roles: ["admin", "pm"] },
-  { label: "Invite a teammate", href: "/settings/team", keywords: "member add user team", roles: ["admin"] },
+  { label: "Invite a teammate", href: "/settings/team?invite=1", keywords: "member add user team", roles: ["admin"] },
   { label: "Install the widget", href: "/settings/install", keywords: "embed snippet script setup" },
 ];
 
-// Settings sub-pages surfaced in the ⌘K palette (journey order, matching SettingsNav).
+// Settings sub-pages surfaced in the ⌘K palette (journey order, matching
+// SettingsNav). Billing is Cloud-only, as there: the community build has no
+// such route.
 const SETTINGS_ITEMS: CommandItem[] = [
   { label: "Settings → Overview", href: "/settings", keywords: "workspace setup checklist status" },
   { label: "Settings → Install widget", href: "/settings/install", keywords: "embed snippet" },
@@ -63,6 +65,9 @@ const SETTINGS_ITEMS: CommandItem[] = [
   { label: "Settings → Team & roles", href: "/settings/team", keywords: "members invite roles" },
   { label: "Settings → Account mapping", href: "/settings/account-mapping", keywords: "crm" },
   { label: "Settings → Audit log", href: "/settings/audit", keywords: "history activity" },
+  ...(process.env.NEXT_PUBLIC_CRUMB_EDITION === "cloud"
+    ? [{ label: "Settings → Billing", href: "/settings/billing", keywords: "plan subscription invoice upgrade" }]
+    : []),
   { label: "Settings → Notifications", href: "/settings/notifications", keywords: "preferences digest email slack" },
 ];
 
@@ -259,7 +264,9 @@ function SkipLink() {
   );
 }
 
-// Avatar dropdown: identity + Getting started (relaunch tour) + Help + Settings + Sign out.
+// Avatar dropdown: identity + Getting started (relaunch tour) + Help + Settings
+// + Sign out. A disclosure, not an ARIA menu: the trigger says whether it's
+// open, and the buttons and links inside are plain Tab stops.
 function UserMenu({ user }: { user: ShellUser }) {
   const { start } = useTour();
   const { open: openHelp } = useHelp();
@@ -270,7 +277,12 @@ function UserMenu({ user }: { user: ShellUser }) {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    // Escape from inside goes back to the trigger, not to <body>.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (ref.current?.contains(document.activeElement)) triggerRef.current?.focus();
+      setOpen(false);
+    };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
@@ -290,24 +302,24 @@ function UserMenu({ user }: { user: ShellUser }) {
         <span className="avatar sm ink">{user.initials}</span>
       </button>
       {open && (
-        <div className="usermenu-pop" role="menu">
+        <div className="usermenu-pop">
           <div className="usermenu-id">
             <span className="text-sm fw-med truncate" style={{ display: "block" }}>{user.name}</span>
             <span className="text-xs muted truncate" style={{ display: "block" }}>{user.email}</span>
             <span className="text-xs muted truncate" style={{ display: "block", marginTop: 2 }}>{user.workspaceName}</span>
           </div>
-          <button type="button" className="usermenu-item" role="menuitem" onClick={() => { setOpen(false); start(); }}>
+          {/* Focus goes back to the trigger first, so the tour and Help return
+              it there on close (these items unmount with the menu). */}
+          <button type="button" className="usermenu-item" onClick={() => { setOpen(false); triggerRef.current?.focus(); start(); }}>
             Getting started
           </button>
-          {/* Focus goes back to the trigger first, so Help returns it there
-              on close (this item unmounts with the menu). */}
-          <button type="button" className="usermenu-item" role="menuitem" onClick={() => { setOpen(false); triggerRef.current?.focus(); openHelp(); }}>
+          <button type="button" className="usermenu-item" onClick={() => { setOpen(false); triggerRef.current?.focus(); openHelp(); }}>
             Help &amp; support
           </button>
-          <Link href="/settings" className="usermenu-item" role="menuitem" onClick={() => setOpen(false)}>
+          <Link href="/settings" className="usermenu-item" onClick={() => setOpen(false)}>
             Settings
           </Link>
-          <a href="/logout" className="usermenu-item" role="menuitem">Sign out</a>
+          <a href="/logout" className="usermenu-item">Sign out</a>
           <div className="text-xs muted" style={{ display: "flex", gap: 10, padding: "8px 12px", borderTop: "var(--border)" }}>
             <a href="https://crumb.localhostlabs.net/terms" target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>Terms</a>
             <a href="https://crumb.localhostlabs.net/privacy" target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>Privacy</a>

@@ -34,10 +34,11 @@ export function errorMessage(code: string | undefined | null): string {
     case "already_closed":        return "This loop is already closed.";
     case "same_item":             return "A request can't be merged into itself.";
     case "target_is_duplicate":   return "That request is already merged into another one. Merge into that one instead.";
-    case "source_has_duplicates": return "Other requests are merged into this one. Unmerge them first.";
     case "not_merged":            return "This request isn't merged into anything.";
     case "rate_limited":          return "Too many attempts at once. Wait a moment and try again.";
-    case "ai_cap_reached":        return "You've reached this month's AI usage limit. It resets on the 1st.";
+    // Cloud only (the cap is a plan's). "Check", not "raise": Growth, the top
+    // plan, has nothing bigger to move to in Billing.
+    case "ai_cap_reached":        return "You've reached this month's AI usage limit. It resets on the 1st. An admin can check your plan's limit under Settings → Billing.";
     case "not_entitled":          return "This isn't available on your workspace.";
     case "plan_required":         return "Your current plan doesn't include this.";
     case "not_configured":        return "This isn't set up on this deployment.";

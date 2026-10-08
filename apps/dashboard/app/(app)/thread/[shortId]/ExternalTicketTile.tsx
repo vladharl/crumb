@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useState, useTransition, type MutableRefObject, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Btn, Card, CardHead, Ic, Pill } from "@crumb/ui";
@@ -19,19 +19,29 @@ import { ExternalTicketModal } from "./ExternalTicketModal";
 //   (a) no provider connected on this workspace → empty prompt
 //   (b) provider connected, no ticket linked → "Create ticket" button
 //   (c) ticket linked → ID + URL + last-known status + Unlink, and the truth
-//       about sync: when the tracker last reported, or that it can't yet
+//       about sync: when the tracker last changed the status, or that it can't yet
+// Short of (c), a plan without tickets gets a plan note instead of (a) or (b).
 
 export type ExternalTicketTileProps = {
   itemShortId: string;
   itemTitle: string;
   itemBody: string;
   aiAvailable: boolean;
+  /** On a Cloud plan without AI: the upgrade notice the modal's locked "Suggest with AI" opens. */
+  aiUpgrade?: ReactNode;
+  /** Set true by a create here; the linked tile that replaces this one then
+   *  focuses the new ticket's link (and clears it). Lives in the parent, since
+   *  the tile remounts when the link changes. */
+  focusLinkRef?: MutableRefObject<boolean>;
   /** Admins get the self-host fix (env var names); everyone else is pointed at an admin. */
   isAdmin?: boolean;
   workspace: {
     linearInstalledAt: string | null;
     jiraInstalledAt: string | null;
     githubInstalledAt: string | null;
+    /** integrationsAllowed(): false on a Cloud plan without integrations,
+     *  where a downgrade keeps trackers connected but creating tickets is off. */
+    integrationsAllowed: boolean;
   };
   item: {
     externalProvider: "linear" | "jira" | "github" | null;
@@ -64,7 +74,9 @@ function syncFix(provider: "linear" | "jira" | "github", cloud: boolean, isAdmin
   return <>They need a webhook in {PROVIDER_LABEL[provider]} signed with <span className="mono">{secret}</span>; {settings} shows how.</>;
 }
 
-export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailable, isAdmin = false, workspace, item }: ExternalTicketTileProps) {
+export function ExternalTicketTile({
+  itemShortId, itemTitle, itemBody, aiAvailable, aiUpgrade, focusLinkRef, isAdmin = false, workspace, item,
+}: ExternalTicketTileProps) {
   const router = useRouter();
   const confirm = useConfirm();
   const toast = useToast();
@@ -119,6 +131,14 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
       });
     }
 
+    // Just created from here: the Create button that had focus is gone, so
+    // the new ticket's link takes it (once).
+    const focusIfCreated = (el: HTMLElement | null) => {
+      if (!el || !focusLinkRef?.current) return;
+      focusLinkRef.current = false;
+      el.focus();
+    };
+
     return (
       <Card>
         <CardHead title="Engineering" after={item.externalStatus ? <Pill solid>{item.externalStatus}</Pill> : null} />
@@ -126,6 +146,7 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
           <div className="row gap-2 center">
             {item.externalTicketUrl ? (
               <a
+                ref={focusIfCreated}
                 href={item.externalTicketUrl}
                 target="_blank"
                 rel="noreferrer"
@@ -135,7 +156,7 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
                 {item.externalTicketId}
               </a>
             ) : (
-              <span className="mono text-sm">{item.externalTicketId}</span>
+              <span ref={focusIfCreated} tabIndex={-1} className="mono text-sm">{item.externalTicketId}</span>
             )}
             <Pill>{providerLabel}</Pill>
           </div>
@@ -146,7 +167,7 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
           ) : item.externalSyncedAt ? (
             // Local time: the server's render and the browser's can differ.
             <span className="text-xs muted" suppressHydrationWarning>
-              Last update from {providerLabel}: {gmailTime(item.externalSyncedAt)}
+              Status last changed in {providerLabel}: {gmailTime(item.externalSyncedAt)}
             </span>
           ) : sync ? (
             <span className="text-xs muted">No updates from {providerLabel} yet. Its status changes show up here.</span>
@@ -156,6 +177,27 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
               {pending ? "Unlinking…" : "Unlink"}
             </Btn>
           </div>
+        </div>
+      </Card>
+    );
+  }
+
+  // ── The plan leaves tickets out ────────────────────────────
+  // A downgrade keeps trackers connected, and a Free workspace can't connect
+  // one: say so, rather than point at Settings or open a modal that can only
+  // refuse.
+  if (!workspace.integrationsAllowed) {
+    const what = connectedProviders.length === 1 ? `${PROVIDER_LABEL[defaultProvider]} tickets` : "tickets";
+    return (
+      <Card>
+        <CardHead title="Engineering" />
+        <div className="card-body">
+          <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.55 }}>
+            Your plan doesn&apos;t include creating {what}.{" "}
+            {isAdmin
+              ? <Link href="/settings/billing" style={{ color: "var(--ink)" }}>See plans in Billing</Link>
+              : "Ask an admin to upgrade."}
+          </p>
         </div>
       </Card>
     );
@@ -219,6 +261,8 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
           initialTitle={itemTitle}
           initialBody={itemBody}
           aiAvailable={aiAvailable}
+          aiUpgrade={aiUpgrade}
+          onCreated={() => { if (focusLinkRef) focusLinkRef.current = true; }}
           onClose={() => setModalOpen(false)}
         />
       )}

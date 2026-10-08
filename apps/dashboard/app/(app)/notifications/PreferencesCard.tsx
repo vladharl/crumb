@@ -17,12 +17,15 @@ export type PrefsState = {
 type ToggleRow = {
   key: Exclude<keyof PrefsState, "digestFrequency" | "delivery">;
   label: string;
+  /** What else the switch covers, when the label alone doesn't say. */
+  hint?: string;
 };
 
-// One row per nudge lib/vendor-notify.ts actually sends.
+// One row per nudge lib/vendor-notify.ts actually sends. The eng-done alert
+// (notifyEngDone) rides on assignedRealtime, so its row says so.
 const ROWS: ToggleRow[] = [
   { key: "newSubmissionRealtime", label: "New feedback" },
-  { key: "assignedRealtime",      label: "Assigned to me" },
+  { key: "assignedRealtime",      label: "Assigned to me", hint: "Also when a linked ticket is marked done and the customer needs telling." },
   { key: "replyRealtime",         label: "Customer reply" },
   { key: "mentionRealtime",       label: "Mention" },
 ];
@@ -104,12 +107,16 @@ export function PreferencesCard({
 
         {ROWS.map(r => {
           const value = prefs[r.key];
+          const hintId = r.hint ? `pref-hint-${r.key}` : undefined;
           return (
             <div key={r.key} className="row gap-3 center">
               {/* The switch is the button (no button around it). It's
                   disabled while a save is in flight, as the old wrapper was. */}
-              <Switch on={value} label={r.label} disabled={pending} onClick={() => update(r.key, !value)} />
-              <span className="text-sm grow">{r.label}</span>
+              <Switch on={value} label={r.label} aria-describedby={hintId} disabled={pending} onClick={() => update(r.key, !value)} />
+              <span className="text-sm grow">
+                {r.label}
+                {r.hint && <span id={hintId} className="text-xs muted" style={{ display: "block", lineHeight: 1.5 }}>{r.hint}</span>}
+              </span>
             </div>
           );
         })}

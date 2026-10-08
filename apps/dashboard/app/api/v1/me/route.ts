@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, accounts, accountUsers, items, initiatives, workspaces } from "@crumb/db";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, notIlike, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { emailConfigured } from "@/lib/email";
@@ -37,9 +37,12 @@ export async function GET(req: Request) {
 
   // The first real widget load marks the widget installed. One UPDATE, only
   // while the stamp is unset (the IS NULL guard makes racing first pings a
-  // no-op); the Install page's Try-it preview signs in as the test account
-  // and doesn't count. Best-effort: a failed stamp retries on the next load.
-  if (!workspace.widgetFirstPingAt && account.name !== TEST_CUSTOMER_ACCOUNT) {
+  // no-op); the Install page's Try-it preview doesn't count. It signs in as
+  // the test account, with a reserved .invalid address (mintTestToken) that
+  // still tells it apart once account mapping renames that account.
+  // Best-effort: a failed stamp retries on the next load.
+  const preview = account.name === TEST_CUSTOMER_ACCOUNT || /\.invalid$/i.test(user.email);
+  if (!workspace.widgetFirstPingAt && !preview) {
     await db
       .update(workspaces)
       .set({ widgetFirstPingAt: new Date() })
@@ -65,7 +68,7 @@ export async function GET(req: Request) {
       })
       .from(accountUsers)
       .leftJoin(items, eq(items.submitterId, accountUsers.id))
-      .where(eq(accountUsers.accountId, account.id))
+      .where(and(eq(accountUsers.accountId, account.id), notIlike(accountUsers.email, "%.invalid")))
       .groupBy(accountUsers.id)
       .orderBy(asc(accountUsers.name));
     members = rows.map(m => ({
@@ -81,7 +84,7 @@ export async function GET(req: Request) {
     const [{ count }] = await db
       .select({ count: sql<number>`COUNT(*)::int` })
       .from(accountUsers)
-      .where(eq(accountUsers.accountId, account.id));
+      .where(and(eq(accountUsers.accountId, account.id), notIlike(accountUsers.email, "%.invalid")));
     memberCount = count ?? 0;
   }
 

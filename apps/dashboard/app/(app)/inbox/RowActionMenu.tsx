@@ -10,6 +10,7 @@ import { useConfirm } from "@/components/confirm";
 import { cancelWaitingMove } from "@/components/ReplyComposer";
 import { errorMessage } from "@/lib/action-error";
 import { statusEmailsCustomer } from "@/lib/notify/customer-plan";
+import { autoNotifiesSubmitter } from "@/lib/feedback/source";
 import { bulkAssign, bulkUpdateStatus } from "./actions";
 import { bulkSetInitiative } from "../initiatives/actions";
 import type { Assignee, InitiativeOption } from "./InboxTable";
@@ -28,14 +29,43 @@ type Pane = "root" | "assign" | "status" | "initiative" | "reason";
 
 // ── Status-write helpers, shared with the bulk bar in InboxTable ──────────
 
-// Who a status that emails (statusEmailsCustomer) actually reaches: the
-// pipeline only emails widget-origin submitters who haven't opted out, and
-// nobody until a real email provider is set up (emailConfigured).
-export function emailNote(count: number, emailConfigured: boolean): string {
+// Who an outcome email (statusEmailsCustomer) on these requests can reach, as
+// updateItemStatus sends it: each request's own submitter when it came in
+// through the widget (autoNotifiesSubmitter), and the customers whose requests
+// were merged into it, each under that same rule and never with the reason.
+// Opt-outs and the merged requests' own sources aren't on the row, so the
+// copy hedges on those.
+export type EmailReach = { submitter: boolean; merged: boolean };
+
+export function emailReach(rows: ReadonlyArray<{ source: string | null; mergedCount: number }>): EmailReach {
+  return {
+    submitter: rows.some(r => autoNotifiesSubmitter(r.source)),
+    merged: rows.some(r => r.mergedCount > 0),
+  };
+}
+
+// Whether moving to `status` can email anyone: only then does a move say so
+// ("emails") and ask first.
+export function mayEmail(status: string, reach: EmailReach): boolean {
+  return statusEmailsCustomer(status) && (reach.submitter || reach.merged);
+}
+
+// What that email does, for the confirm and the reason step. `withReason`: the
+// move carries a typed reason, which only each request's own submitter gets.
+// Nobody is emailed until a real email provider is set up (emailConfigured).
+export function emailNote(count: number, emailConfigured: boolean, reach: EmailReach, withReason = false): string {
   if (!emailConfigured) return "Email delivery isn't set up yet, so nobody gets emailed.";
-  return count === 1
-    ? "The submitter gets an email about this, unless they opted out or the request didn't come in through the widget."
-    : "Submitters get an email about this, unless they opted out or their request didn't come in through the widget.";
+  const notes: string[] = [];
+  if (reach.submitter) {
+    notes.push(count === 1
+      ? "The submitter gets an email about this, unless they opted out."
+      : "Submitters get an email about this, unless they opted out or their request didn't come in through the widget.");
+    if (withReason) notes.push("The email includes your reason.");
+  }
+  if (reach.merged) {
+    notes.push(`Customers whose requests were merged into ${count === 1 ? "it" : "them"} may get the status email${reach.submitter ? " too" : ""}${withReason ? ", without your reason" : ""}.`);
+  }
+  return notes.join(" ");
 }
 
 type StatusResult = Awaited<ReturnType<typeof bulkUpdateStatus>>;
@@ -65,10 +95,11 @@ export function statusToast(r: StatusResult, label: string, name?: string): { me
  * card's wording. The text lives here, so a failed write leaves it in place
  * for a retry; the parent unmounts the form once the write lands.
  */
-export function ReasonForm({ status, count, emailConfigured, pending, onCancel, onSubmit }: {
+export function ReasonForm({ status, count, emailConfigured, reach, pending, onCancel, onSubmit }: {
   status: string;
   count: number;
   emailConfigured: boolean;
+  reach: EmailReach;
   pending: boolean;
   onCancel: () => void;
   onSubmit: (reason: string) => void;
@@ -88,10 +119,8 @@ export function ReasonForm({ status, count, emailConfigured, pending, onCancel, 
         onChange={e => setText(e.target.value)}
         disabled={pending}
       />
-      {statusEmailsCustomer(status) && (
-        <p className="note text-xs muted">
-          {emailNote(count, emailConfigured)}{emailConfigured && " The email includes your reason."}
-        </p>
+      {mayEmail(status, reach) && (
+        <p className="note text-xs muted">{emailNote(count, emailConfigured, reach, true)}</p>
       )}
       <div className="row gap-2">
         <Btn sm onClick={onCancel} disabled={pending}>Cancel</Btn>
@@ -104,7 +133,7 @@ export function ReasonForm({ status, count, emailConfigured, pending, onCancel, 
 }
 
 export function RowActionMenu({
-  itemId, shortId, assigneeId, status, initiativeId, merged = false,
+  itemId, shortId, assigneeId, status, initiativeId, merged = false, source, mergedCount,
   assignees, initiatives, canWrite, canManageInitiatives, emailConfigured, onStatusOptimistic, onDelete,
 }: {
   itemId: string;
@@ -115,6 +144,10 @@ export function RowActionMenu({
   // A merged duplicate's status follows the item it was merged into, so the
   // menu doesn't offer one (bulkUpdateStatus skips duplicates).
   merged?: boolean;
+  // Who an outcome email can reach (emailReach): the item's provenance, and
+  // how many requests were merged into it.
+  source: string | null;
+  mergedCount: number;
   assignees: Assignee[];
   initiatives: InitiativeOption[];
   canWrite: boolean;
@@ -136,6 +169,7 @@ export function RowActionMenu({
   const [reasonFor, setReasonFor] = useState<VendorStatus | null>(null);
   const [copied, setCopied] = useState(false);
   const [pending, startTransition] = useTransition();
+  const reach = emailReach([{ source, mergedCount }]);
   const rootRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -240,18 +274,18 @@ export function RowActionMenu({
   // Status gets the optimistic path: the inbox repaints the row on this frame
   // (re-bucketing it, sliding it via FLIP), the menu closes, and the write
   // reconciles in the background — reverting the paint if it fails. A status
-  // that needs a reason asks for it first, in the menu; one that emails the
-  // customer confirms first, like the bulk bar.
+  // that needs a reason asks for it first, in the menu; one that can email a
+  // customer (mayEmail) confirms first, like the bulk bar.
   async function setStatus(next: VendorStatus) {
     if (next === status) { close(); return; }
     if (REASON_REQUIRED.has(next)) { setReasonFor(next); setPane("reason"); return; }
     close();
-    if (statusEmailsCustomer(next)) {
+    if (mayEmail(next, reach)) {
       const label = statusLabel(next);
       btnRef.current?.focus(); // the dialog hands focus back to what had it: the ⋯ trigger
       if (!(await confirm({
         title: `Move ${shortId} to ${label}?`,
-        body: emailNote(1, emailConfigured),
+        body: emailNote(1, emailConfigured, reach),
         confirmLabel: `Move to ${label}`,
       }))) return;
     }
@@ -387,13 +421,13 @@ export function RowActionMenu({
           {pane === "status" && (
             <>
               {backRow}
-              {/* The moves that email the customer say so, as in the thread. */}
+              {/* The moves that can email a customer say so, as in the thread. */}
               {VENDOR_STATUS_OPTIONS.map(s =>
                 opt({
                   key: s.value,
                   label: s.label,
                   selected: s.value === status,
-                  hint: emailConfigured && s.value !== status && statusEmailsCustomer(s.value) ? "emails" : undefined,
+                  hint: emailConfigured && s.value !== status && mayEmail(s.value, reach) ? "emails" : undefined,
                   onClick: () => void setStatus(s.value),
                 }),
               )}
@@ -406,6 +440,7 @@ export function RowActionMenu({
                 status={reasonFor}
                 count={1}
                 emailConfigured={emailConfigured}
+                reach={reach}
                 pending={pending}
                 onCancel={() => setPane("status")}
                 onSubmit={submitReason}

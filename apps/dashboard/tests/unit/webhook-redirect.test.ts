@@ -37,6 +37,9 @@ vi.mock("@crumb/db", async (importOriginal) => ({
         return { where: async () => undefined };
       },
     }),
+    // The delivery log's write and prune.
+    insert: () => ({ values: async () => undefined }),
+    execute: async () => [],
   },
 }));
 

@@ -22,12 +22,14 @@ test("row ⋯ menu assigns a teammate in place", async ({ page }) => {
 });
 
 test("row ⋯ menu sets status and the loop moves to Closed", async ({ page }) => {
-  await page.goto("/inbox");
+  // A seeded request, so one whose customer can be emailed and an outcome asks
+  // first. The newest row may not be: requests captured from email, Slack or a
+  // connector never email their submitter, so their menu moves without asking.
+  await page.goto("/inbox?q=Datepicker");
 
-  const firstRowId = page.locator("text=/FB-\\d+/").first();
-  await expect(firstRowId).toBeVisible({ timeout: 10_000 });
-  const shortId = (await firstRowId.innerText()).trim();
-  const row = page.locator(".list-row", { hasText: shortId });
+  const row = page.locator(".list-row", { hasText: "Datepicker" }).first();
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  const shortId = (await row.locator("text=/FB-\\d+/").first().innerText()).trim();
 
   await row.getByRole("button", { name: `Actions for ${shortId}` }).click();
   await page.getByRole("menu").getByText("Set status…").click();

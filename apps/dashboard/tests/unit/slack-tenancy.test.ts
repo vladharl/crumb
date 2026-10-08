@@ -1,26 +1,33 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHmac, randomUUID } from "node:crypto";
-import { eq, inArray, sql } from "drizzle-orm";
-import { db, workspaces, workspaceUsers } from "@crumb/db";
+import { asc, eq, inArray, sql } from "drizzle-orm";
+import { db, accounts, workspaces, workspaceUsers } from "@crumb/db";
 import { GET as slackCallback } from "@/app/api/integrations/slack/callback/route";
 import { POST as slackCommands } from "@/app/api/integrations/slack/commands/route";
 import { POST as slackEvents } from "@/app/api/integrations/slack/events/route";
+import { POST as slackInteractivity } from "@/app/api/integrations/slack/interactivity/route";
 import { signState } from "@/lib/integrations/state";
 import { clearProviderInstall } from "@/lib/integrations/revoke";
 import { workspaceForSlackTeam } from "@/lib/slack/install";
 
 // Slack tenancy. The events, commands and interactivity routes find their
 // Crumb workspace by Slack team id, so a team belongs to one workspace at most.
-// And the @mention sizing bot's reply carries requester ARR and other accounts'
-// request titles, so it answers only teammates (in a Slack Connect channel the
-// person mentioning it can be the customer), and there only privately.
+// What they show (the @mention sizing bot's requester ARR and other accounts'
+// request titles, /crumb's customer list) is for this workspace's teammates
+// only, and the sizing only privately: any channel can hold a guest, and a
+// Slack Connect one the customer.
 //
 // Runs the real route handlers against Postgres (DATABASE_URL, migrated via
-// `pnpm db:migrate`), with the session and Slack's Web API stubbed. Skipped
-// locally when no database answers; CI has one, so there it fails instead.
+// `pnpm db:migrate`), with the session, item creation and Slack's Web API
+// stubbed. Skipped locally when no database answers; CI has one, so there it
+// fails instead.
 
-const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
+const { getSession, composeItem } = vi.hoisted(() => ({
+  getSession: vi.fn(),
+  composeItem: vi.fn(async (_input: { workspaceId: string; actorWorkspaceUserId?: string | null }) => ({ ok: true as const })),
+}));
 vi.mock("@/lib/auth", () => ({ getSession }));
+vi.mock("@/lib/compose", () => ({ composeItem }));
 
 const reachable = await db.execute(sql`select 1`).then(() => true, () => false);
 
@@ -31,6 +38,7 @@ const CLAIMED_TEAM = `T-claimed-${tag}`;
 const SHARED_TEAM = `T-shared-${tag}`;
 const MENTION_TEAM = `T-mention-${tag}`;
 const REVOKED_TEAM = `T-revoked-${tag}`;
+const COMMAND_TEAM = `T-command-${tag}`;
 const created: string[] = [];
 let installTeam = CLAIMED_TEAM; // the team the OAuth exchange installs
 
@@ -59,12 +67,13 @@ function fromSlack(path: string, body: string, contentType: string): Request {
 }
 
 // Slack's Web API: the OAuth exchange installs `installTeam`, users.info answers
-// from `emails`, chat.postMessage and chat.postEphemeral are recorded. Anything
-// else is unexpected.
+// from `emails`, chat.postMessage, chat.postEphemeral and views.open are
+// recorded. Anything else is unexpected.
 const emails: Record<string, string> = {};
 const lookedUp: string[] = [];
 const posts: Array<{ thread_ts?: string; text: string; blocks?: unknown }> = [];
-const ephemeral: Array<{ channel: string; user: string; thread_ts?: string; text: string }> = [];
+const ephemeral: Array<{ channel: string; user: string; thread_ts?: string; text: string; blocks?: unknown }> = [];
+const views: unknown[] = [];
 const slackApi = vi.fn(async (input: unknown, init?: RequestInit) => {
   const url = new URL(String(input));
   if (url.pathname === "/api/oauth.v2.access") {
@@ -81,6 +90,10 @@ const slackApi = vi.fn(async (input: unknown, init?: RequestInit) => {
   }
   if (url.pathname === "/api/chat.postEphemeral") {
     ephemeral.push(JSON.parse(String(init?.body)));
+    return Response.json({ ok: true });
+  }
+  if (url.pathname === "/api/views.open") {
+    views.push(JSON.parse(String(init?.body)).view);
     return Response.json({ ok: true });
   }
   throw new Error(`unexpected fetch: ${url}`);
@@ -136,6 +149,31 @@ describe.skipIf(!reachable && !process.env.CI)("slack tenancy", () => {
     installTeam = CLAIMED_TEAM;
   });
 
+  it("reconnecting to another Slack team drops the old team's cached user ids; the same team keeps them", async () => {
+    const oldTeam = `T-old-${tag}`;
+    const ws = await workspace({ slackTeamId: oldTeam, slackBotToken: "xoxb-old", slackBotUserId: "UBOT" });
+    await db.insert(workspaceUsers).values([
+      { workspaceId: ws, email: "mia@vendor.test", name: "Mia", initials: "M", slackUserId: "UOLDMIA" },
+      { workspaceId: ws, email: "sam@vendor.test", name: "Sam", initials: "S", slackLookupFailedAt: new Date() },
+    ]);
+    const cached = () => db
+      .select({ id: workspaceUsers.slackUserId, failed: sql<boolean>`${workspaceUsers.slackLookupFailedAt} IS NOT NULL` })
+      .from(workspaceUsers)
+      .where(eq(workspaceUsers.workspaceId, ws))
+      .orderBy(asc(workspaceUsers.email));
+
+    installTeam = oldTeam;
+    expect((await finishInstall(ws)).headers.get("location")).toBe(`${settings}connected`);
+    expect(await cached()).toEqual([{ id: "UOLDMIA", failed: false }, { id: null, failed: true }]);
+
+    // A DM to UOLDMIA with the new team's token would fail forever, and Sam's
+    // failed lookup was against the old team.
+    installTeam = `T-new-${tag}`;
+    expect((await finishInstall(ws)).headers.get("location")).toBe(`${settings}connected`);
+    expect(await cached()).toEqual([{ id: null, failed: false }, { id: null, failed: false }]);
+    installTeam = CLAIMED_TEAM;
+  });
+
   it("a team still held by two workspaces (from before that guard) routes nowhere", async () => {
     await workspace({ slackTeamId: SHARED_TEAM, slackBotToken: "xoxb-a" });
     await workspace({ slackTeamId: SHARED_TEAM, slackBotToken: "xoxb-b" });
@@ -144,7 +182,44 @@ describe.skipIf(!reachable && !process.env.CI)("slack tenancy", () => {
     expect(await res.json()).toMatchObject({ text: "This Slack workspace isn't connected to Crumb yet." });
   });
 
-  it("the @mention sizing bot gives a foreign-team or non-member mention no data", async () => {
+  it("/crumb shows the customer list and logs feedback for teammates only, crediting one Crumb never DMed", async () => {
+    const ws = await workspace({ slackTeamId: COMMAND_TEAM, slackBotToken: "xoxb-test", slackBotUserId: "UBOT" });
+    await db.insert(accounts).values({ workspaceId: ws, name: "Globex" });
+    const [kai] = await db.insert(workspaceUsers)
+      .values({ workspaceId: ws, email: "kai@vendor.test", name: "Kai", initials: "K" })
+      .returning({ id: workspaceUsers.id });
+    Object.assign(emails, {
+      UGUEST: "guest@customer.test", // a guest (or a member) of the Slack team, not in Crumb
+      UKAI: "Kai@Vendor.test",       // the teammate, never DMed: no cached Slack id
+    });
+
+    const command = (user: string) => slackCommands(fromSlack(
+      "commands", `team_id=${COMMAND_TEAM}&trigger_id=t-${user}&user_id=${user}&command=%2Fcrumb`, "application/x-www-form-urlencoded",
+    ));
+    expect(await (await command("UGUEST")).json())
+      .toEqual({ response_type: "ephemeral", text: "Only teammates in this Crumb workspace can use /crumb." });
+    expect(views).toHaveLength(0);
+    expect((await command("UKAI")).status).toBe(200);
+    expect(JSON.stringify(views)).toContain("Globex");
+
+    const submit = (user: string) => slackInteractivity(fromSlack("interactivity", `payload=${encodeURIComponent(JSON.stringify({
+      type: "view_submission",
+      team: { id: COMMAND_TEAM },
+      user: { id: user, username: user.toLowerCase(), team_id: COMMAND_TEAM },
+      view: { state: { values: { account: { v: { value: "Globex" } }, title: { v: { value: "SSO" } } } } },
+    }))}`, "application/x-www-form-urlencoded"));
+    expect(await (await submit("UGUEST")).json()).toMatchObject({ response_action: "errors" });
+    expect(composeItem).not.toHaveBeenCalled();
+
+    // Matched by Slack email: the item is Kai's Trail entry (and no alert to
+    // Kai), and Kai's Slack id is cached for DMs.
+    expect(await (await submit("UKAI")).json()).toEqual({ response_action: "clear" });
+    expect(composeItem).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: ws, actorWorkspaceUserId: kai.id }));
+    const [row] = await db.select({ slackUserId: workspaceUsers.slackUserId }).from(workspaceUsers).where(eq(workspaceUsers.id, kai.id));
+    expect(row.slackUserId).toBe("UKAI");
+  });
+
+  it("the @mention sizing bot answers teammates only, and every reply privately", async () => {
     const ws = await workspace({ slackTeamId: MENTION_TEAM, slackBotToken: "xoxb-test", slackBotUserId: "UBOT" });
     await db.insert(workspaceUsers).values({ workspaceId: ws, email: "mia@vendor.test", name: "Mia", initials: "M" });
     Object.assign(emails, {
@@ -163,28 +238,31 @@ describe.skipIf(!reachable && !process.env.CI)("slack tenancy", () => {
     await mention("USTRANGER", MENTION_TEAM, "1.2", "<@UBOT> Acme needs SSO");
     // The teammate gets past the gate: an empty mention earns the usage hint.
     await mention("UMIA", MENTION_TEAM, "1.3", "<@UBOT>");
-    await vi.waitFor(() => expect(posts).toHaveLength(3), { timeout: 5000 });
+    await vi.waitFor(() => expect(ephemeral).toHaveLength(3), { timeout: 5000 });
 
-    const replyTo = (ts: string) => posts.find(p => p.thread_ts === ts);
-    for (const refused of ["1.1", "1.2"]) {
-      expect(replyTo(refused)?.text).toBe("Request sizing is only available to members of this Crumb workspace.");
+    // Even in an ordinary channel nothing is posted for everyone: a guest
+    // there would read the sizing. Top-level mentions are answered in the
+    // channel, visible to the mentioner alone.
+    expect(posts).toHaveLength(0);
+    const replyTo = (user: string) => ephemeral.find(p => p.user === user);
+    for (const refused of ["UCUSTOMER", "USTRANGER"]) {
+      expect(replyTo(refused)).toMatchObject({ channel: "C1", text: "Request sizing is only available to members of this Crumb workspace." });
       expect(replyTo(refused)?.blocks).toBeUndefined();
     }
-    expect(replyTo("1.3")?.text).toMatch(/^Mention me on a message/);
+    expect(replyTo("UMIA")).toMatchObject({ channel: "C1", text: expect.stringMatching(/^Mention me on a message/) });
     // A foreign team's user is turned away before Slack is asked who they are.
     expect(lookedUp).not.toContain("UCUSTOMER");
 
-    // In a Slack Connect channel the customer reads along, so even a teammate's
-    // mention gets its reply privately, never in the channel.
-    const before = posts.length;
+    // A mention inside a thread (here in a Slack Connect channel) is answered
+    // privately in that thread.
     await slackEvents(fromSlack("events", JSON.stringify({
       type: "event_callback",
       team_id: MENTION_TEAM,
       is_ext_shared_channel: true,
       event: { type: "app_mention", user: "UMIA", user_team: MENTION_TEAM, team: MENTION_TEAM, text: "<@UBOT>", channel: "C2", ts: "2.2", thread_ts: "2.1" },
     }), "application/json"));
-    await vi.waitFor(() => expect(ephemeral).toHaveLength(1), { timeout: 5000 });
-    expect(ephemeral[0]).toMatchObject({ channel: "C2", user: "UMIA", thread_ts: "2.1", text: expect.stringMatching(/^Mention me on a message/) });
-    expect(posts).toHaveLength(before);
+    await vi.waitFor(() => expect(ephemeral).toHaveLength(4), { timeout: 5000 });
+    expect(ephemeral[3]).toMatchObject({ channel: "C2", user: "UMIA", thread_ts: "2.1", text: expect.stringMatching(/^Mention me on a message/) });
+    expect(posts).toHaveLength(0);
   });
 });

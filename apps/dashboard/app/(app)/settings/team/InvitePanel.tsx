@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Btn, Dropdown, Field, Ic } from "@crumb/ui";
 import { useConfirm } from "@/components/confirm";
 import { changeRole, inviteTeammate, removeMember, resendInvite } from "./actions";
@@ -15,6 +15,18 @@ export function InvitePanel({ canInvite }: { canInvite: boolean }) {
   const [open, setOpen] = useState(false);
   const [result, setResult] = useState<Result>({ kind: "idle" });
   const [pending, startTransition] = useTransition();
+  const asked = useSearchParams().get("invite") === "1";
+
+  // ⌘K's "Invite a teammate" (and the setup checklist) land on
+  // /settings/team?invite=1: open the form, then drop the param so a reload
+  // or Back doesn't open it again.
+  useEffect(() => {
+    if (!asked) return;
+    if (canInvite) setOpen(true);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("invite");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  }, [asked, canInvite]);
 
   if (!canInvite) {
     return (

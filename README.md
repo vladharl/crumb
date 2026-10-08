@@ -172,7 +172,7 @@ CRUMB_INBOUND_DOMAIN=reply.yourdomain.com
 CRUMB_INBOUND_SECRET=optional_shared_secret   # protects the webhook
 ```
 
-The dashboard exposes `POST /api/v1/inbound/reply` accepting a generic JSON shape (`{ to, from, text, subject? }`). Point your provider's inbound parser at that endpoint (Resend Inbound, SendGrid Inbound Parse, Postmark, or a Mailgun route all work). The Reply-To on every notification is `reply+<shortId>.<token>@<CRUMB_INBOUND_DOMAIN>`, signed with the workspace's signing secret.
+The dashboard exposes `POST /api/v1/inbound/reply` accepting a generic JSON shape (`{ to, from, text, subject?, message_id? }`). Always send `message_id` (the email's Message-ID): it's how a provider's retry is recognized, so the reply isn't posted twice. Point your provider's inbound parser at that endpoint (Resend Inbound, SendGrid Inbound Parse, Postmark, or a Mailgun route all work). The Reply-To on every notification is `reply+<shortId>.<token>@<CRUMB_INBOUND_DOMAIN>`, signed with the workspace's signing secret.
 
 **Forward-to-capture.** A second inbound flow turns forwarded mail into feedback: point a parser at `POST /api/v1/inbound/email` and any message sent (or forwarded) to your capture address lands as a **pending capture** — a triable item you confirm onto an account or discard, rather than a reply on an existing thread. Same `CRUMB_INBOUND_DOMAIN` / `CRUMB_INBOUND_SECRET` wiring.
 
@@ -210,7 +210,7 @@ CRUMB_RATE_LIMIT_CAPACITY=60          # tokens per bucket
 CRUMB_RATE_LIMIT_REFILL_PER_SEC=1     # tokens per second
 ```
 
-Exhausted buckets return `429 rate_limited` with a `Retry-After` header. The limiter is process-local — fine for single-VM self-host. Cloud multi-instance swaps in a Redis-backed implementation behind the same helper.
+Exhausted buckets return `429 rate_limited` with a `Retry-After` header. Sign-in links are limited separately: 5 an hour per address, and 200 an hour per IP (enough for a whole office or VPN behind one address, low enough to stop spraying); a limited request still looks sent (so nobody can probe for accounts) and leaves a `sign-in link rate limited` log line. An IPv6 caller counts as its /64 network. The limiter is process-local — fine for single-VM self-host. Cloud multi-instance swaps in a Redis-backed implementation behind the same helper.
 
 The source IP is read from `CF-Connecting-IP`, then `X-Real-IP`, then the last `X-Forwarded-For` hop, and the first two are trusted as sent. So keep the app reachable only through the Cloudflare Tunnel (leave `DASHBOARD_BIND` at `127.0.0.1`). Behind your own proxy instead, have it overwrite both headers with the client address (nginx: `proxy_set_header X-Real-IP $remote_addr;` and `proxy_set_header CF-Connecting-IP $remote_addr;`), or a client can claim a fresh IP on every request.
 
@@ -233,7 +233,7 @@ admin), the Connect button now shows the reason inline instead of silently doing
 
 ### Slack notifications
 
-Workspace admins can connect Slack from **Settings → Integrations** to DM teammates when a customer replies, instead of (or, per user, in addition to) email. Each member picks their delivery channel under **Settings → Notifications**; Slack falls back to email if the lookup or DM send fails, so customer replies never go silently dropped.
+Workspace admins can connect Slack from **Settings → Integrations** so teammates get their real-time alerts as Slack DMs instead of email: a customer replies, someone @mentions them in an internal note, new feedback comes in, a request is assigned to them, or a linked Linear, Jira or GitHub ticket is marked done. Under **Settings → Notifications** each member picks which alerts they get and whether they come by email or Slack; Slack falls back to email if the lookup or DM send fails, so no alert is silently dropped.
 
 Cloud comes with a Slack app registered. Self-host needs to bring its own — set:
 
@@ -247,7 +247,7 @@ Then register a Slack app at [api.slack.com/apps](https://api.slack.com/apps) wi
 
 Slack user lookups are by email — each workspace member is matched once to their Slack `user_id` and cached on first DM. Failed lookups (member's Slack email doesn't match their Crumb email) are retried after 24h.
 
-**Request sizing (@mention).** On Cloud (Team plan), Crumb sizes incoming requests right in Slack. @mention the bot on any message in a channel it belongs to and it replies in-thread with the request restated, the requester's account and its ARR, similar open requests and their combined ARR at stake, and a rough T-shirt scope (S/M/L/XL) grounded in your connected GitHub repo's README + file tree, with a confidence level. It reads only (nothing is written to the inbox) and degrades gracefully: no account match, no repo, or AI unavailable each produce a plain note rather than a wrong answer. Because the reply shows ARR and other accounts' requests, it answers only your teammates: the person mentioning it must be in the Slack workspace that installed Crumb and have the same email as a member of your Crumb workspace (anyone else gets a one-line refusal). The requester's account comes from the mentioner's email when it belongs to an account contact. A teammate's usually doesn't, so Crumb then matches the account the message names ("Acme wants SSO"). In a Slack Connect channel shared with another organization, every reply is visible only to the person who mentioned the bot. To enable it, add the `app_mentions:read` bot scope, then turn on **Event Subscriptions** with the Request URL `{dashboard origin}/api/integrations/slack/events` (the endpoint answers Slack's one-time challenge on save) and subscribe to the `app_mention` bot event. Because it adds a scope, workspaces connected before this shipped must re-connect from **Settings → Integrations** to grant it. Self-host builds answer the webhook but post a "needs Cloud AI" note; the sizing itself is Cloud-only.
+**Request sizing (@mention).** On Cloud (Team plan), Crumb sizes incoming requests right in Slack. @mention the bot on any message in a channel it belongs to and it replies privately to whoever mentioned it (in the thread when the mention is in one) with the request restated, the requester's account and its ARR, similar open requests and their combined ARR at stake, and a rough T-shirt scope (S/M/L/XL) grounded in your connected GitHub repo's README + file tree, with a confidence level. It reads only (nothing is written to the inbox) and degrades gracefully: no account match, no repo, or AI unavailable each produce a plain note rather than a wrong answer. Because the reply shows ARR and other accounts' requests, it answers only your teammates: the person mentioning it must be in the Slack workspace that installed Crumb and have the same email as a member of your Crumb workspace (anyone else gets a one-line refusal). The requester's account comes from the mentioner's email when it belongs to an account contact. A teammate's usually doesn't, so Crumb then matches the account the message names ("Acme wants SSO"). Every reply, in any channel, is visible only to the person who mentioned the bot. To enable it, add the `app_mentions:read` bot scope, then turn on **Event Subscriptions** with the Request URL `{dashboard origin}/api/integrations/slack/events` (the endpoint answers Slack's one-time challenge on save) and subscribe to the `app_mention` bot event. Because it adds a scope, workspaces connected before this shipped must re-connect from **Settings → Integrations** to grant it. Self-host builds answer the webhook but post a "needs Cloud AI" note; the sizing itself is Cloud-only.
 
 **Microsoft Teams.** Teams uses an incoming-webhook URL rather than OAuth: paste a channel's webhook under **Settings → Integrations** and Crumb posts the same close-the-loop events as Adaptive Cards. The `Test` button sends a sample card so you can confirm the wiring before going live.
 
@@ -259,7 +259,7 @@ Cloud comes with all three apps registered. Self-host BYO. See `apps/dashboard/.
 
 - **Linear**: register an OAuth app at `linear.app/settings/api` → `LINEAR_CLIENT_ID` / `LINEAR_CLIENT_SECRET` (+ optional `LINEAR_WEBHOOK_SECRET`). Redirect URL: `{dashboard origin}/api/integrations/linear/callback`.
 - **Jira**: register a 3LO app at `developer.atlassian.com` with scopes `read:jira-work write:jira-work read:jira-user offline_access` → `JIRA_CLIENT_ID` / `JIRA_CLIENT_SECRET` (+ `JIRA_WEBHOOK_SECRET`). Atlassian's per-tenant `cloud_id` is discovered automatically + re-checked on every token refresh so reinstalls against a different site don't silently 404. **Cloud** also needs the `manage:jira-webhook` scope on the app (add it before deploying, or Jira connect fails at consent): each connection registers its own status webhook, kept alive by the maintenance cron, and the shared `JIRA_WEBHOOK_SECRET` webhook is refused there. Jira connections made before that must reconnect once to keep status sync. Self-host keeps the manual webhook below.
-- **GitHub**: register a GitHub App (not an OAuth App) at `github.com/settings/apps` with permissions `Issues:rw + Contents:r + Metadata:r` and the `Issues` event → `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_PRIVATE_KEY` (PEM), plus `GITHUB_WEBHOOK_SECRET`. Installation tokens are minted per-call from the App's JWT and cached in module memory for 50 minutes. Also set `GITHUB_APP_CLIENT_ID` / `GITHUB_APP_CLIENT_SECRET` (the App's client ID and a client secret) and turn on **Request user authorization (OAuth) during installation**: Crumb then checks that the person finishing the install can access that installation. Without them it only accepts an installation created or updated in the last 10 minutes, so reconnecting an older one means reinstalling the App on GitHub.
+- **GitHub**: register a GitHub App (not an OAuth App) at `github.com/settings/apps` with permissions `Issues:rw + Contents:r + Metadata:r` and the `Issues` event → `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_PRIVATE_KEY` (PEM), plus `GITHUB_WEBHOOK_SECRET`. Installation tokens are minted per-call from the App's JWT and cached in module memory for 50 minutes. Also set `GITHUB_APP_CLIENT_ID` / `GITHUB_APP_CLIENT_SECRET` (the App's client ID and a client secret) and turn on **Request user authorization (OAuth) during installation**: Crumb then checks that the person finishing the install can access that installation. Required on Cloud: without them no installation binds. On self-host, without them Crumb only accepts an installation created or updated in the last 10 minutes, so reconnecting an older one means reinstalling the App on GitHub.
 
 Webhook URLs (configure inside each provider's app settings):
 
@@ -360,6 +360,12 @@ To embed it in your own product:
 
 In a single-page app, drive identity from JavaScript: `crumb.identify({ jwt })` after sign-in, `crumb.shutdown()` on sign-out, and `crumb.onTokenExpired(cb)` to hand the widget a fresh token when one expires. `data-app-version` (or `crumb.setContext({ app_version })`) sends your build with each new request, and `data-locale` sets the widget's language. **Settings → Install** has copy-paste snippets for these and for `crumb.open()` and `crumb.onUnread()`.
 
+### Public roadmap and changelog pages
+
+A workspace can also publish two read-only pages that anyone with the link can open, no sign-in needed: `/<workspace-slug>/roadmap` (public initiatives in Now, Next and Later, plus the ones that shipped lately) and `/<workspace-slug>/changelog` (changelog entries published as public). They never show customer names, accounts, feedback or counts. Both are off by default. An admin turns them on under **Settings → Branding → Public pages**, which then shows the two links to share. While they're off, both pages 404 and nobody who follows them is emailed. A workspace whose slug is one of Crumb's own paths (`inbox`, `settings` and so on) can't serve them.
+
+Visitors can follow by email: one initiative from the roadmap (emailed when it moves) or every update from the changelog (emailed when a public entry is published). Follows are double opt-in. The form only mails a confirmation link, valid for 7 days, and nothing else is sent until it's clicked. Every update has an unsubscribe link (one-click in mail clients too) that stops all of that workspace's public updates to the address. The `replay-sweep` [maintenance job](#maintenance-cron) forgets follows left unconfirmed or unsubscribed once their confirmation link lapses.
+
 ### Public API
 
 | Method | Path                                  | What it does                                     |
@@ -368,7 +374,7 @@ In a single-page app, drive identity from JavaScript: `crumb.identify({ jwt })` 
 | `GET`  | `/api/v1/items?workspace&email`       | List the calling customer's submissions          |
 | `GET`  | `/api/v1/items/[shortId]?workspace&email` | Read a thread (only if the caller submitted it) |
 | `POST` | `/api/v1/items/[shortId]`             | Customer reply on a thread                       |
-| `GET`  | `/api/v1/roadmap?workspace&email`     | Public roadmap items, grouped Now / Next / Later |
+| `GET`  | `/api/v1/roadmap?workspace&email`     | Public roadmap, grouped Now / Next / Later / Shipped (with `lane` and `shipped_at`) |
 | `GET`  | `/api/v1/me?workspace&email`          | The calling customer's identity + workspace meta |
 | `POST` | `/api/v1/uploads`                     | Upload an attachment                             |
 
@@ -487,7 +493,7 @@ secrets:
   stripe_key:{ file: ./secrets/stripe_key }
 ```
 
-For production, set `CRUMB_ENCRYPTION_KEY` (`openssl rand -hex 32`) so integration tokens are encrypted at rest. Set it after integrations were connected? `docker compose exec dashboard node packages/db/dist/backfill-encrypt-secrets.mjs` encrypts the Slack, Linear and Jira tokens already stored. `apps/dashboard/.env.local.example` documents every variable, key rotation included.
+For production, set `CRUMB_ENCRYPTION_KEY` (`openssl rand -hex 32`) so integration tokens are encrypted at rest. Set it after integrations were connected? `docker compose exec dashboard node packages/db/dist/backfill-encrypt-secrets.mjs` encrypts every integration secret already stored: Slack, Linear, Jira, HubSpot, Salesforce, Teams, customers' channel webhooks and feedback connectors. `apps/dashboard/.env.local.example` documents every variable, key rotation included.
 
 ### Backups & restore
 
@@ -507,7 +513,7 @@ Schedule the dump however you like (host cron, a sidecar) and ship the file off-
 
 Four internal endpoints do scheduled work. Set `CRUMB_INTERNAL_SWEEP_SECRET`, then `POST` to each with the header `X-Crumb-Sweep-Secret: <secret>` (they return 503 until the secret is set):
 
-- `/api/v1/internal/replay-sweep`, hourly: prunes orphaned uploads and replay sessions, enforces replay retention, drops aged usage events (a bounded batch per run).
+- `/api/v1/internal/replay-sweep`, hourly: prunes orphaned uploads and replay sessions, enforces replay retention, drops aged usage events (a bounded batch per run), forgets public-page follows left unconfirmed or unsubscribed once their confirmation link lapses, and on Cloud renews the Jira status webhooks.
 - `/api/v1/internal/crm-sync`, every few hours: refreshes accounts and ARR from a connected CRM.
 - `/api/v1/internal/feedback-sync`, every 15 to 30 minutes: pulls new tickets and calls from connected feedback sources.
 - `/api/v1/internal/digest`, daily: emails each teammate's daily or weekly digest (at most one per period), then embeds the items AI-entitled workspaces still lack, so dedup and Similar items cover them (Cloud).

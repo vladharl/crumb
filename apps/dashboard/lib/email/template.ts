@@ -405,12 +405,21 @@ const STATUS_BLURBS: Record<string, string> = {
   duplicate: "It's tracked under another request.",
 };
 
+// The subject and heading. A merge notice is the one status email that reads
+// Duplicate, and to its customer the request isn't one: it was combined.
+export function statusHeadline(toStatus: string, itemTitle: string): string {
+  return `${toStatus === "duplicate" ? "Combined" : statusLabel(toStatus)}: ${itemTitle}`;
+}
+
 function statusLine(v: StatusChangeVars): string {
+  // The merge notice's card already says what happened, in the customer's words.
+  if (v.toStatus === "duplicate" && v.reason?.trim()) return "";
   const from = v.fromStatus ? ` from ${statusLabel(v.fromStatus)}` : "";
   return `${v.vendorName} moved this${from} to ${statusLabel(v.toStatus)}. ${STATUS_BLURBS[v.toStatus] ?? ""}`.trim();
 }
 
 export function renderStatusChangeHtml(v: StatusChangeVars): string {
+  const line = statusLine(v);
   return customerShell({
     workspaceName: v.workspaceName,
     accent: v.accent,
@@ -418,15 +427,15 @@ export function renderStatusChangeHtml(v: StatusChangeVars): string {
     unsubscribeUrl: v.unsubscribeUrl,
     rows: `
           <tr><td style="padding:0 8px 16px">
-            <h1 style="margin:0 0 6px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(`${statusLabel(v.toStatus)}: ${v.itemTitle}`)}</h1>
-            <p style="margin:0;font-size:14px;color:#4A2E1F">${escapeHtml(statusLine(v))}</p>
+            <h1 style="margin:0 0 6px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(statusHeadline(v.toStatus, v.itemTitle))}</h1>${line ? `
+            <p style="margin:0;font-size:14px;color:#4A2E1F">${escapeHtml(line)}</p>` : ""}
           </td></tr>${v.reason?.trim() ? cardHtml(v.reason) : ""}${nextStepHtml(v)}`,
   });
 }
 
 export function renderStatusChangeText(v: StatusChangeVars): string {
   return [
-    `${statusLabel(v.toStatus)}: ${v.itemTitle}`,
+    statusHeadline(v.toStatus, v.itemTitle),
     statusLine(v),
     v.reason?.trim() ?? "",
     nextStepText(v),

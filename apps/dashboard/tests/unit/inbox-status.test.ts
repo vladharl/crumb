@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { statusLabel } from "@crumb/ui";
 import { errorMessage } from "@/lib/action-error";
-import { emailNote, statusToast } from "@/app/(app)/inbox/RowActionMenu";
+import { emailNote, emailReach, mayEmail, statusToast } from "@/app/(app)/inbox/RowActionMenu";
 
 // RowActionMenu.tsx is a client component that also imports the inbox server
 // actions (and, through the composer, the thread's); stub those so its status
@@ -40,18 +40,44 @@ describe("inbox status writes", () => {
       .toEqual({ message: "FB-12 is merged into another request, so it follows that request's status." });
   });
 
+  const widget = emailReach([{ source: null, mergedCount: 0 }]);
+  const mergedIntoGong = emailReach([{ source: "gong", mergedCount: 2 }]);
+  const mergedIntoWidget = emailReach([{ source: "widget", mergedCount: 1 }]);
+
   it("says plainly who gets emailed, without em or en dashes", () => {
-    expect(emailNote(1, true)).toMatch(/^The submitter gets an email/);
-    expect(emailNote(4, true)).toMatch(/^Submitters get an email/);
-    for (const note of [emailNote(1, true), emailNote(4, true)]) {
-      expect(note).toMatch(/opted out/);
-      expect(note).toMatch(/widget/);
-      expect(note).not.toMatch(/[–—]/);
+    // One row's source is known: it came in through the widget.
+    expect(emailNote(1, true, widget)).toBe("The submitter gets an email about this, unless they opted out.");
+    // A selection can mix sources.
+    expect(emailNote(4, true, widget)).toBe(
+      "Submitters get an email about this, unless they opted out or their request didn't come in through the widget.",
+    );
+    // The customers merged in get the status, never the reason.
+    expect(emailNote(1, true, mergedIntoWidget, true)).toBe(
+      "The submitter gets an email about this, unless they opted out. The email includes your reason. "
+      + "Customers whose requests were merged into it may get the status email too, without your reason.",
+    );
+    expect(emailNote(3, true, mergedIntoGong)).toBe("Customers whose requests were merged into them may get the status email.");
+    for (const reach of [widget, mergedIntoGong, mergedIntoWidget]) {
+      for (const note of [emailNote(1, true, reach), emailNote(4, true, reach, true)]) expect(note).not.toMatch(/[–—]/);
     }
   });
 
+  it("asks first only where an outcome can email someone", () => {
+    // Connector, capture, Slack and MCP requests never email their submitter.
+    for (const source of ["zendesk", "gong", "email", "extension", "slack", "mcp"]) {
+      expect(mayEmail("shipped", emailReach([{ source, mergedCount: 0 }]))).toBe(false);
+    }
+    expect(mayEmail("shipped", emailReach([{ source: "widget", mergedCount: 0 }]))).toBe(true);
+    expect(mayEmail("shipped", widget)).toBe(true); // a legacy item, source unset
+    expect(mayEmail("review", widget)).toBe(false); // triage moves never email
+    // Widget customers merged into one can still hear about it.
+    expect(mayEmail("declined", mergedIntoGong)).toBe(true);
+    // Nothing that moves (only merged duplicates selected): nobody to ask about.
+    expect(mayEmail("shipped", emailReach([]))).toBe(false);
+  });
+
   it("promises no email when no email provider is set up", () => {
-    expect(emailNote(1, false)).toBe("Email delivery isn't set up yet, so nobody gets emailed.");
-    expect(emailNote(4, false)).toBe(emailNote(1, false));
+    expect(emailNote(1, false, widget)).toBe("Email delivery isn't set up yet, so nobody gets emailed.");
+    expect(emailNote(4, false, mergedIntoGong, true)).toBe(emailNote(1, false, widget));
   });
 });

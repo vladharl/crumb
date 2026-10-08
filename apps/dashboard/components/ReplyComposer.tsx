@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Avatar, Btn, Ic, StatusDot, CLOSED_STATUSES, statusLabel } from "@crumb/ui";
 import type { VendorStatus } from "@crumb/ui";
@@ -163,6 +163,24 @@ export async function runAction<R extends { ok: boolean }>(
     toast.show({ message: errorMessage(null), tone: "error" });
   }
   return null;
+}
+
+// How long an AI draft (a reply here, a ticket in ExternalTicketModal) is
+// waited on before the UI stops spinning and says so. The model can need a
+// minute or more when it's waking up (the server gives it two), and the proxy
+// in front drops a request at 100 seconds.
+export const DRAFT_TIMEOUT_MS = 90_000;
+
+// The call's own result, or a failure once `ms` pass (timeoutCode) or if it
+// throws ("failed"), so nothing waits forever. A result landing after the
+// timeout is dropped.
+export function settle<T>(call: Promise<T>, ms: number, timeoutCode: string): Promise<T | { ok: false; error: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<{ ok: false; error: string }>(resolve => {
+    timer = setTimeout(() => resolve({ ok: false, error: timeoutCode }), ms);
+  });
+  return Promise.race([call.catch(() => ({ ok: false as const, error: "failed" })), timeout])
+    .finally(() => clearTimeout(timer));
 }
 
 export const STATUS_EMAIL_DELAY_MS = 6000;
@@ -351,6 +369,7 @@ export function ReplyComposer({
   notifyPlan,
   teammates,
   aiReplyAvailable,
+  aiUpgrade,
   canWrite,
   onSent,
   autoFocus = false,
@@ -369,6 +388,9 @@ export function ReplyComposer({
   notifyPlan: ItemNotifyPlan;
   teammates: ComposerTeammate[];
   aiReplyAvailable: boolean;
+  // On a Cloud plan without AI: the upgrade notice (UpgradeNotice, rendered
+  // on the server), which a locked AI draft button opens.
+  aiUpgrade?: ReactNode;
   canWrite: boolean;
   onSent?: (closedAs?: "shipped" | "declined") => void;
   autoFocus?: boolean;
@@ -400,6 +422,7 @@ export function ReplyComposer({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [drafting, setDrafting] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   // Single setter so every draft mutation also notifies the parent (for the
   // inbox's per-row draft persistence). Thread callers omit onDraftChange.
@@ -603,12 +626,21 @@ export function ReplyComposer({
 
   // AI reply draft: fills an empty composer, or goes below what the vendor
   // already wrote with an Undo that puts their text back as it was. The
-  // vendor edits and sends.
+  // vendor edits and sends. A slow model unlocks the composer after
+  // DRAFT_TIMEOUT_MS, and its late draft is dropped.
   const onDraft = async () => {
     setDrafting(true);
-    const res = await runAction(toast, () => draftReplyAction(itemShortId));
+    const res = await settle(draftReplyAction(itemShortId), DRAFT_TIMEOUT_MS, "draft_timeout");
     setDrafting(false);
-    if (!res) return;
+    if (!res.ok) {
+      toast.show({
+        message: res.error === "draft_timeout"
+          ? "The AI took too long to answer. Try again, or write the reply yourself."
+          : errorMessage(res.error),
+        tone: "error",
+      });
+      return;
+    }
     const before = draft;
     const next = withAiDraft(before, res.draft);
     caretAfter.current = next.length;
@@ -634,6 +666,8 @@ export function ReplyComposer({
   const sendDisabled = busy || empty || (!canWrite && !isNote);
   const offerClose = !isNote && canWrite && !CLOSED_STATUSES.has(status);
   const sendLabel = isNote ? "Add note" : notifyPlan.replies.willEmail ? `Send to ${first}` : "Send reply";
+  // Shown locked, not hidden, where the plan leaves AI out.
+  const aiLocked = !aiReplyAvailable && !!aiUpgrade && !isNote && canWrite;
 
   return (
     <div className={`${framed ? "card-foot" : "reply-composer-bare"} col gap-3`} style={{ alignItems: "stretch" }}>
@@ -742,6 +776,17 @@ export function ReplyComposer({
             {drafting ? "Drafting…" : "AI draft"}
           </Btn>
         )}
+        {aiLocked && (
+          <Btn
+            sm
+            variant="ghost"
+            icon={<Ic.lock style={{ width: 12, height: 12 }} />}
+            aria-expanded={upgradeOpen}
+            onClick={() => setUpgradeOpen(o => !o)}
+          >
+            AI draft
+          </Btn>
+        )}
         {uploading && <span className="text-xs muted">Uploading…</span>}
         <div style={{ flex: 1 }} />
         <Btn sm onClick={landed} disabled={busy || (!draft && pendingAttachments.length === 0)}>Clear</Btn>
@@ -771,6 +816,7 @@ export function ReplyComposer({
           {sending ? (isNote ? "Adding…" : "Sending…") : sendLabel}
         </Btn>
       </div>
+      {aiLocked && upgradeOpen && aiUpgrade}
     </div>
   );
 }

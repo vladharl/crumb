@@ -15,7 +15,7 @@ beforeAll(async () => {
 
 type RGBA = [number, number, number, number];
 const parse = (c: string): RGBA => {
-  const hex = /^#([0-9a-f]{6})$/i.exec(c.trim());
+  const hex = /^#([0-9a-f]{6})$/i.exec(c.trim().replace(/^#(\w)(\w)(\w)$/, "#$1$1$2$2$3$3"));
   if (hex) return [0, 2, 4].map(i => parseInt(hex[1]!.slice(i, i + 2), 16)).concat(1) as RGBA;
   const rgba = /^rgba\(([^)]+)\)$/.exec(c.trim());
   if (!rgba) throw new Error(`unparsed color ${c}`);
@@ -65,6 +65,37 @@ describe("widget text contrast (WCAG AA, 4.5:1)", () => {
   it("never sets text in warm gray (3.3:1), which is for status dots only", () => {
     expect(contrast(token("--c-ink-3"), surface2)).toBeLessThan(4.5); // why the rule exists
     expect(css).not.toMatch(/(^|[^-])color:\s*var\(--c-ink-3\)/m);
+  });
+});
+
+describe("widget non-text contrast (WCAG 1.4.11, 3:1)", () => {
+  const bg = token("--c-bg");
+  // A rule's color as painted on the panel, with a brand var read as its
+  // fallback (an unbranded install); readableAccent's 4.5:1 against white
+  // covers a brand.
+  const value = (rule: RegExp) => {
+    const v = rule.exec(css)![1]!;
+    const ref = /--c-[\w-]+(?=\)+$)/.exec(v);
+    return over(ref ? token(ref[0]) : parse(v), bg);
+  };
+
+  it("draws switch tracks and their knob, off and on, at 3:1", () => {
+    const off = value(/\n\.sw \{[^}]*background: ([^;]+);/);
+    const on = value(/\n\.sw\.on \{ background: ([^;]+);/);
+    const knob = value(/\n\.sw::after \{[^}]*background: ([^;]+);/);
+    for (const [name, track] of Object.entries({ off, on })) {
+      expect(contrast(track, bg), `${name} track`).toBeGreaterThanOrEqual(3);
+      expect(contrast(knob, track), `knob on the ${name} track`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("keeps a focused field's border at 3:1, since it replaces the focus ring", () => {
+    const focus = /input\.field:focus, textarea\.field:focus \{[^}]*\}/.exec(css)![0];
+    expect(focus).toMatch(/outline: none;/);
+    expect(contrast(value(/field:focus \{[^}]*border-color: ([^;]+);/), bg)).toBeGreaterThanOrEqual(3);
+    // The lightest brand the panel takes (white on it at 4.5:1) clears it too.
+    expect(w.readableAccent("#767676")).toBe("#767676");
+    expect(contrast(parse("#767676"), bg)).toBeGreaterThanOrEqual(3);
   });
 });
 

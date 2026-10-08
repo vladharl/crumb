@@ -7,7 +7,9 @@ import type { ReplyNotification, StatusChangeNotification } from "@/lib/email";
 // A request merged into another hears back: once at the merge, about its own
 // item, then on each of the canonical's status changes (never its replies),
 // under that customer's own prefs, with one ledger row per real delivery on
-// their own item. Assigning someone else pings them (lib/vendor-notify).
+// their own item. Assigning someone else pings them (lib/vendor-notify); a
+// repeat assignment announces nothing. The customer's own Slack/Teams channels
+// hear the statuses their email does, never a triage move.
 //
 // Against Postgres (DATABASE_URL, migrated via `pnpm db:migrate`). Skipped
 // locally when no database answers; CI has one, so there it fails instead.
@@ -17,6 +19,7 @@ const h = vi.hoisted(() => ({
   replies: [] as ReplyNotification[],
   events: [] as Array<{ type: string; item?: { short_id: string } }>,
   assigned: [] as unknown[],
+  channels: [] as Array<{ gate: string; toStatus?: string }>,
   session: null as unknown,
 }));
 // A real provider that accepts every send.
@@ -30,7 +33,9 @@ vi.mock("@/lib/webhooks", () => ({
   emitEvent: async (_ws: string, e: { type: string; item?: { short_id: string } }) => { h.events.push(e); },
 }));
 vi.mock("@/lib/notify/chat", () => ({ notifyWorkspaceChannel: async () => {} }));
-vi.mock("@/lib/notify/account-channel", () => ({ notifyAccountChannels: async () => {} }));
+vi.mock("@/lib/notify/account-channel", () => ({
+  notifyAccountChannels: async (_accountId: string, e: { toStatus?: string }, gate: string) => { h.channels.push({ gate, toStatus: e.toStatus }); },
+}));
 vi.mock("@/lib/vendor-notify", () => ({ notifyAssigned: async (input: unknown) => { h.assigned.push(input); } }));
 vi.mock("@/lib/server", () => ({ getActiveSession: async () => h.session }));
 vi.mock("next/headers", () => ({ headers: () => new Headers() }));
@@ -177,10 +182,14 @@ describe.skipIf(!reachable && !process.env.CI)("merged requests hear back", () =
   });
 
   it("pings a new assignee, but not on a repeat, a self-assign or an unassign", async () => {
-    for (const assigneeId of [sam, sam, lina, null]) {
+    clear();
+    for (const assigneeId of [sam, sam, lina, null, null]) {
       expect(await assignItemTo(actor(), { itemShortId: sid.C, assigneeId })).toEqual({ ok: true });
     }
     expect(h.assigned).toEqual([{ workspaceId: wsId, itemId: canonicalId, assigneeId: sam, actorWorkspaceUserId: lina }]);
+    // A repeat changes nothing, so no webhook says it did (the thread and MCP
+    // don't filter repeats the way the bulk bar does).
+    expect(h.events.filter(e => e.type === "item.assigned")).toHaveLength(3);
   });
 
   it("tells a request merged into a closed one how it ended, and promises no news", async () => {
@@ -194,10 +203,10 @@ describe.skipIf(!reachable && !process.env.CI)("merged requests hear back", () =
     // The canonical was declined above.
     expect(await mergeItems("FB-7", sid.C)).toEqual({ ok: true, emailed: true });
     expect(h.status.map(m => [m.to, m.itemShortId, m.reason])).toEqual([
-      ["maya@globex.test", "FB-7", "We've combined this with an earlier request for the same thing. We've decided not to take it on."],
+      ["maya@globex.test", "FB-7", "We've combined this with another request for the same thing. We've decided not to take it on."],
     ]);
-    expect(mergeNoticeText("shipped")).toBe("We've combined this with an earlier request for the same thing. It's already live.");
-    expect(mergeNoticeText("resolved")).toBe("We've combined this with an earlier request for the same thing.");
+    expect(mergeNoticeText("shipped")).toBe("We've combined this with another request for the same thing. It's already live.");
+    expect(mergeNoticeText("resolved")).toBe("We've combined this with another request for the same thing.");
     expect(mergeNoticeText("planned")).toMatch(/hear from us here when it moves/);
   });
 
@@ -235,5 +244,20 @@ describe.skipIf(!reachable && !process.env.CI)("merged requests hear back", () =
       ["maya@globex.test", "FB-11"],
     ]);
     expect(await ledger("FB-11")).toEqual([{ kind: "status", toStatus: "shipped" }]);
+  });
+
+  it("cards the customer's own channels with the statuses their email hears, never triage", async () => {
+    const [globex] = await db.select({ id: accounts.id }).from(accounts)
+      .where(and(eq(accounts.workspaceId, wsId), eq(accounts.name, "Globex")));
+    await db.insert(items).values({
+      workspaceId: wsId, accountId: globex.id, submitterId: people.maya, seq: 12, shortId: "FB-12",
+      title: "Dark mode", type: "idea", source: "widget",
+    });
+    h.channels.length = 0;
+    for (const status of ["review", "duplicate", "open", "planned"] as const) {
+      const reason = status === "duplicate" ? "Tracked under another request." : undefined;
+      expect(await updateItemStatus(actor(), { itemShortId: "FB-12", status, reason, origin })).toMatchObject({ ok: true });
+    }
+    expect(h.channels).toEqual([{ gate: "status", toStatus: "planned" }]);
   });
 });

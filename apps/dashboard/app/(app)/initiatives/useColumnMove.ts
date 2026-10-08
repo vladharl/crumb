@@ -18,6 +18,18 @@ export function moveEmailsFollowers(
   return card.isPublic && card.followers > 0 && target !== card.column;
 }
 
+// A lane's card ids once `id` lands in `slot`: a slot in the lane as it shows
+// (`shown`, the moving card counted where it sits if it's there; null is the
+// end). Past the card's own place the slot is one less, so a card dropped
+// under the next one lands right under it, not one further down.
+export function placeInLane(shown: string[], id: string, slot: number | null): string[] {
+  const from = shown.indexOf(id);
+  const others = shown.filter(x => x !== id);
+  const at = slot === null ? others.length : slot - (from !== -1 && from < slot ? 1 : 0);
+  const i = Math.max(0, Math.min(at, others.length));
+  return [...others.slice(0, i), id, ...others.slice(i)];
+}
+
 export const movedMessage = (target: BoardCol) =>
   `Moved to ${COLUMN_LABEL[target]}. Emailing its followers in ${STATUS_EMAIL_DELAY_MS / 1000} seconds.`;
 export const MOVE_UNDONE = "Undone. Its followers weren't emailed.";

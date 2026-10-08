@@ -149,6 +149,8 @@ type ItemSummary = {
   // Thread only: why the current status was set, if the vendor said, and when.
   status_reason?: string | null;
   status_changed_at?: string | null;
+  // Merged into another request: `status` is that request's.
+  merged?: boolean;
 };
 
 type ThreadAttachment = {
@@ -459,9 +461,19 @@ export function newsPhrase(it: ItemSummary, news: { reply: boolean; status: bool
 
 // The vendor's reason for where a request stands, shown in plain words atop
 // the thread. Not for "open" (a reopen reads "Unmerged") or "resolved" (the
-// customer's own close note).
+// customer's own close note). A merged request says only that it was combined:
+// the reasons it now follows were written to someone else.
 export function statusReason(it: ItemSummary): string {
+  if (it.merged) return `${t.combined}.`;
   return it.status === "open" || it.status === "resolved" ? "" : it.status_reason?.trim() ?? "";
+}
+
+// A signed file link (?exp=, unix seconds) that has expired, or will before a
+// new tab can open it. Links without one aren't ours to judge.
+export function linkExpired(href: string, now = Date.now()): boolean {
+  let exp: string | null = null;
+  try { exp = new URL(href).searchParams.get("exp"); } catch { /* not a URL */ }
+  return !!exp && /^\d+$/.test(exp) && Number(exp) * 1000 - 30_000 <= now;
 }
 
 // The vendor's accent, when white text on it reads at 4.5:1 (it fills the
@@ -829,6 +841,8 @@ function init(config: Config) {
   let meState: AsyncState = { kind: "idle" };
   let memberMsg: string | null = null;
   let channelMsg: string | null = null;
+  // Webhook URLs typed but not saved yet: a re-render or a refused save keeps them.
+  const channelDraft = { slack: "", teams: "" };
   // The account's Slack/Teams channels as the server reports them (masked).
   let channels: Record<"slack" | "teams", { connected: boolean; masked_url: string | null }> | null = null;
   let channelsState: AsyncState = { kind: "idle" };
@@ -851,6 +865,7 @@ function init(config: Config) {
   let opener: HTMLElement | null = null;
   let lastSaid = "";  // [data-live] text already announced
   let prevNews = -1;  // unread count at the last render; -1 = list not loaded
+  let renderedAt = ""; // the view (and its thread) the panel last showed
 
   // Every navigation moves focus to the new view; `focus` names a control
   // (a selector) or opts out (false) when the view only changes in place.
@@ -1147,9 +1162,15 @@ function init(config: Config) {
     } catch { /* ignore */ }
   }
 
+  // A refresh (every open) leaves the rows alone when nothing changed: a
+  // rebuild landing mid-click swaps the row under the pointer, and the click
+  // never arrives. ponytail: a list that did change still rebuilds; hold
+  // renders while a pointer is down if that ever bites.
   async function fetchList() {
+    const shown = items !== null && listState.kind !== "error";
+    const before = JSON.stringify(items);
     listState = { kind: "loading" };
-    render();
+    if (!shown) render(); // the skeleton, or the error banner going
     try {
       items = (await call("items")).items as ItemSummary[];
       adoptLegacyMarks(items);
@@ -1164,6 +1185,7 @@ function init(config: Config) {
         listState = failed(err);
       }
     }
+    if (shown && listState.kind === "idle" && JSON.stringify(items) === before) return;
     render();
   }
 
@@ -1201,15 +1223,21 @@ function init(config: Config) {
     render();
   }
 
-  async function fetchThread(shortId: string) {
-    threadState = { kind: "loading" };
-    thread = null;
-    // Fresh thread → drop any close prompt/error left over from another item.
-    closeConfirm = false;
-    closeState = { kind: "idle" };
-    render();
+  // `quiet`: the thread on screen again (fresh file links), without the skeleton.
+  async function fetchThread(shortId: string, quiet = false) {
+    if (!quiet) {
+      threadState = { kind: "loading" };
+      thread = null;
+      // Fresh thread → drop any close prompt/error left over from another item.
+      closeConfirm = false;
+      closeState = { kind: "idle" };
+      render();
+    }
     try {
-      thread = await call(`items/${encodeURIComponent(shortId)}`) as ThreadData;
+      const data = await call(`items/${encodeURIComponent(shortId)}`) as ThreadData;
+      // The customer opened another thread meanwhile: that one's answer paints.
+      if (view.kind === "thread" && view.shortId !== shortId) return;
+      thread = data;
       threadState = { kind: "idle" };
       // Viewing the thread clears its unread state: snapshot its vendor
       // replies (the list's vendor_reply_count units) so the launcher badge
@@ -1305,7 +1333,8 @@ function init(config: Config) {
     render();
   }
 
-  // Reads the inputs (shown only for channels not yet connected) on submit.
+  // Reads the inputs (shown only for channels not yet connected) on submit. A
+  // URL stays in its box (channelDraft) until its save succeeds.
   async function saveChannels() {
     const urls = (["slack", "teams"] as const)
       .map(p => [p, panel.querySelector<HTMLInputElement>(`input[data-act="${p}-webhook"]`)?.value.trim() ?? ""] as const)
@@ -1315,6 +1344,7 @@ function init(config: Config) {
     for (const [provider, url] of urls) {
       try {
         await call("account/integrations/webhook", "POST", authBody({ provider, url }));
+        channelDraft[provider] = "";
       } catch (err) {
         channelMsg = channelError(err);
       }
@@ -1611,6 +1641,11 @@ function init(config: Config) {
     const key = inPanel ? controlKey(prev) : "";
     const caret = [prev?.selectionStart ?? 0, prev?.selectionEnd ?? 0] as const;
     const lost = !document.activeElement || document.activeElement === document.body;
+    // The same view rebuilt (a follow, a toggle, a role change) keeps its
+    // scroll, so an action low in a long list doesn't snap it to the top.
+    const at = view.kind === "thread" || view.kind === "confirm" ? `${view.kind}:${view.shortId}` : view.kind;
+    const scrollTop = !opening && at === renderedAt ? panel.querySelector(".body")?.scrollTop ?? 0 : 0;
+    renderedAt = at;
 
     if (view.kind === "list") renderList();
     else if (view.kind === "admin") renderAdmin();
@@ -1620,6 +1655,8 @@ function init(config: Config) {
     else if (view.kind === "compose") renderCompose(view);
     else if (view.kind === "thread") renderThread(view);
     else if (view.kind === "confirm") renderConfirm(view);
+    const bodyEl = panel.querySelector(".body");
+    if (bodyEl && scrollTop) bodyEl.scrollTop = scrollTop;
 
     // Errors and confirmations (marked data-live) are announced once, when they appear.
     // Each part ends in a stop, so a heading and its line read as two sentences.
@@ -1633,7 +1670,9 @@ function init(config: Config) {
       const same = want || !key ? undefined
         : Array.from(panel.querySelectorAll<HTMLInputElement>("[data-act], [id]")).find(el => controlKey(el) === key);
       if (same && !same.disabled) {
-        same.focus();
+        // Where they'd scrolled wins over where focus sits (scrolled past, or
+        // left on a tab: Safari doesn't focus a clicked button).
+        same.focus({ preventScroll: scrollTop > 0 });
         try { same.setSelectionRange(caret[0], caret[1]); } catch { /* not a text field */ }
       } else {
         focusView(typeof want === "string" ? want : undefined);
@@ -1733,6 +1772,8 @@ function init(config: Config) {
     // A dot for news, said first: "New reply. FB-12, In progress…"
     const nw = newsOf(it);
     const news = nw.reply ? t.newReply : nw.status ? t.statusUpdate : "";
+    const bottom = [it.merged ? t.combined : "", it.reply_count > 1 ? t.replies(it.reply_count - 1) : ""]
+      .filter(Boolean).join(" · ");
     return `
       <button class="item-row" data-act="open-thread" data-short="${escapeHtml(it.short_id)}">
         <div class="top">
@@ -1742,7 +1783,7 @@ function init(config: Config) {
           ${timeHtml(it.updated_at, "age")}
         </div>
         <div class="title">${escapeHtml(it.title)}</div>
-        ${it.reply_count > 1 ? `<div class="bottom">${t.replies(it.reply_count - 1)}</div>` : ""}
+        ${bottom ? `<div class="bottom">${bottom}</div>` : ""}
       </button>`;
   }
 
@@ -1922,6 +1963,11 @@ function init(config: Config) {
           ${channelsHtml}
         </section>` : ""}`)}
       </div>`;
+    // Typed URLs survive the rebuild (set via property, like compose's fields).
+    for (const p of ["slack", "teams"] as const) {
+      const el = panel.querySelector<HTMLInputElement>(`input[data-act="${p}-webhook"]`);
+      if (el) el.value = channelDraft[p];
+    }
   }
 
   function renderSettings() {
@@ -2019,7 +2065,8 @@ function init(config: Config) {
     const err = submitState.kind === "error" ? submitState.message : "";
     // Who and which account the request goes in as: /me on JWT installs.
     const who = me?.user.name || config.userName;
-    // aria-disabled, not disabled, so focus stays put while a file uploads.
+    // aria-disabled, not disabled, so focus stays put while a file uploads or
+    // the request sends (submitNew ignores a click until then).
     const busy = uploadingAttachment ? ` aria-disabled="true"` : "";
     panel.innerHTML = `
       ${header(t.shareFeedback, undefined, true)}
@@ -2066,7 +2113,7 @@ function init(config: Config) {
       <div class="foot">
         <div class="row">
           <span class="meta">${escapeHtml(who ? t.postingAs(who, accountName()) : accountName())}</span>
-          <button class="primary" data-act="submit" ${submitting || uploadingAttachment ? "disabled" : ""}>
+          <button class="primary" data-act="submit"${submitting || uploadingAttachment ? ` aria-disabled="true"` : ""}>
             ${ICONS.send}<span>${submitting ? t.sending : t.send}</span>
           </button>
         </div>
@@ -2091,7 +2138,7 @@ function init(config: Config) {
       const msgs = thread.messages.map(m => {
         // Signed link: a new tab sends no credentials, so the bare path 403s.
         const atts = (m.attachments ?? []).map(a => `
-          <a class="attachment" href="${escapeHtml(new URL(a.url ?? `/api/v1/uploads/${a.id}`, config.apiBase).href)}" target="_blank" rel="noreferrer">
+          <a class="attachment" data-act="attachment" data-id="${escapeHtml(a.id)}" href="${escapeHtml(new URL(a.url ?? `/api/v1/uploads/${a.id}`, config.apiBase).href)}" target="_blank" rel="noreferrer">
             ${ICONS.attach}
             <span class="filename">${escapeHtml(a.filename)}</span>
             <span class="size">${humanBytes(a.size_bytes)}</span>
@@ -2108,10 +2155,15 @@ function init(config: Config) {
           </div>`;
       }).join("");
 
+      // Merged into another request: it reads with that one's status.
+      const merged = !!thread.item.merged;
+
       // Status timeline — visible in the expanded side rail, hidden when collapsed.
       const eventsHtml = thread.events.map(e => {
         const isInitial = e.from_status === null;
-        const label = isInitial ? t.submitted : (t.statuses[e.to_status as Status] ?? e.to_status);
+        const label = isInitial ? t.submitted
+          : merged && e.to_status === "duplicate" ? t.combined // its own move: what it was
+          : (t.statuses[e.to_status as Status] ?? e.to_status);
         const reasonHtml = e.reason
           ? `<div class="event-reason">${escapeHtml(e.reason)}</div>`
           : "";
@@ -2125,8 +2177,10 @@ function init(config: Config) {
 
       // Close-the-loop affordance — shown only while the request is still open.
       // Two-tap: "Close this request" reveals a confirm so a stray tap can't
-      // resolve it. Hidden once the loop is closed (vendor outcome or resolved).
-      const canClose = !CLOSED_STATUSES.has(thread.item.status);
+      // resolve it. Hidden once the loop is closed (vendor outcome or resolved),
+      // and on a merged request: it follows the one it joined, and the close
+      // endpoint answers already_closed for it.
+      const canClose = !merged && !CLOSED_STATUSES.has(thread.item.status);
       const closing = closeState.kind === "loading";
       const closeErr = closeState.kind === "error" ? closeState.message : "";
       const closeHtml = canClose ? `
@@ -2172,6 +2226,9 @@ function init(config: Config) {
 
     const submitting = submitState.kind === "loading";
     const submitErr = submitState.kind === "error" ? submitState.message : "";
+    // aria-disabled, not disabled, so focus stays put while busy (the handlers
+    // ignore a click until then).
+    const busy = uploadingAttachment ? ` aria-disabled="true"` : "";
     // Prefer the loaded thread title; fall back to the list-row title we
     // already have in memory (so the header doesn't flash "FB-N" while
     // /thread is fetching); last resort is the shortId.
@@ -2185,11 +2242,11 @@ function init(config: Config) {
         ${submitErr ? `<div class="err" data-live>${escapeHtml(submitErr)}</div>` : ""}
         ${pendingHtml()}
         <div class="row reply-row">
-          <button class="ghost" data-act="pick-attachment" aria-label="${t.attachFile}" ${uploadingAttachment ? "disabled" : ""}>
+          <button class="ghost" data-act="pick-attachment" aria-label="${t.attachFile}"${busy}>
             ${ICONS.attach}
           </button>
           <textarea class="field reply-box" data-act="reply" rows="1" maxlength="${MAX_LEN.reply}" aria-label="${t.yourReply}" placeholder="${uploadingAttachment ? t.uploading : t.replyHint}"></textarea>
-          <button class="primary" data-act="send-reply" ${submitting ? `aria-label="${t.sending}"` : ""} ${submitting || uploadingAttachment ? "disabled" : ""}>
+          <button class="primary" data-act="send-reply" ${submitting ? `aria-label="${t.sending}"` : ""}${submitting || uploadingAttachment ? ` aria-disabled="true"` : ""}>
             ${ICONS.send}<span>${submitting ? "…" : t.send}</span>
           </button>
         </div>
@@ -2235,6 +2292,16 @@ function init(config: Config) {
 
     if (act === "close") { searchQuery = ""; closeApi(); return; }
     if (act === "toggle-expand") { expanded = !expanded; render(); return; }
+    // A file link is signed for an hour; past that its new tab would 403. Fetch
+    // fresh links in place instead, and the next click opens the file.
+    if (act === "attachment") {
+      if (view.kind === "thread" && linkExpired((target as HTMLAnchorElement).href)) {
+        e.preventDefault();
+        say(t.linkRefreshed);
+        void fetchThread(view.shortId, true);
+      }
+      return;
+    }
     if (act === "back") {
       submitState = { kind: "idle" };
       memberMsg = null;
@@ -2415,6 +2482,8 @@ function init(config: Config) {
       view = { ...view, reply };
       autoGrow(target as HTMLTextAreaElement);
       editDrafts(d => { d.replies = { ...d.replies, [sid]: reply }; });
+    } else if (act === "slack-webhook" || act === "teams-webhook") {
+      channelDraft[act === "slack-webhook" ? "slack" : "teams"] = (target as HTMLInputElement).value;
     }
   });
 
@@ -2563,6 +2632,7 @@ function init(config: Config) {
     uploadingAttachment = false;
     attachmentError = memberMsg = channelMsg = followMsg = askRemove = null;
     channels = null;
+    channelDraft.slack = channelDraft.teams = "";
     channelsState = { kind: "idle" };
     seenCache = statusSeenCache = null;
     panel.innerHTML = ""; // nothing of theirs left in the page, open or closed

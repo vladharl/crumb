@@ -23,7 +23,9 @@ globs are `apps/*` + `packages/*`), so its deps stay out of the app build and CI
 
 ## Prerequisites
 
-- Postgres up + seeded from the repo root: `pnpm db:up && pnpm db:push && pnpm db:seed`
+- Postgres up + seeded from the repo root:
+  `pnpm db:up && DATABASE_URL=postgres://crumb:crumb@localhost:5432/crumb pnpm db:migrate && pnpm db:seed`
+  (migrations, not `db:push`: only they create the `pgcrypto` and `vector` extensions and run the data migrations)
 - The dashboard served as a **production cloud build** — dev-mode compilation
   shows up as flicker in the video, and Act 3's AI/integration UI needs the cloud
   edition compiled in:

@@ -49,7 +49,8 @@ export function setupSteps(f: SetupFacts): SetupStep[] {
     },
     {
       title: "Invite your team",
-      href: "/settings/team",
+      // Opens the invite form (InvitePanel reads the param).
+      href: "/settings/team?invite=1",
       done: f.teammates > 1,
       detail: f.teammates > 1
         ? `${f.teammates} teammates can answer loops.`

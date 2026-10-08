@@ -1,17 +1,19 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
-import { db, workspaces } from "@crumb/db";
+import { db, accounts, accountUsers, items, workspaces } from "@crumb/db";
 import { requireSession } from "@/lib/auth";
 import { sign, verify } from "@/lib/jwt";
 import { installSnippets } from "@/app/(app)/settings/install/snippets";
 import { mintTestToken } from "@/app/(app)/settings/install/actions";
 import { TEST_CUSTOMER_ACCOUNT } from "@/app/(app)/settings/install/test-customer";
 import { GET as me } from "@/app/api/v1/me/route";
+import { loadItems } from "@/app/(app)/inbox/InboxTableTile";
 
 // Settings → Install: snippets carry the canonical origin, "Try it" mints a
 // real (short-lived) widget token, and GET /api/v1/me stamps the workspace's
-// first widget ping exactly once.
+// first widget ping exactly once. Neither it nor the inbox's first-run check
+// counts the preview, even once account mapping renames its account.
 
 vi.mock("@/lib/auth", () => ({ requireSession: vi.fn() }));
 
@@ -80,7 +82,10 @@ describe.skipIf(!reachable && !process.env.CI)("GET /api/v1/me first ping", () =
   const created: string[] = [];
 
   afterAll(async () => {
-    if (created.length) await db.delete(workspaces).where(inArray(workspaces.id, created));
+    if (!created.length) return;
+    // Items first: their submitter reference blocks the cascade.
+    await db.delete(items).where(inArray(items.workspaceId, created));
+    await db.delete(workspaces).where(inArray(workspaces.id, created));
   });
 
   async function workspace() {
@@ -91,9 +96,9 @@ describe.skipIf(!reachable && !process.env.CI)("GET /api/v1/me first ping", () =
     return ws;
   }
 
-  function load(ws: { slug: string; secret: string }, accountName: string) {
+  function load(ws: { slug: string; secret: string }, accountName: string, sub = "pat@acme.test") {
     const now = Math.floor(Date.now() / 1000);
-    const token = sign({ iss: ws.slug, sub: "pat@acme.test", account_name: accountName, iat: now, exp: now + 600 }, ws.secret);
+    const token = sign({ iss: ws.slug, sub, account_name: accountName, iat: now, exp: now + 600 }, ws.secret);
     return me(new Request("http://localhost/api/v1/me", { headers: { authorization: `Bearer ${token}` } }));
   }
 
@@ -123,5 +128,30 @@ describe.skipIf(!reachable && !process.env.CI)("GET /api/v1/me first ping", () =
     const ws = await workspace();
     expect((await load(ws, TEST_CUSTOMER_ACCOUNT)).status).toBe(200);
     expect(await firstPing(ws.id)).toBeNull();
+  });
+
+  it("knows the preview by its .invalid address after account mapping renames its account", async () => {
+    const ws = await workspace();
+    const preview = `preview+user-1@${ws.slug}.invalid`; // as mintTestToken signs it
+    expect((await load(ws, TEST_CUSTOMER_ACCOUNT, preview)).status).toBe(200);
+    await db.update(accounts).set({ name: "Renamed Co" }).where(eq(accounts.workspaceId, ws.id));
+    expect((await load(ws, TEST_CUSTOMER_ACCOUNT, preview)).status).toBe(200);
+    expect(await firstPing(ws.id)).toBeNull();
+  });
+
+  it("marks the preview's inbox items by that address too, but not every .invalid one", async () => {
+    const ws = await workspace();
+    const [acct] = await db.insert(accounts).values({ workspaceId: ws.id, name: "Renamed Co" }).returning({ id: accounts.id });
+    const people = await db.insert(accountUsers).values([
+      { workspaceId: ws.id, accountId: acct!.id, email: `preview+user-1@${ws.slug}.invalid`, name: "Pat", initials: "P" },
+      // A Slack capture with no address of its own: real feedback.
+      { workspaceId: ws.id, accountId: acct!.id, email: "slack-U1@slack.invalid", name: "Sam", initials: "S" },
+    ]).returning({ id: accountUsers.id, name: accountUsers.name });
+    await db.insert(items).values(people.map((p, i) => ({
+      workspaceId: ws.id, accountId: acct!.id, submitterId: p.id, seq: i + 1, shortId: `FB-${i + 1}`,
+      title: `From ${p.name}`, type: "idea",
+    })));
+    const rows = await loadItems(ws.id);
+    expect(Object.fromEntries(rows.map(r => [r.submitterName, r.previewSubmitter]))).toEqual({ Pat: true, Sam: false });
   });
 });

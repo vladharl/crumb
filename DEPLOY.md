@@ -43,7 +43,7 @@ Fill in at minimum:
 - `CRUMB_INTERNAL_SWEEP_SECRET` → `openssl rand -hex 32`
 - `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` / `SLACK_SIGNING_SECRET` (and any other integrations you've registered). `SLACK_SIGNING_SECRET` verifies Slack request signatures on the `/crumb` command and the events endpoint.
 - *(optional)* CRM sync — `HUBSPOT_CLIENT_ID`/`HUBSPOT_CLIENT_SECRET` and/or `SALESFORCE_CLIENT_ID`/`SALESFORCE_CLIENT_SECRET` to pull accounts + ARR. Redirect URLs: `…/api/integrations/hubspot/callback` and `…/api/integrations/salesforce/callback`.
-- *(GitHub App)* also `GITHUB_APP_CLIENT_ID`/`GITHUB_APP_CLIENT_SECRET`, with **Request user authorization (OAuth) during installation** turned on in the App. Without them Crumb only accepts an installation made in the last 10 minutes, so reconnecting an older one means reinstalling the App.
+- *(GitHub App)* also `GITHUB_APP_CLIENT_ID`/`GITHUB_APP_CLIENT_SECRET`, with **Request user authorization (OAuth) during installation** turned on in the App. Required on Cloud: without them no installation binds. On self-host, without them Crumb only accepts an installation created or updated in the last 10 minutes, so reconnecting an older one means reinstalling the App.
 - `CLOUDFLARE_TUNNEL_TOKEN` → from step 5
 
 `.env` is gitignored: never commit it. Compose passes every variable in it to
@@ -110,8 +110,8 @@ alive), and the shared `JIRA_WEBHOOK_SECRET` webhook is refused. Jira connection
 made before this must reconnect once from Settings → Integrations to keep status
 sync. Self-host is unchanged: the manual webhook signed with `JIRA_WEBHOOK_SECRET`.
 
-**Enable @mention request sizing.** To let people @mention Crumb for an in-thread
-sizing reply, the Slack app needs the `app_mentions:read` bot scope and Event
+**Enable @mention request sizing.** To let people @mention Crumb for a private
+sizing reply (in the thread when the mention is in one), the Slack app needs the `app_mentions:read` bot scope and Event
 Subscriptions turned on: set the **Request URL** to
 `https://crumb.example.com/api/integrations/slack/events` (Slack sends a
 one-time `challenge` on save and the endpoint answers it), then subscribe to the
@@ -172,7 +172,7 @@ auto-promotes, while on self-host every pulled record lands for review.
 
 **Backups:** `docker compose exec -T postgres pg_dump -U crumb crumb | gzip > crumb-$(date +%F).sql.gz` (see README "Backups & restore"). With the default `CRUMB_STORAGE_PROVIDER=postgres`, uploaded files are in the database, so the dump includes them. If you switched to `local` storage, back up `CRUMB_STORAGE_DIR` as well.
 
-**Encrypting tokens stored before you set `CRUMB_ENCRYPTION_KEY`:** `docker compose exec dashboard node packages/db/dist/backfill-encrypt-secrets.mjs` seals the Slack, Linear and Jira tokens already in the database (safe to re-run). Reconnect any other integration to encrypt its secret.
+**Encrypting tokens stored before you set `CRUMB_ENCRYPTION_KEY`:** `docker compose exec dashboard node packages/db/dist/backfill-encrypt-secrets.mjs` seals every integration secret already in the database: Slack, Linear, Jira, HubSpot, Salesforce, Teams, customers' channel webhooks and feedback connectors (safe to re-run).
 
 **pgvector upgrade note:** the Postgres image is `pgvector/pgvector:pg16` (needed for the embeddings / semantic-search features — the migration runs `CREATE EXTENSION vector`). It's a drop-in replacement for the stock `postgres:16` and reuses the same `crumb-pg-data` volume, but **take a backup before the first `up -d` that pulls it** (command above). If you run an **external/managed Postgres** instead of the bundled container, install the extension once as a superuser: `CREATE EXTENSION IF NOT EXISTS vector;` (most managed providers — RDS, Cloud SQL, Supabase — ship it).
 

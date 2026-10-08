@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition, type CSSProperties } from "react";
+import { useMemo, useRef, useState, useTransition, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -14,6 +14,7 @@ import {
   ReplyComposer, useStatusMove, runAction, firstName, sourceLabel, noEmailNote, statusWillEmail, statusEmailees, reasonNote, type ItemNotifyPlan,
 } from "@/components/ReplyComposer";
 import { useDeleteItems } from "@/components/useDeleteItems";
+import { autoNotifiesSubmitter } from "@/lib/feedback/source";
 import { formatArr } from "@/lib/priority";
 import { InitiativePanel, type ThreadInitiativeOption } from "./InitiativePanel";
 import { ThreadSuggestionCard, type ThreadSuggestion } from "./ThreadSuggestionCard";
@@ -100,6 +101,18 @@ export type ThreadStatusEvent = {
   at: string;
 };
 
+// Who the Trail credits with a status event. No teammate behind it means the
+// customer when they closed it themselves (resolved) or sent it from the
+// widget (the opening event of a widget or legacy item); any other unattributed
+// move is automation.
+export function trailActor(
+  e: Pick<ThreadStatusEvent, "byName" | "fromStatus" | "toStatus">, submitterName: string, source: string | null,
+): string {
+  if (e.byName) return e.byName;
+  if (e.toStatus === "resolved" || (e.fromStatus === null && autoNotifiesSubmitter(source))) return submitterName;
+  return "System";
+}
+
 // A customer-notification ledger entry: the moment the customer heard back.
 export type ThreadNotice = {
   id: string;
@@ -158,6 +171,7 @@ export type ThreadData = {
     linearInstalledAt: string | null;
     jiraInstalledAt: string | null;
     githubInstalledAt: string | null;
+    integrationsAllowed: boolean;
   };
   aiTicketAvailable: boolean;
   aiReplyAvailable: boolean;
@@ -184,9 +198,18 @@ type TrailEntry =
   | { kind: "event";   at: string; event: ThreadStatusEvent }
   | { kind: "notice";  at: string; notice: ThreadNotice };
 
-export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadData; canWrite: boolean; isAdmin?: boolean }) {
+// `aiUpgrade`: the server-rendered upgrade notice, on a Cloud plan without AI;
+// the AI draft shows locked and opens it. `ticketAiUpgrade` is the same for
+// the ticket modal's "Suggest with AI".
+export function ThreadView({ data, canWrite, isAdmin = false, aiUpgrade, ticketAiUpgrade }: {
+  data: ThreadData; canWrite: boolean; isAdmin?: boolean; aiUpgrade?: ReactNode; ticketAiUpgrade?: ReactNode;
+}) {
   const router = useRouter();
   const toast = useToast();
+  // Set when the Engineering tile creates a ticket. The tile then remounts
+  // linked (its key) without the button that had focus, so the new ticket's
+  // link takes it instead of <body>.
+  const focusTicketLink = useRef(false);
   const { item, notifyPlan, mergedReach, account, submitter, assignee, messages, events, notices, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, aiReplyAvailable, replay, usageBreadcrumb, merge } = data;
   const teammateNames = useMemo(() => teammates.map(t => t.name), [teammates]);
   const first = firstName(submitter.name);
@@ -463,7 +486,7 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
                       <span className="trail-crumb event" aria-hidden />
                       <div className="trail-node-body col grow gap-1">
                         <span className="text-sm">
-                          <span className="fw-med">{entry.event.byName ?? "System"}</span>
+                          <span className="fw-med">{trailActor(entry.event, submitter.name, item.source)}</span>
                           <span className="muted">
                             {entry.event.fromStatus
                               ? ` moved status to `
@@ -571,6 +594,7 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
               notifyPlan={notifyPlan}
               teammates={teammates}
               aiReplyAvailable={aiReplyAvailable}
+              aiUpgrade={aiUpgrade}
               canWrite={canWrite}
               onSent={() => router.refresh()}
               tabMode={tab === "internal" ? "note" : tab === "customer" ? "reply" : undefined}
@@ -726,11 +750,17 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
             <MergePanel itemShortId={item.shortId} canManage={canWrite} merge={merge} />
           )}
 
+          {/* Keyed by whether a ticket is linked, so linking or unlinking
+              starts the tile afresh: an unlink doesn't bring back the closed
+              create modal (and its tracker call) from before the link. */}
           <ExternalTicketTile
+            key={item.externalTicketId ? "linked" : "unlinked"}
             itemShortId={item.shortId}
             itemTitle={item.title}
             itemBody={item.body}
             aiAvailable={aiTicketAvailable}
+            aiUpgrade={ticketAiUpgrade}
+            focusLinkRef={focusTicketLink}
             isAdmin={isAdmin}
             workspace={workspaceIntegrations}
             item={{

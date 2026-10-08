@@ -1,4 +1,6 @@
 import * as React from "react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dropdown, Field, Switch } from "@crumb/ui";
@@ -116,6 +118,29 @@ describe("@crumb/ui atoms", () => {
     expect(out).toContain('aria-label="Email digest"');
     expect(out).toMatch(/<button[^>]* disabled=""/);
     expect(html(React.createElement(Switch, {}))).toContain('aria-checked="false"');
+  });
+
+  it("Switch draws its on track on the page, and its white knob on that track, at 3:1", () => {
+    const css = readFileSync(resolve(__dirname, "../../app/globals.css"), "utf8");
+    const root = /:root \{([\s\S]*?)\n\}/.exec(css)![1]!;
+    const color = (v: string): string => {
+      const ref = /^var\((--[\w-]+)\)$/.exec(v.trim());
+      if (ref) return color(new RegExp(`${ref[1]}:\\s*([^;]+);`).exec(root)![1]!);
+      return v.trim() === "white" ? "#FFFFFF" : v.trim();
+    };
+    const lum = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+        .map(c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    };
+    const contrast = (a: string, b: string) => {
+      const [hi, lo] = [lum(color(a)), lum(color(b))].sort((x, y) => y - x);
+      return (hi! + 0.05) / (lo! + 0.05);
+    };
+    const track = /\n\.switch\.on \{ background: ([^;]+);/.exec(css)![1]!;
+    const knob = /\n\.switch\.on::after \{[^}]*background: ([^;]+);/.exec(css)![1]!;
+    expect(contrast(track, "var(--bg)")).toBeGreaterThanOrEqual(3);
+    expect(contrast(knob, track)).toBeGreaterThanOrEqual(3);
   });
 
   it("Field ties its label to a lone input", () => {

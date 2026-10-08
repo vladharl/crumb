@@ -37,7 +37,7 @@ vi.mock("@/app/(app)/initiatives/actions", async (importOriginal) => {
 
 import { STATUS_EMAIL_DELAY_MS } from "@/components/ReplyComposer";
 import * as actions from "@/app/(app)/initiatives/actions";
-import { useColumnMove } from "@/app/(app)/initiatives/useColumnMove";
+import { placeInLane, useColumnMove } from "@/app/(app)/initiatives/useColumnMove";
 
 // A window/document stand-in that records listeners (sendAfterDelay's hide/leave saves).
 function eventTarget() {
@@ -48,6 +48,29 @@ function eventTarget() {
     removeEventListener: (type: string, fn: () => void) => { on.get(type)?.delete(fn); },
   };
 }
+
+// Where a card lands on the board: a drop's slot, or Move up / Move down, is
+// counted in the lane as it shows, with the moving card still in it.
+describe("placeInLane", () => {
+  const lane = ["A", "B", "C", "D"];
+  it("lands a card dropped under the next one right under it", () => {
+    expect(placeInLane(lane, "A", 2)).toEqual(["B", "A", "C", "D"]);
+    expect(placeInLane(lane, "A", 4)).toEqual(["B", "C", "D", "A"]);
+  });
+  it("leaves the lane alone when dropped next to itself", () => {
+    expect(placeInLane(lane, "B", 1)).toEqual(lane);
+    expect(placeInLane(lane, "B", 2)).toEqual(lane);
+  });
+  it("moves up and down one place, and onto the end", () => {
+    expect(placeInLane(lane, "C", 1)).toEqual(["A", "C", "B", "D"]); // up: the slot above B
+    expect(placeInLane(lane, "B", 3)).toEqual(["A", "C", "B", "D"]); // down: the slot under C
+    expect(placeInLane(lane, "B", null)).toEqual(["A", "C", "D", "B"]);
+  });
+  it("takes a card from another lane at the slot it was dropped on", () => {
+    expect(placeInLane(lane, "X", 1)).toEqual(["A", "X", "B", "C", "D"]);
+    expect(placeInLane([], "X", 3)).toEqual(["X"]);
+  });
+});
 
 describe("useColumnMove (a move that emails followers waits behind Undo)", () => {
   beforeEach(() => {

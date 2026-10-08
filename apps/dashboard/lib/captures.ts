@@ -4,6 +4,7 @@ import { db, accounts, inboundCaptures, type Workspace } from "@crumb/db";
 import { matchAccountConfigured, suggestAccount } from "@/lib/ai/match-account";
 import { withAiBudget } from "@/lib/ai/run";
 import { hasFeature } from "@/lib/entitlements";
+import { isBlockedSender } from "@/lib/items/delete";
 import { log } from "@/lib/log";
 import { emitEvent } from "@/lib/webhooks";
 
@@ -45,7 +46,10 @@ export type CaptureInput = {
 // Returns null when this provider record was already captured: the insert is a
 // no-op on the unique (workspace, source, external_id) index, so two runs over
 // the same record can't collide. Captures without an external_id never conflict.
+// Also null, with nothing stored, when the sender's feedback was marked as spam
+// (lib/items/delete), whichever route it came in by.
 export async function createInboundCapture(ws: Workspace, input: CaptureInput): Promise<string | null> {
+  if (await isBlockedSender(ws.id, input.fromEmail)) return null;
   let suggestion = input.suggestion ?? null;
   if (suggestion === null && matchAccountConfigured() && hasFeature(ws, "ai")) {
     // A provider retry of a record already captured would come back null from

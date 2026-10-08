@@ -19,8 +19,10 @@ export function PublicPagesCard({ enabled, isAdmin, addressTaken, roadmapUrl, ch
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
+  // Non-admins get a real disabled switch (dimmed, announced as unavailable).
+  // While a save is in flight it only dims and ignores clicks, keeping focus.
   const toggle = () => {
-    if (!isAdmin || pending) return;
+    if (pending) return;
     setError(null);
     startTransition(async () => {
       const res = await setPublicPagesEnabled(!on);
@@ -40,8 +42,8 @@ export function PublicPagesCard({ enabled, isAdmin, addressTaken, roadmapUrl, ch
           accounts, feedback or counts. Visitors can follow by email: they confirm from their inbox first,
           and every email has a link to stop.
         </p>
-        <label className="row gap-3 center" style={{ opacity: !isAdmin || pending ? 0.55 : 1, cursor: isAdmin ? "pointer" : "default" }}>
-          <Switch on={on} onClick={toggle} />
+        <label className="row gap-3 center" style={{ opacity: pending ? 0.55 : 1, cursor: isAdmin ? "pointer" : "default" }}>
+          <Switch on={on} onClick={toggle} disabled={!isAdmin} />
           <span className="text-sm fw-med">Publish the roadmap and changelog</span>
         </label>
         {!isAdmin && <p className="text-xs muted note">Only workspace admins can change this.</p>}

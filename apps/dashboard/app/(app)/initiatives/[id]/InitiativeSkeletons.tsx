@@ -12,7 +12,7 @@ export function InitiativeHeaderSkeleton() {
       <PageHead
         crumb={<Link href="/initiatives" style={{ color: "inherit" }}>Initiatives</Link>}
         title={<SkeletonLine width="40%" height={26} />}
-        lede="Vendor-internal bucket. Group inbound feedback that belongs together so you can triage themes, not just rows."
+        lede="Group inbound feedback that belongs together so you can triage themes, not just rows."
         actions={<SkeletonPill width={68} />}
       />
       <Card>

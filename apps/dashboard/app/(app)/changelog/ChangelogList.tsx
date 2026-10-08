@@ -113,6 +113,7 @@ function EntryCard({ entry, canManage }: { entry: ChangelogRow; canManage: boole
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(entry.title);
   const [body, setBody] = useState(entry.body);
+  const [isPublic, setIsPublic] = useState(entry.isPublic);
   const [pending, start] = useTransition();
   const isPublished = !!entry.publishedAt;
 
@@ -174,6 +175,22 @@ function EntryCard({ entry, canManage }: { entry: ChangelogRow; canManage: boole
               <span className="eyebrow">Body</span>
               <textarea className="input" rows={4} value={body} onChange={(e) => setBody(e.target.value)} disabled={pending} />
             </label>
+            {/* A private initiative's entry is drafted internal; this is how it goes public. */}
+            <div className="col gap-1">
+              <label className="row gap-2 center text-sm">
+                <input
+                  type="checkbox"
+                  checked={isPublic}
+                  onChange={(e) => setIsPublic(e.target.checked)}
+                  disabled={pending}
+                  aria-describedby={`public-hint-${entry.id}`}
+                />
+                Public
+              </label>
+              <span id={`public-hint-${entry.id}`} className="text-xs muted">
+                Public entries show in the widget's What's new and on your public changelog.
+              </span>
+            </div>
             <div className="row gap-2">
               <button
                 type="button"
@@ -181,7 +198,7 @@ function EntryCard({ entry, canManage }: { entry: ChangelogRow; canManage: boole
                 disabled={pending || !title.trim()}
                 onClick={() =>
                   start(async () => {
-                    if (!(await runAction(toast, () => updateChangelogEntry(entry.id, { title, body })))) return;
+                    if (!(await runAction(toast, () => updateChangelogEntry(entry.id, { title, body, isPublic })))) return;
                     toast.show({ message: "Saved." });
                     setEditing(false);
                   })

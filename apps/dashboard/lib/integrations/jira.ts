@@ -145,12 +145,17 @@ export async function refreshToken(workspaceId: string, currentRefreshToken: str
   });
   if (!resp.ok) {
     const text = await resp.text();
-    // 400/401 from the token endpoint means the refresh token is dead —
-    // revoked, expired, or the user reinstalled elsewhere. Clear the install
-    // so Settings shows "disconnected" instead of failing every call forever.
-    if (resp.status === 400 || resp.status === 401) {
+    // Only invalid_grant means the refresh token itself is dead (revoked,
+    // expired, or the user reinstalled elsewhere; Atlassian sends it with a
+    // 403). Clear the install so Settings shows "disconnected" instead of
+    // failing every call forever. Anything else, a rejected client secret
+    // included, would disconnect every Jira install in one sweep, so it fails
+    // this call and the next one tries again (as HubSpot and Salesforce do).
+    let error: unknown;
+    try { error = JSON.parse(text)?.error; } catch { error = null; }
+    if (error === "invalid_grant") {
       await clearProviderInstall(workspaceId, "jira");
-      throw new IntegrationAuthError("jira", String(resp.status));
+      throw new IntegrationAuthError("jira", "invalid_grant");
     }
     throw new Error(`jira_refresh_failed: ${resp.status} ${text.slice(0, 200)}`);
   }

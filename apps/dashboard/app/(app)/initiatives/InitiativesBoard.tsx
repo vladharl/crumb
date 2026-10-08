@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition, type CSSProperties } from "react";
+import { flushSync } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Card, Switch } from "@crumb/ui";
+import { Card, Ic, SkeletonBlock, Switch } from "@crumb/ui";
 import type { Announce } from "@/lib/changelog";
 import { AnnouncePrompt } from "@/app/(app)/changelog/Announce";
 import { InitiativeStatusPill } from "./InitiativeChip";
 import { reorderInitiatives, setInitiativePublic, updateInitiative } from "./actions";
-import { MOVE_UNDONE, moveEmailsFollowers, movedMessage } from "./useColumnMove";
+import { MOVE_UNDONE, moveEmailsFollowers, movedMessage, placeInLane } from "./useColumnMove";
 import { formatArr } from "@/lib/priority";
 import { formatDate } from "@/lib/timefmt";
 import { sendAfterDelay, STATUS_EMAIL_DELAY_MS } from "@/components/ReplyComposer";
@@ -93,6 +94,9 @@ type Held = {
 // The board with the held card back where it was.
 const unheld = (list: BoardItem[], h: Held) => list.map(i => (i.id === h.id ? { ...i, ...h.from } : i));
 
+// Read by screen readers, not shown.
+const SR_ONLY: CSSProperties = { position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)", whiteSpace: "nowrap" };
+
 export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[]; canManage: boolean }) {
   const router = useRouter();
   const toast = useToast();
@@ -103,6 +107,8 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
   const [dropTarget, setDropTarget] = useState<{ col: BoardKey; index: number } | null>(null);
   // The ship-and-announce prompt for a card just dropped on Shipped.
   const [announce, setAnnounce] = useState<Announce | null>(null);
+  // Where Move up / Move down left a card, for screen readers.
+  const [placedSay, setPlacedSay] = useState("");
   const held = useRef<Held | null>(null);
   const server = useRef(initial);
   server.current = initial;
@@ -124,7 +130,9 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
 
   const save = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     startTransition(async () => {
-      const r = await fn();
+      // A throw (a dropped connection, a stale action after a redeploy) rolls
+      // back like a refusal instead of leaving the move on screen.
+      const r: { ok: boolean; error?: string } = await fn().catch(() => ({ ok: false }));
       if (!r.ok) {
         setError(r.error === "forbidden" ? "Only admins and PMs can edit the board." : "Something went wrong. The board wasn't changed. Try again.");
         setItems(serverView());
@@ -201,22 +209,22 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
     });
   }
 
-  function handleDrop(targetKey: BoardKey) {
-    if (!dragId) return;
+  // Moves a card to `slot` of a lane as the board shows it now, the card
+  // counted where it sits (null is the end). A drop and Move up / Move down
+  // both land here, so they save the same way.
+  function moveCard(id: string, targetKey: BoardKey, slot: number | null) {
     // The latest move of a card wins: its held move is dropped and this one
     // starts from where the card was. A held move of another card saves now.
     const h = held.current;
     let base = items;
     let undone = false;
-    if (h && h.id === dragId) {
+    if (h && h.id === id) {
       if (dropHeld()) { base = unheld(items, h); undone = true; }
     } else h?.flush();
-    const dragged = base.find(i => i.id === dragId);
-    setDragId(null);
-    setDropTarget(null);
+    const dragged = base.find(i => i.id === id);
     if (!dragged) return;
 
-    // Only unshipped cards drag, so this always ships one.
+    // Only unshipped cards move, so this always ships one.
     if (targetKey === "shipped") {
       if (undone) toast.show({ message: MOVE_UNDONE });
       ship(base, dragged);
@@ -225,11 +233,9 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
 
     const target = colOf(targetKey);
     const inTarget = base.filter(i => laneOf(i) === targetKey).sort(sortCards);
-    const colList = inTarget.filter(i => i.id !== dragId);
-    let index = dropTarget && dropTarget.col === targetKey ? dropTarget.index : colList.length;
-    index = Math.max(0, Math.min(index, colList.length));
-
-    const orderedIds = [...colList.slice(0, index).map(i => i.id), dragged.id, ...colList.slice(index).map(i => i.id)];
+    // The slot counts the lane as shown, a held card where it waits; the other
+    // cards keep their order either way.
+    const orderedIds = placeInLane(byCol(targetKey).map(i => i.id), id, slot);
     const noop = dragged.column === target && orderedIds.join() === inTarget.map(i => i.id).join();
     // Private and unscheduled cards (and moves within a column) email no one.
     const emails = target !== null && moveEmailsFollowers(dragged, target);
@@ -246,8 +252,17 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
     else save(() => reorderInitiatives(target, orderedIds));
   }
 
+  function handleDrop(targetKey: BoardKey) {
+    if (!dragId) return;
+    const slot = dropTarget && dropTarget.col === targetKey ? dropTarget.index : null;
+    setDragId(null);
+    setDropTarget(null);
+    moveCard(dragId, targetKey, slot);
+  }
+
   return (
     <div className="col gap-3">
+      <span aria-live="polite" style={SR_ONLY}>{placedSay}</span>
       {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
       {/* Empty board: name the next step (the .inbox-empty styles are the app's empty state). */}
       {items.length === 0 && (
@@ -401,7 +416,7 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
                               style={{ margin: "0 12px", padding: "8px 0 12px", borderTop: "1px solid var(--line, var(--hair))" }}
                               draggable={false}
                             >
-                              <div className="row gap-2 center">
+                              <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
                                 {/* The label names the switch for screen readers. */}
                                 <label className="row gap-2 center" style={{ cursor: locked ? "default" : "pointer" }}>
                                   <PublicSwitch
@@ -412,9 +427,38 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
                                   />
                                   <span className="text-xs muted">Public</span>
                                 </label>
-                                {it.isPublic && it.followers > 0 && (
-                                  <span className="text-xs muted" style={{ marginLeft: "auto" }}>{it.followers} follower{it.followers === 1 ? "" : "s"}</span>
-                                )}
+                                <span className="row gap-1 center" style={{ marginLeft: "auto" }}>
+                                  {it.isPublic && it.followers > 0 && (
+                                    <span className="text-xs muted" style={{ marginRight: 4 }}>{it.followers} follower{it.followers === 1 ? "" : "s"}</span>
+                                  )}
+                                  {/* Reordering without a drag, for keyboards and touch.
+                                      At an end the button stays focusable and does nothing. */}
+                                  {movable && colItems.length > 1 && ([-1, 1] as const).map(step => {
+                                    const dir = step < 0 ? "up" : "down";
+                                    const end = step < 0 ? idx === 0 : idx === colItems.length - 1;
+                                    return (
+                                      <button
+                                        key={dir}
+                                        type="button"
+                                        className="btn ghost icon-only"
+                                        aria-label={`Move ${it.name} ${dir}`}
+                                        aria-disabled={end || undefined}
+                                        title={end ? undefined : `Move ${dir}`}
+                                        onClick={e => {
+                                          if (end) return;
+                                          const btn = e.currentTarget;
+                                          // Reordering can re-insert this card's node, which drops focus: put it back.
+                                          flushSync(() => moveCard(it.id, c.key, step < 0 ? idx - 1 : idx + 2));
+                                          btn.focus();
+                                          setPlacedSay(`${it.name} is ${step < 0 ? idx : idx + 2} of ${colItems.length} in ${c.label}.`);
+                                        }}
+                                        style={{ width: 24, height: 24, padding: 0, ...(end ? { opacity: 0.35, pointerEvents: "none" } : null) }}
+                                      >
+                                        <Ic.chevD aria-hidden style={{ width: 12, height: 12, transform: step < 0 ? "rotate(180deg)" : undefined }} />
+                                      </button>
+                                    );
+                                  })}
+                                </span>
                               </div>
                               {hidden && <span id={`pub-hint-${it.id}`} className="text-2xs muted">{PUBLIC_HINT}</span>}
                             </div>
@@ -432,6 +476,32 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/** The board's lanes while it loads: the same grid and headings, a couple of card-sized blocks in each. */
+export function InitiativesBoardSkeleton() {
+  return (
+    <div className="board-cols">
+      {COLUMNS.map(c => {
+        const shipped = c.key === "shipped";
+        return (
+          <div key={c.key} className="col gap-2" style={shipped ? { gridColumn: "1 / -1" } : undefined}>
+            <div className="col gap-0" style={{ padding: "2px 2px 6px" }}>
+              <span className="serif text-md">{c.label}</span>
+              <span className="text-xs muted">{c.hint}</span>
+            </div>
+            <div className={shipped ? "board-cols" : "col gap-2"} style={{ padding: shipped ? 0 : 4 }}>
+              {[0, 1].map(i => (
+                <div key={i} style={shipped ? { padding: 4 } : undefined}>
+                  <SkeletonBlock height={128} style={{ borderRadius: "var(--r-md)" }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

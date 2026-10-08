@@ -56,7 +56,7 @@ const PAID_PLANS: readonly Plan[] = ["team", "growth"];
 export const PLAN_FEATURES: readonly PlanFeature[] = [
   { label: "Capture, triage, replies and status flow", plans: EVERY_PLAN, feature: null },
   { label: "Feedback widget and in-app roadmap", plans: EVERY_PLAN, feature: null },
-  { label: "Customer emails when you reply or ship", plans: EVERY_PLAN, feature: null },
+  { label: "Customer emails for replies and status changes", plans: EVERY_PLAN, feature: null },
   {
     label: "AI suite: clustering, Ask, ticket and reply drafts",
     plans: PAID_PLANS,
@@ -133,13 +133,4 @@ export function usageAnalyticsAllowed(
   ws: Pick<Workspace, "planId" | "subscriptionStatus">,
 ): boolean {
   return isSelfHost() || hasFeature(ws, "usage_analytics");
-}
-
-// All feature gates the workspace currently has, for /me-style payloads.
-// (The billing page reads PLAN_FEATURES for its customer-facing lines.)
-export function workspaceFeatures(
-  ws: Pick<Workspace, "planId" | "subscriptionStatus">,
-): Feature[] {
-  if (!isCloud()) return [];
-  return [...PLAN_FEATURE_MAP[workspacePlan(ws)]];
 }

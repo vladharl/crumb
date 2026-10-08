@@ -3,7 +3,7 @@ import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db, pendingSignups, type PendingSignup } from "@crumb/db";
 
 // Pending-signup queries the confirm step and "Resend the link" need on top of
-// @crumb/db's create / find / consume / count helpers.
+// @crumb/db's create and count helpers.
 // ponytail: these belong in packages/db/src/pending-signups.ts; they live here
 // only because this change stays inside the signup route's files.
 
