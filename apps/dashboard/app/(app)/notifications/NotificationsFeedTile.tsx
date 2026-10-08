@@ -27,9 +27,9 @@ export async function NotificationsFeedTile({ filter = "all" }: { filter?: FeedF
         <div className="row gap-2 center">
           <MarkAllReadButton disabled={unread === 0} />
           <div className="seg">
-            <Link href="/notifications" aria-selected={filter === "all"}>All</Link>
-            <Link href="/notifications?filter=unread" aria-selected={filter === "unread"}>Unread · {unread}</Link>
-            <Link href="/notifications?filter=mentions" aria-selected={filter === "mentions"}>Mentions · {mentions}</Link>
+            <Link href="/notifications" aria-current={filter === "all" ? "page" : undefined}>All</Link>
+            <Link href="/notifications?filter=unread" aria-current={filter === "unread" ? "page" : undefined}>Unread · {unread}</Link>
+            <Link href="/notifications?filter=mentions" aria-current={filter === "mentions" ? "page" : undefined}>Mentions · {mentions}</Link>
           </div>
         </div>
       } />
@@ -50,7 +50,7 @@ export async function NotificationsFeedTile({ filter = "all" }: { filter?: FeedF
               <span className="text-sm truncate" style={{ display: "block" }}>
                 <span className={e.unread ? "fw-med" : "muted"}>{e.who}</span>
                 {e.whoSub && <span className="muted"> · {e.whoSub}</span>}
-                <span className={e.mentioned ? "" : "muted"} style={e.mentioned ? { color: "var(--accent)", fontWeight: 500 } : undefined}> {e.what} </span>
+                <span className={e.mentioned ? "" : "muted"} style={e.mentioned ? { color: "var(--accent-deep)", fontWeight: 500 } : undefined}> {e.what} </span>
                 <span className={e.unread ? "" : "muted"}>{e.item}</span>
                 {e.internal && <Pill style={{ marginLeft: 6 }}><Ic.lock style={{ width: 9, height: 9 }} />Internal</Pill>}
               </span>

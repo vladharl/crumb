@@ -49,7 +49,7 @@ export function DisconnectLinearButton({ teamName }: { teamName: string | null }
         onClick={async () => {
           if (!(await confirm({
             title: `Disconnect Linear (${teamName ?? "team"})?`,
-            body: "Existing ticket links stay on items, but status sync will stop.",
+            body: "Existing ticket links stay on requests, but status sync will stop.",
             confirmLabel: "Disconnect",
             destructive: true,
           }))) return;

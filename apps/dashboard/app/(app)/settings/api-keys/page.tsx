@@ -54,7 +54,7 @@ export default async function ApiKeysPage() {
         <CardHead title="Connect over MCP" />
         <div className="card-body col gap-3">
           <p className="text-sm muted note">
-            Crumb exposes a Model Context Protocol server at the URL below. Point an MCP client (Claude Desktop, Cursor, or any MCP host) at it and authenticate with a key from above. The server offers tools to list and search feedback, read threads, list accounts and the roadmap, change status, reply, assign, and create items.
+            Crumb exposes a Model Context Protocol server at the URL below. Point an MCP client (Claude Desktop, Cursor, or any MCP host) at it and authenticate with a key from above. The server offers tools to list and search feedback, read threads, list accounts and the roadmap, change status, reply, assign, and create requests.
           </p>
           <div className="code">{mcpUrl}</div>
           <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>

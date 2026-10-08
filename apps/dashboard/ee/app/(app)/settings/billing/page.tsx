@@ -7,6 +7,7 @@ import {
 } from "@/lib/stripe";
 import { PLAN_FEATURES, planDisplayName, workspacePlan, type Plan } from "@/lib/entitlements";
 import { getUsageSummary, type UsageMetric } from "@/lib/usage";
+import { formatDate } from "@/lib/timefmt";
 import { PlanPicker, ManageButton, CheckoutReturn, FeatureList, type FeatureLine, type PlanCard } from "./BillingActions";
 
 const USAGE_LABEL: Record<UsageMetric, string> = {
@@ -22,6 +23,7 @@ const UPGRADES: { id: PaidPlan; over: Plan }[] = [
 ];
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Billing · Settings" };
 
 // A plan's customer-facing lines from PLAN_FEATURES. With `over`, only what the
 // plan adds on top of that one: new features, or a bigger allowance.
@@ -38,10 +40,6 @@ function formatBytes(n: number): string {
   if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
   if (n >= 1024) return `${Math.round(n / 1024)} KB`;
   return `${n} B`;
-}
-
-function formatDate(d: Date): string {
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 // Whole days from now until `d` (negative if past). Used for the trial

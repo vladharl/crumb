@@ -63,4 +63,3 @@
   border-radius: var(--r-sm);
 }
 .hint:hover { color: var(--text); background: var(--hover); }
-.hint:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--accent-soft); }

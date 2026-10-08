@@ -116,7 +116,7 @@ export function priority(input: PriorityInput, now: number): Priority {
   const factors: PriorityFactor[] = [
     {
       key: "revenue",
-      label: input.arrAtStakeCents > 0 ? "ARR at stake" : "No ARR set on the account",
+      label: input.arrAtStakeCents > 0 ? "ARR at stake" : "ARR not set",
       delta: null,
     },
   ];
@@ -164,14 +164,18 @@ export function byPriorityDesc(
 }
 
 /**
- * Shared ARR formatter. The four pre-existing per-page `arr()` copies disagree
- * on the zero case; new revenue-priority surfaces all route through this one so
- * "$480k" / "$1.2M" reads identically everywhere. Callers decide how to render
- * zero (the inbox shows "ARR not set", never "$0").
+ * The one ARR formatter: "$1.2M", "$480k", and exact dollars under $1k ("$500",
+ * never "$0k" or "$1k"). An account's zero reads "ARR not set", never "$0".
+ * `suffix` (" ARR", " at stake") is appended to amounts only, so the zero
+ * state never reads "ARR not set ARR". A sum over a subset (ARR at stake, at
+ * risk) passes `zero = "$0"`: nothing at stake is not the same as no ARR set.
  */
-export function formatArr(cents: number): string {
-  if (cents <= 0) return "$0";
-  if (cents >= 100_000_000) return `$${(cents / 100_000_000).toFixed(1)}M`;
-  if (cents >= 100_000) return `$${Math.round(cents / 100_000)}k`;
-  return `$${Math.round(cents / 100)}`;
+export function formatArr(cents: number, suffix = "", zero = "ARR not set"): string {
+  if (!(cents > 0)) return zero;
+  const dollars = Math.round(cents / 100);
+  if (dollars < 1000) return `$${dollars}${suffix}`;
+  const k = Math.round(dollars / 1000);
+  // $999,500 rounds to 1000k, so it reads as millions instead.
+  if (k < 1000) return `$${k}k${suffix}`;
+  return `$${(dollars / 1_000_000).toFixed(1)}M${suffix}`;
 }

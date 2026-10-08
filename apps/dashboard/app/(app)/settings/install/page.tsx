@@ -12,7 +12,7 @@ import { installSnippets } from "./snippets";
 import { TEST_CUSTOMER_ACCOUNT } from "./test-customer";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Install · Settings" };
+export const metadata = { title: "Install widget · Settings" };
 
 export default async function InstallPage() {
   const { workspace, user } = await getActiveSession();
@@ -129,7 +129,9 @@ export default async function InstallPage() {
                 : "Once inbound email is set up, customers can reply to notification emails and the reply lands back on the thread. Until then, those emails go out from a noreply address."}
             </p>
 
-            {!cloud && (
+            {/* Env var names and webhook steps are for whoever runs the
+                server: admins only, like Settings, Integrations. */}
+            {!cloud && user.role === "admin" && (
               <div className="col gap-3">
                 <span className="eyebrow">Server setup (self-host)</span>
                 {inboundDomain ? (

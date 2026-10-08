@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Btn, Ic, Pill } from "@crumb/ui";
+import { errorMessage } from "@/lib/action-error";
 import { revealSecret, rotateSecret } from "./actions";
 
 export function SecretReveal({ isAdmin }: { isAdmin: boolean }) {
@@ -23,7 +24,7 @@ export function SecretReveal({ isAdmin }: { isAdmin: boolean }) {
     startTransition(async () => {
       const r = await revealSecret();
       if (r.ok) setSecret(r.secret);
-      else setError(r.error);
+      else setError(errorMessage(r.error));
     });
   };
 
@@ -32,7 +33,7 @@ export function SecretReveal({ isAdmin }: { isAdmin: boolean }) {
     startTransition(async () => {
       const r = await rotateSecret();
       if (r.ok) { setSecret(r.secret); setConfirming(false); }
-      else setError(r.error);
+      else setError(errorMessage(r.error));
     });
   };
 
@@ -59,7 +60,7 @@ export function SecretReveal({ isAdmin }: { isAdmin: boolean }) {
         border: "var(--border)",
         borderRadius: "var(--r-sm)",
         padding: "8px 10px",
-        background: "var(--bone-2)",
+        background: "var(--surface-2)",
       }}>
         <span className="mono text-xs" style={{ flex: 1, wordBreak: "break-all", lineHeight: 1.5 }}>{secret}</span>
         <Btn sm variant="ghost" icon={<Ic.copy style={{ width: 11, height: 11 }} />} onClick={onCopy}>Copy</Btn>

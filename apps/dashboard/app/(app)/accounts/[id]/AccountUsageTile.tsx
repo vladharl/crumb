@@ -58,7 +58,7 @@ export async function AccountUsageTile({ accountId }: { accountId: string }) {
                   <span className="text-xs muted">{e.count.toLocaleString()}</span>
                 </div>
                 <div style={{ height: 4, borderRadius: 999, background: "var(--surface-2)", overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${Math.max(4, (e.count / maxCount) * 100)}%`, background: "var(--accent)", borderRadius: 999 }} />
+                  <div style={{ height: "100%", width: `${Math.max(4, (e.count / maxCount) * 100)}%`, background: "var(--brown-65)", borderRadius: 999 }} />
                 </div>
               </div>
             ))}

@@ -218,7 +218,7 @@ export function ExternalTicketModal({
               aria-label="Close"
               onClick={close}
               disabled={pending}
-              style={{ background: "none", border: 0, padding: 4, cursor: "pointer", color: "var(--mute)" }}
+              style={{ background: "none", border: 0, padding: 5, cursor: "pointer", color: "var(--mute)" }}
             >
               <Ic.x style={{ width: 14, height: 14 }} />
             </button>
@@ -315,10 +315,10 @@ export function ExternalTicketModal({
             <input
               ref={titleRef}
               id="ext-title"
+              className="input"
               value={title}
               onChange={e => { edited.current = true; setTitle(e.target.value); }}
               maxLength={240}
-              style={inputStyle}
             />
           </div>
 
@@ -326,10 +326,10 @@ export function ExternalTicketModal({
             <label className="eyebrow" htmlFor="ext-body">Description</label>
             <textarea
               id="ext-body"
+              className="input"
               value={body}
               onChange={e => { edited.current = true; setBody(e.target.value); }}
               rows={8}
-              style={{ ...inputStyle, resize: "vertical", lineHeight: 1.55 }}
             />
             {aiInForm && provider !== "github" && (
               <span className="text-xs muted">The draft ends with the customer&apos;s name and ARR. Remove that if people outside your team can read {providerLabel}.</span>
@@ -340,10 +340,10 @@ export function ExternalTicketModal({
             <label className="eyebrow" htmlFor="ext-labels">Labels</label>
             <input
               id="ext-labels"
+              className="input"
               value={labels}
               onChange={e => { edited.current = true; setLabels(e.target.value); }}
               placeholder="Comma separated"
-              style={inputStyle}
             />
             {provider !== "github" && labels.trim() && (
               <span className="text-xs muted">{providerLabel} gets these as the last line of the description.</span>
@@ -397,16 +397,6 @@ export function ExternalTicketModal({
   );
 }
 
-const inputStyle: React.CSSProperties = {
-  background: "var(--surface)",
-  border: "1px solid var(--line, var(--hair))",
-  borderRadius: "var(--r-sm)",
-  padding: "8px 10px",
-  font: "inherit",
-  color: "var(--ink)",
-  width: "100%",
-};
-
 function humanError(code: string, provider: Provider): string {
   const name = PROVIDER_LABEL[provider];
   switch (code) {
@@ -417,7 +407,7 @@ function humanError(code: string, provider: Provider): string {
     case "no_team":                return "Pick a team first.";
     case "no_project":             return "Pick a project first.";
     case "no_repo":                return "Pick a repository first.";
-    case "already_linked":         return "This item is already linked to a ticket.";
+    case "already_linked":         return "This request is already linked to a ticket.";
     case "provider_create_failed": return `${name} didn't create the ticket. Check the integration's permissions and try again.`;
     case "provider_list_failed":   return `Couldn't load targets from ${name}.`;
     case "targets_timeout":        return `${name} took too long to answer.`;

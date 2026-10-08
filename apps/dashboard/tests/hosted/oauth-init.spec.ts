@@ -5,7 +5,8 @@ import { PROVIDERS, EXPECTED_APP_URL, captureAuthorizeUrl, hasSession } from "./
 //   • it is configured on the host → clicking Connect produces a correct
 //     authorize URL (right host, redirect_uri = CRUMB_APP_URL + callback path,
 //     client_id, scopes, signed state) — WITHOUT completing the flow; or
-//   • it is not configured → the self-host "Set <ENV>" pill is shown.
+//   • it is not configured → the card says "Not set up", and on self-host its
+//     setup details (admins only) name the env vars to set.
 //
 // Safe: we abort the cross-origin navigation before it reaches the provider, so
 // no token exchange and no workspace mutation happens. Requires a dashboard
@@ -24,7 +25,7 @@ test.describe("OAuth init wiring", () => {
 
       const connect = page.getByRole("button", { name: p.connectBtn, exact: true });
       if ((await connect.count()) === 0) {
-        // Not connectable from the UI: either env not set (self-host pill) or
+        // Not connectable from the UI: either env not set (setup details) or
         // already connected. Record which, and assert the card rendered.
         const notConfigured = (await page.getByText(p.setEnvText, { exact: false }).count()) > 0;
         testInfo.annotations.push({

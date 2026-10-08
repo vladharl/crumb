@@ -82,6 +82,7 @@ export function AskBox({ usageEnabled = false, notice, capNotice }: {
             <Ic.sparkle style={{ width: 14, height: 14, color: "var(--accent-deep)", flexShrink: 0 }} />
             <input
               className="input"
+              aria-label="Ask about your feedback or usage"
               placeholder="Ask anything about your feedback or usage…"
               value={q}
               onChange={e => setQ(e.target.value)}

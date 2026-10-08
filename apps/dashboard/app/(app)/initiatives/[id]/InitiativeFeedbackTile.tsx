@@ -39,7 +39,7 @@ export async function InitiativeFeedbackTile({ id }: { id: string }) {
         {feedback.length === 0 && (
           <div className="card-body">
             <p className="text-sm muted" style={{ margin: 0 }}>
-              No items grouped here yet. Use <strong style={{ fontWeight: 600 }}>Add items</strong> above, or set this initiative from the inbox or a thread sidebar.
+              No requests grouped here yet. Use <strong style={{ fontWeight: 600 }}>Add requests</strong> above, or set this initiative from the inbox or a thread sidebar.
             </p>
           </div>
         )}

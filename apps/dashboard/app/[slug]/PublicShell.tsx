@@ -4,6 +4,7 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import { originFromHeaders } from "@/lib/origin";
 import { publicWorkspace } from "@/lib/public-follows";
+import { formatDate } from "@/lib/timefmt";
 
 // The public roadmap and changelog (/<slug>/roadmap, /<slug>/changelog): the
 // vendor's pages for anyone with the link, no session and no dashboard chrome.
@@ -75,5 +76,4 @@ export function PublicShell({ ws, page, title, lede, width, children }: {
   );
 }
 
-export const dayLabel = (d: Date | string) =>
-  new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+export const dayLabel = (d: Date | string) => formatDate(d, { utc: true });

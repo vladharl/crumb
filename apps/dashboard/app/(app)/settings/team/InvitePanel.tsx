@@ -83,17 +83,7 @@ export function InvitePanel({ canInvite }: { canInvite: boolean }) {
             <input name="name" required className="input" placeholder="First Last" disabled={pending} />
           </Field>
           <Field label="Role">
-            <div className="seg" style={{ width: "100%" }}>
-              <label style={{ flex: 1, textAlign: "center", padding: "5px 6px", cursor: "pointer" }}>
-                <input type="radio" name="role" value="admin" style={{ display: "none" }} /> Admin
-              </label>
-              <label style={{ flex: 1, textAlign: "center", padding: "5px 6px", cursor: "pointer" }}>
-                <input type="radio" name="role" value="pm" defaultChecked style={{ display: "none" }} /> PM
-              </label>
-              <label style={{ flex: 1, textAlign: "center", padding: "5px 6px", cursor: "pointer" }}>
-                <input type="radio" name="role" value="viewer" style={{ display: "none" }} /> Viewer
-              </label>
-            </div>
+            <RolePicker disabled={pending} />
           </Field>
 
           {result.kind === "error" && (
@@ -110,6 +100,47 @@ export function InvitePanel({ canInvite }: { canInvite: boolean }) {
         </form>
       )}
     </div>
+  );
+}
+
+const ROLES = [["admin", "Admin"], ["pm", "PM"], ["viewer", "Viewer"]] as const;
+
+// The invite's role as one radio group in the segmented look: Tab lands on
+// the chosen role, arrows move the choice, and the form posts it as `role`.
+function RolePicker({ disabled }: { disabled: boolean }) {
+  const [role, setRole] = useState<string>("pm");
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const i = (ROLES.findIndex(([v]) => v === role) + step + ROLES.length) % ROLES.length;
+    setRole(ROLES[i][0]);
+    (e.currentTarget.parentElement?.children[i] as HTMLElement | undefined)?.focus();
+  }
+
+  return (
+    <>
+      <input type="hidden" name="role" value={role} />
+      <div className="seg" role="radiogroup" aria-label="Role" style={{ width: "100%" }}>
+        {ROLES.map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={role === value}
+            tabIndex={role === value ? 0 : -1}
+            disabled={disabled}
+            onClick={() => setRole(value)}
+            onKeyDown={onKeyDown}
+            // The selected segment's ink fill (.seg's own selected style keys on aria-selected).
+            style={{ flex: 1, ...(role === value ? { background: "var(--text)", color: "var(--cream)" } : null) }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -202,9 +233,10 @@ export function ResendButton({ id }: { id: string }) {
       <div className="row gap-2 center" style={{ minWidth: 0 }}>
         <input
           readOnly
+          aria-label="Invite link"
           value={result.link}
           className="input mono text-xs"
-          style={{ flex: 1, padding: "2px 6px", height: 22 }}
+          style={{ flex: 1, padding: "2px 6px", height: 24 }}
           onFocus={e => e.currentTarget.select()}
         />
         <Btn sm variant="ghost" icon={<Ic.copy style={{ width: 11, height: 11 }} />}

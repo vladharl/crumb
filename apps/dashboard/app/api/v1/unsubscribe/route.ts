@@ -14,7 +14,7 @@ const SCOPES = {
   all:     { name: "all email",       about: "about your feedback and their roadmap",       off: { unsubscribedAll: true }, on: { unsubscribedAll: false } },
   replies: { name: "replies",         about: "when they reply to your feedback",            off: { notifyReplies: false },  on: { notifyReplies: true } },
   status:  { name: "status changes",  about: "when your feedback changes status",           off: { notifyStatus: false },   on: { notifyStatus: true } },
-  roadmap: { name: "roadmap updates", about: "about roadmap items you follow or asked for", off: { notifyRoadmap: false },  on: { notifyRoadmap: true } },
+  roadmap: { name: "roadmap updates", about: "about what you follow or asked for on their roadmap", off: { notifyRoadmap: false },  on: { notifyRoadmap: true } },
 } as const;
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);

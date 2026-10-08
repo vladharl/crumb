@@ -26,6 +26,8 @@ export type ExternalTicketTileProps = {
   itemTitle: string;
   itemBody: string;
   aiAvailable: boolean;
+  /** Admins get the self-host fix (env var names); everyone else is pointed at an admin. */
+  isAdmin?: boolean;
   workspace: {
     linearInstalledAt: string | null;
     jiraInstalledAt: string | null;
@@ -48,11 +50,13 @@ const PROVIDER_LABEL: Record<"linear" | "jira" | "github", string> = {
 
 // What to do when `provider` can't push status updates here. On Cloud, Jira
 // registers a webhook per install, which reconnecting retries; the rest need
-// the deployment's own webhook secret.
-function syncFix(provider: "linear" | "jira" | "github", cloud: boolean): ReactNode {
+// the deployment's own webhook secret, which only an admin can act on (and
+// only admins see the setup steps in Settings, Integrations).
+function syncFix(provider: "linear" | "jira" | "github", cloud: boolean, isAdmin: boolean): ReactNode {
   const settings = <Link href="/settings/integrations" style={{ color: "var(--ink)" }}>Settings, Integrations</Link>;
   if (provider === "jira" && cloud) return <>An admin can reconnect Jira in {settings} to set them up.</>;
   if (cloud) return <>This deployment hasn&apos;t configured its {PROVIDER_LABEL[provider]} webhook.</>;
+  if (!isAdmin) return <>An admin can set this up in Settings, Integrations.</>;
   if (provider === "github") {
     return <>Set <span className="mono">GITHUB_WEBHOOK_SECRET</span> to your GitHub App&apos;s webhook secret, then restart Crumb.</>;
   }
@@ -60,7 +64,7 @@ function syncFix(provider: "linear" | "jira" | "github", cloud: boolean): ReactN
   return <>They need a webhook in {PROVIDER_LABEL[provider]} signed with <span className="mono">{secret}</span>; {settings} shows how.</>;
 }
 
-export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailable, workspace, item }: ExternalTicketTileProps) {
+export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailable, isAdmin = false, workspace, item }: ExternalTicketTileProps) {
   const router = useRouter();
   const confirm = useConfirm();
   const toast = useToast();
@@ -104,7 +108,7 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
     async function onUnlink() {
       if (!(await confirm({
         title: `Unlink ${item.externalTicketId}?`,
-        body: `The ticket in ${providerLabel} stays; only the link from this Crumb item is removed.`,
+        body: `The ticket in ${providerLabel} stays; only the link from this Crumb request is removed.`,
         confirmLabel: "Unlink",
         destructive: true,
       }))) return;
@@ -137,7 +141,7 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
           </div>
           {sync && !sync.setUp ? (
             <span className="text-xs muted" style={{ lineHeight: 1.55 }}>
-              Status updates aren&apos;t set up for {providerLabel} yet. {syncFix(item.externalProvider!, sync.cloud)}
+              Status updates aren&apos;t set up for {providerLabel} yet. {syncFix(item.externalProvider!, sync.cloud, isAdmin)}
             </span>
           ) : item.externalSyncedAt ? (
             // Local time: the server's render and the browser's can differ.
@@ -164,7 +168,7 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
         <CardHead title="Engineering" />
         <div className="card-body col gap-2">
           <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.55 }}>
-            Connect Linear, Jira, or GitHub to push this item out as a ticket and sync engineering status back.
+            Connect Linear, Jira, or GitHub to push this request out as a ticket and sync engineering status back.
           </p>
           <Link href="/settings/integrations" className="link-back" style={{ alignSelf: "flex-start" }}>
             Settings → Integrations →
@@ -189,8 +193,8 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
         <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.55 }}>
           {createReady
             ? multiProvider
-              ? "Push this item out as a ticket in the tracker you pick."
-              : `Push this item out as a ${providerLabel} ticket.`
+              ? "Push this request out as a ticket in the tracker you pick."
+              : `Push this request out as a ${providerLabel} ticket.`
             : "Connect a provider in Settings to create a ticket from here."}
         </p>
         <div className="row gap-2">

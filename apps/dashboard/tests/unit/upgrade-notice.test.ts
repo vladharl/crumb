@@ -65,8 +65,14 @@ describe("AI usage notice", () => {
   });
 
   it("warns from 80% and pauses at 100%, with the reset date", () => {
-    expect(aiUsageCopy(85, resets, false, "team")?.text).toBe("You've used 85% of this month's AI operations. Resets Nov 1.");
-    expect(aiUsageCopy(100, resets, false, "team")?.text).toBe("AI is paused until Nov 1.");
+    // The date drops its year only within the current year, so pin "now".
+    vi.useFakeTimers({ now: new Date("2026-10-15T12:00:00Z") });
+    try {
+      expect(aiUsageCopy(85, resets, false, "team")?.text).toBe("You've used 85% of this month's AI operations. Resets 1 Nov.");
+      expect(aiUsageCopy(100, resets, false, "team")?.text).toBe("AI is paused until 1 Nov.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("gives Team admins the upgrade path, and nobody else", () => {

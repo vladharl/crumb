@@ -6,6 +6,7 @@ import { Btn, Pill } from "@crumb/ui";
 import { useConfirm } from "@/components/confirm";
 import { useToast } from "@/components/toast";
 import { errorMessage } from "@/lib/action-error";
+import { formatDate } from "@/lib/timefmt";
 import { CopySnippetButton } from "@/app/(app)/settings/install/CopySnippetButton";
 import { createApiKey, revokeApiKey } from "./actions";
 
@@ -21,7 +22,7 @@ export type KeyView = {
 
 function used(k: KeyView): string {
   if (!k.lastUsedAt) return "Never used";
-  return `Last used ${new Date(k.lastUsedAt).toLocaleDateString()}`;
+  return `Last used ${formatDate(k.lastUsedAt)}`;
 }
 
 export function ApiKeysPanel({ initial, isAdmin }: { initial: KeyView[]; isAdmin: boolean }) {
@@ -76,6 +77,7 @@ export function ApiKeysPanel({ initial, isAdmin }: { initial: KeyView[]; isAdmin
           <input
             value={name}
             onChange={e => setName(e.target.value)}
+            aria-label="Key name"
             placeholder="Key name (e.g. Claude Desktop)"
             style={{ flex: 1, minWidth: 260, background: "var(--surface)", border: "var(--border)", borderRadius: "var(--r-sm)", padding: "8px 10px", font: "inherit", color: "var(--ink)" }}
           />

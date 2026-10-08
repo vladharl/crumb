@@ -14,22 +14,29 @@
   --brown:        #4A2E1F;          /* toasted — primary ink */
   --brown-2:      #6A4528;
 
+  /* Each hue's -deep step is its text colour. The base hues are for fills,
+     dots and bars only: on cream ember is 2.7:1, green 3.5:1, amber 2.2:1.
+     Every -deep clears 4.5:1 (AA body text) on cream, cream-2, the hover and
+     selected washes and its own -soft wash. ember-deep was #B45F23 (4.3:1,
+     AA large text only). */
   --ember:        #E27D3A;          /* the trail */
   --ember-soft:   #FCE9D6;
-  --ember-deep:   #B45F23;
+  --ember-deep:   #9C4C17;          /* ember text: 5.7:1 on cream */
 
   --green:        #6B8E5A;          /* shipped */
   --green-soft:   #E8EFE0;
+  --green-deep:   #506A43;          /* green text: 5.6:1 on cream */
   --amber:        #D4A24C;          /* set aside */
   --amber-soft:   #F8EFD5;
+  --amber-deep:   #7F5C1F;          /* amber text: 5.7:1 on cream */
   --rust:         #B3573A;          /* won't ship */
   --rust-soft:    #F3DBCE;
-  --rust-deep:    #8a3a3a;          /* error text */
+  --rust-deep:    #8a3a3a;          /* error and rust text: 7.2:1 on cream */
 
   /* Form / inline error states — derive from rust so the palette stays two-tone */
   --err-text:     var(--rust-deep);
-  --err-bg:       rgba(180, 60, 60, 0.06);
-  --err-border:   rgba(180, 60, 60, 0.22);
+  --err-bg:       rgba(179, 87, 58, 0.06);
+  --err-border:   rgba(179, 87, 58, 0.22);
 
   --warm-gray:    #8A8278;
 
@@ -59,6 +66,12 @@
   --accent:       var(--ember);
   --accent-soft:  var(--ember-soft);
   --accent-deep:  var(--ember-deep);
+  /* The keyboard focus ring (see :focus-visible below): 4.6:1 or more on
+     every light surface, where bright ember (2.7:1) misses the 3:1 a focus
+     indicator needs. */
+  --focus-ring:   var(--ember-deep);
+  /* Modal and sheet backdrop: oat-deep at 45%, never black. */
+  --scrim:        rgba(26, 24, 21, 0.45);
 
   /* Legacy aliases — a long tail of components references these names.
      They must resolve to the semantic layer above, never diverge from it. */
@@ -66,6 +79,8 @@
   --paper:        var(--surface);
   --line:         var(--hair);
   --danger:       var(--rust);
+  --bone:         var(--bg);
+  --bone-2:       var(--surface-2);
 
   /* —— Type —— */
   /* Self-hosted via next/font (app/layout.tsx) — the *-loaded vars hold the
@@ -74,6 +89,7 @@
   --font-display: var(--font-display-loaded, 'General Sans'), 'GT Walsheim', 'Söhne', system-ui, sans-serif;
   --font-body:    var(--font-body-loaded, 'Inter'), system-ui, sans-serif;
   --font-mono:    var(--font-mono-loaded, 'JetBrains Mono'), ui-monospace, monospace;
+  --font-serif:   var(--font-display);  /* legacy name, like .serif below */
 
   /* rem, not px, so browser font-size preference is respected. Values are exact
      /16 conversions of the prior px scale — rendered size is unchanged at default. */
@@ -154,6 +170,35 @@ body {
 
 button { font: inherit; color: inherit; }
 
+/* Focus: one ring for every control, and no component turns it off.
+   Keyboard focus is a sanctioned use of ember (One-Trail Rule): a 2px
+   --focus-ring with the 3px ember-soft glow around it. A box that wraps a
+   bare input wears the ring for it (.inbox-search, .help-search). <main>
+   is focused only as the skip link's landing, so it wears none. */
+:focus-visible,
+.inbox-search:focus-within,
+.help-search:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+  box-shadow: 0 0 0 5px var(--accent-soft);
+}
+.inbox-search .input:focus-visible,
+.help-search-input:focus-visible,
+#main:focus-visible { outline: none; box-shadow: none; }
+/* Where the container clips its overflow (segmented controls, the bell
+   list) the ring draws inside the control, in ember-soft on the selected
+   ink segment so it still reads there. */
+.seg button:focus-visible,
+.seg a:focus-visible,
+.bell-row:focus-visible,
+.bell-foot:focus-visible {
+  outline-offset: -2px;
+  box-shadow: none;
+}
+.seg [aria-selected="true"]:focus-visible,
+.seg [aria-checked="true"]:focus-visible,
+.seg [aria-current="page"]:focus-visible { outline-color: var(--accent-soft); }
+
 h1, h2, h3, h4 {
   margin: 0;
   font-family: var(--font-display);
@@ -206,7 +251,7 @@ h1, h2, h3, h4 {
   font-family: var(--font-body);
   font-size: var(--fs-xs);
   font-style: italic;
-  color: var(--mute-2);
+  color: var(--mute);
   padding-left: 9px;
   border-left: var(--border);
   white-space: nowrap;
@@ -236,7 +281,7 @@ h1, h2, h3, h4 {
   transition: color var(--dur-base) var(--ease-out-quart), background var(--dur-base) var(--ease-out-quart);
 }
 .topnav-item:hover { color: var(--text); background: var(--hover); }
-.topnav-item[aria-selected="true"] { color: var(--text); background: var(--accent-soft); }
+.topnav-item[aria-current="page"] { color: var(--text); background: var(--accent-soft); }
 .topbar-right {
   margin-left: auto;
   display: flex;
@@ -314,7 +359,7 @@ h1, h2, h3, h4 {
   position: fixed;
   inset: 0;
   z-index: 80;
-  background: rgba(28, 24, 21, 0.45);
+  background: var(--scrim);
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -340,7 +385,10 @@ h1, h2, h3, h4 {
   appearance: none;
   border: 0;
   background: transparent;
-  outline: 0;
+  /* Room for the focus ring around the text; the negative margin keeps the
+     row's layout where it was. */
+  padding: 4px 6px;
+  margin: -4px -6px;
   font-family: var(--font-body);
   font-size: var(--fs-md);
   color: var(--text);
@@ -375,7 +423,7 @@ h1, h2, h3, h4 {
 }
 .cmdk-opt.active, .cmdk-opt:hover { background: var(--hover); }
 .cmdk-opt-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cmdk-opt-hint { font-size: var(--fs-xs); color: var(--mute-2); flex-shrink: 0; }
+.cmdk-opt-hint { font-size: var(--fs-xs); color: var(--mute); flex-shrink: 0; }
 .cmdk-empty { padding: 16px 10px; color: var(--mute); font-size: var(--fs-sm); }
 
 /* brand block */
@@ -454,12 +502,12 @@ h1, h2, h3, h4 {
   line-height: 1.3;
 }
 .nav-item:hover { color: var(--text); background: var(--hover); }
-.nav-item[aria-selected="true"] {
+.nav-item[aria-selected="true"], .nav-item[aria-current="page"] {
   color: var(--text);
   font-weight: 500;
   position: relative;
 }
-.nav-item[aria-selected="true"]::before {
+.nav-item[aria-selected="true"]::before, .nav-item[aria-current="page"]::before {
   content: "";
   position: absolute;
   left: -16px;
@@ -475,7 +523,7 @@ h1, h2, h3, h4 {
   flex-shrink: 0;
   opacity: 0.6;
 }
-.nav-item[aria-selected="true"] .ic { opacity: 1; color: var(--accent); }
+.nav-item[aria-selected="true"] .ic, .nav-item[aria-current="page"] .ic { opacity: 1; color: var(--accent); }
 
 .nav-foot {
   margin-top: auto;
@@ -501,7 +549,7 @@ h1, h2, h3, h4 {
   width: fit-content;
   font-family: var(--font-body);
 }
-.link-back:hover { color: var(--accent); }
+.link-back:hover { color: var(--accent-deep); }
 
 /* mobile sheet scaffolding (hidden on desktop) */
 .scrim { display: none; }
@@ -669,7 +717,7 @@ h1, h2, h3, h4 {
 .btn.danger:hover { background: var(--err-text); color: var(--cream); filter: brightness(1.12); }
 
 /* @-mention chip in rendered internal notes */
-.mention { color: var(--accent); font-weight: 500; background: rgba(226, 125, 58, 0.10); border-radius: 4px; padding: 0 3px; }
+.mention { color: var(--accent-deep); font-weight: 500; background: rgba(226, 125, 58, 0.10); border-radius: 4px; padding: 0 3px; }
 
 /* @-mention autocomplete dropdown (thread composer) */
 .mention-menu {
@@ -706,11 +754,6 @@ h1, h2, h3, h4 {
 }
 .dd-trigger.sm { padding: 4px 8px; font-size: var(--fs-sm); }
 .dd-trigger:hover:not(:disabled) { border-color: var(--mute-2); }
-.dd-trigger:focus-visible {
-  outline: 0;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
 .dd-trigger:disabled { opacity: .55; cursor: default; }
 .dd-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dd-value.dd-ph { color: var(--mute); }
@@ -754,6 +797,10 @@ h1, h2, h3, h4 {
 }
 .dd-opt-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dd-opt.active:not(:disabled), .dd-opt:hover:not(:disabled) { background: var(--hover); }
+/* The active row is the listbox's focus mark (the list itself wears no ring):
+   a focus-ring bar on top of the wash, which alone is ~1.1:1. */
+.dd-opt.active:not(:disabled) { box-shadow: inset 2px 0 0 var(--focus-ring); }
+.dd-menu [role="listbox"]:focus-visible { box-shadow: none; }
 .dd-opt:disabled { opacity: .5; cursor: default; }
 .dd-opt .dd-tick { width: 12px; height: 12px; flex-shrink: 0; color: var(--accent); }
 .dd-create { color: var(--accent-deep); }
@@ -874,7 +921,7 @@ h1, h2, h3, h4 {
 }
 .pill.green {
   background: transparent;
-  color: var(--green);
+  color: var(--green-deep);
   border-color: rgba(107, 142, 90, 0.35);
 }
 .pill.amber {
@@ -884,7 +931,7 @@ h1, h2, h3, h4 {
 }
 .pill.rust {
   background: transparent;
-  color: var(--rust);
+  color: var(--rust-deep);
   border-color: rgba(179, 87, 58, 0.32);
 }
 .pill.ghost {
@@ -892,9 +939,11 @@ h1, h2, h3, h4 {
   border-color: var(--hair);
   color: var(--mute);
 }
+/* A pill is read, so even the muted one stays on --mute (warm gray is
+   decorative only); the same as ghost now, kept for its callers. */
 .pill.muted {
   background: transparent;
-  color: var(--mute-2);
+  color: var(--mute);
   border-color: var(--hair);
 }
 .pill .dot {
@@ -1003,13 +1052,9 @@ h1, h2, h3, h4 {
   transition: border-color var(--dur-base) var(--ease-out-quart);
 }
 .input::placeholder { color: var(--mute); }
-.input:focus {
-  outline: 0;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.input.search { background: transparent; border-color: var(--hair); }
+.input.search { background: transparent; border: 0; padding: 0; }  /* bare, inside .inbox-search */
 textarea.input { resize: vertical; min-height: 80px; }
+select.input { appearance: auto; }  /* keep the native arrow */
 
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field-label {
@@ -1062,10 +1107,6 @@ textarea.input { resize: vertical; min-height: 80px; }
   transition: background .15s, border-color .15s;
   flex-shrink: 0;
 }
-.switch:focus-visible {
-  outline: 0;
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
 .switch::after {
   content: "";
   width: 10px; height: 10px;
@@ -1099,7 +1140,7 @@ textarea.input { resize: vertical; min-height: 80px; }
 }
 .seg button:last-child, .seg a:last-child { border-right: 0; }
 .seg button:hover, .seg a:hover { color: var(--text); }
-.seg button[aria-selected="true"], .seg a[aria-selected="true"] {
+.seg button[aria-selected="true"], .seg a[aria-current="page"] {
   background: var(--text);
   color: var(--cream);
 }
@@ -1678,7 +1719,7 @@ details > summary::-webkit-details-marker { display: none; }
   transition: color var(--dur-fast) var(--ease-out-quart),
               gap var(--dur-base) var(--ease-out-quart);
 }
-.inbox-empty-link:hover { color: var(--ember); gap: 8px; }
+.inbox-empty-link:hover { color: var(--text); gap: 8px; }
 .inbox-empty-link svg { transition: transform var(--dur-base) var(--ease-out-quart); }
 
 /* The trail lands: each crumb scales up from a seed, left to right, settling
@@ -1742,10 +1783,8 @@ details > summary::-webkit-details-marker { display: none; }
   border-radius: var(--r-sm);
   padding: 6px 10px;
 }
-/* The whole field lights as one input on focus — the inner input's own ring
-   is suppressed so the box carries the single ember focus signature. */
-.inbox-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.inbox-search .input:focus { box-shadow: none; }
+/* The whole field lights as one input on focus: the box wears the focus ring
+   and the inner input hands its own over (see :focus-visible up top). */
 .inbox-tools {
   flex: 0 0 auto;
   display: flex;
@@ -1760,8 +1799,10 @@ details > summary::-webkit-details-marker { display: none; }
    narrowest viewports fall back to scrolling the remaining columns. */
 .inbox-scroll { overflow-x: auto; }
 
+/* The activity track fits the widest date, "31 Dec 2025" in mono, plus the
+   wait clock (lib/timefmt). */
 .inbox-grid {
-  grid-template-columns: 28px 64px 86px minmax(160px, 1.4fr) 150px 140px 110px 56px 72px 92px;
+  grid-template-columns: 28px 64px 86px minmax(160px, 1.4fr) 150px 140px 110px 56px 88px 92px;
 }
 
 /* The row's one navigational link stretches an invisible overlay across the
@@ -1779,7 +1820,6 @@ details > summary::-webkit-details-marker { display: none; }
   content-visibility: auto;
   contain-intrinsic-size: auto 56px;
 }
-.inbox-row .row-link { outline: none; }
 .inbox-row .row-link::after {
   content: "";
   position: absolute;
@@ -1787,8 +1827,11 @@ details > summary::-webkit-details-marker { display: none; }
   z-index: 1;
   border-radius: var(--r-sm);
 }
+/* The link's focus ring moves to its row: the overlay draws the same ring
+   and glow inset, so the focused target reads as the whole row. */
+.inbox-row .row-link:focus-visible { outline: none; box-shadow: none; }
 .inbox-row .row-link:focus-visible::after {
-  box-shadow: inset 0 0 0 2px var(--accent);
+  box-shadow: inset 0 0 0 2px var(--focus-ring), inset 0 0 0 5px var(--accent-soft);
 }
 .inbox-row .row-interactive { position: relative; z-index: 2; }
 
@@ -1797,7 +1840,7 @@ details > summary::-webkit-details-marker { display: none; }
    narrowest tier keeps a min-width so the row scrolls rather than crushing. */
 @media (max-width: 1024px) {
   .inbox-grid {
-    grid-template-columns: 28px 64px 86px minmax(150px, 1.4fr) 150px 110px 56px 72px 56px;
+    grid-template-columns: 28px 64px 86px minmax(150px, 1.4fr) 150px 110px 56px 88px 56px;
   }
   .inbox-col-initiative { display: none; }
   /* Tighten the action column: the Reply control goes icon-only here. */
@@ -1805,8 +1848,8 @@ details > summary::-webkit-details-marker { display: none; }
 }
 @media (max-width: 860px) {
   .inbox-grid {
-    grid-template-columns: 28px minmax(150px, 1.4fr) 150px 110px 72px 56px;
-    min-width: 604px;
+    grid-template-columns: 28px minmax(150px, 1.4fr) 150px 110px 88px 56px;
+    min-width: 620px;
   }
   .inbox-col-id,
   .inbox-col-type,
@@ -1815,17 +1858,20 @@ details > summary::-webkit-details-marker { display: none; }
 
 /* ── Revenue signal (ARR at stake) ──────────────────────────
    The dollar figure is the unit; the meter is a scannable tonal
-   magnitude bar. Deliberately toasted-brown, NOT ember: ember is
-   already the inbox's loop ring + selection marker, and a second
-   ember would break the One-Trail Rule. Track is a faint hairline,
-   fill a mid-tone brown — pure two-tone, no status hue. */
+   magnitude bar. Deliberately toasted-brown, NOT ember: on inbox rows
+   ember is kept to the selected-row marker and the focus ring, so the
+   One-Trail Rule holds. Track is a faint hairline, fill a mid-tone
+   brown — pure two-tone, no status hue. "Set ARR" is ink with an
+   underline for the same reason. */
 .arr-value { color: var(--text); font-variant-numeric: tabular-nums; }
 .arr-set {
-  color: var(--accent-deep);
-  text-decoration: none;
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--brown-30);
+  text-underline-offset: 2px;
   font-weight: 500;
 }
-.arr-set:hover { text-decoration: underline; }
+.arr-set:hover { text-decoration-color: currentColor; }
 .arr-meter {
   display: block;
   width: 100%;
@@ -1853,12 +1899,14 @@ details > summary::-webkit-details-marker { display: none; }
    REPLY IN PLACE — row Reply affordance + inline drawer
    ═══════════════════════════════════════════════════════════ */
 /* Per-row Reply control, in the actions cell above the row-link overlay.
-   Ghost by default; ember ("prominent") on "your turn" rows, where answering
-   IS the active path — the One-Trail Rule's sanctioned use of the accent. */
+   Ghost by default; "prominent" on "your turn" rows, where answering is the
+   next move: full ink inside a hairline, not ember, since a whole queue of
+   ember buttons would break the One-Trail Rule. */
 .reply-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 24px; /* WCAG 2.5.8: a 24px target at least */
   padding: 4px 8px;
   border: 1px solid transparent;
   border-radius: var(--r-sm);
@@ -1870,10 +1918,8 @@ details > summary::-webkit-details-marker { display: none; }
   /* transition lives in the MOTION section (shared press-feedback block) */
 }
 .reply-btn:hover { background: var(--hover); color: var(--text); }
-.reply-btn.prominent { color: var(--accent-deep); background: var(--accent-soft); }
-.reply-btn.prominent:hover { background: var(--ember-soft); filter: brightness(0.98); }
+.reply-btn.prominent { color: var(--text); border-color: var(--hair-strong); }
 .reply-btn.open { border-color: var(--hair-strong); background: var(--surface); color: var(--text); }
-.reply-btn:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--accent-soft); }
 
 /* The animated wrapper slides both ways via grid-template-rows (0fr ↔ 1fr):
    the `1fr` track equals the content height *continuously*, so as the
@@ -1901,7 +1947,7 @@ details > summary::-webkit-details-marker { display: none; }
 .rd { display: flex; flex-direction: column; gap: 12px; padding: 14px 18px 16px; }
 .rd-head { display: flex; align-items: center; gap: 10px; justify-content: space-between; flex-wrap: wrap; }
 .rd-openthread {
-  display: inline-flex; align-items: center; gap: 3px;
+  display: inline-flex; align-items: center; gap: 3px; min-height: 24px;
   font-size: var(--fs-xs); color: var(--accent-deep); text-decoration: none;
   padding: 3px 6px; border-radius: var(--r-sm); white-space: nowrap;
 }
@@ -1912,16 +1958,14 @@ details > summary::-webkit-details-marker { display: none; }
   border-radius: var(--r-sm); cursor: pointer;
 }
 .rd-close:hover { background: var(--hover); color: var(--text); }
-.rd-openthread:focus-visible, .rd-close:focus-visible, .rd-link:focus-visible {
-  outline: 0; box-shadow: 0 0 0 3px var(--accent-soft);
-}
 
 .rd-translate, .rd-translation {
   padding: 8px 10px; border: var(--border); border-radius: var(--r-sm); background: var(--surface-2);
 }
 .rd-translate { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rd-link {
-  appearance: none; border: 0; background: none; padding: 0; font: inherit;
+  /* The vertical padding lifts the hit area to 24px; the margin keeps the layout. */
+  appearance: none; border: 0; background: none; padding: 4px 0; margin: -4px 0; font: inherit;
   font-size: var(--fs-xs); color: var(--accent-deep); cursor: pointer;
   text-decoration: underline; text-underline-offset: 2px;
 }
@@ -2002,13 +2046,8 @@ details > summary::-webkit-details-marker { display: none; }
 }
 .toast.err .toast-action { color: var(--cream); text-decoration: underline; }
 .toast-action:hover { background: rgba(251, 247, 240, 0.10); }
-/* Keyboard focus uses the app's ember-soft ring (PRODUCT.md a11y) — it reads
-   clearly on the dark toast surface where the browser default would not. */
-.toast-action:focus-visible,
-.toast-close:focus-visible {
-  outline: 0;
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
+/* Keyboard focus is the global ring; its ember-soft glow carries it on the
+   dark toast (15:1 on oat-deep). */
 .toast-close {
   appearance: none;
   flex-shrink: 0;
@@ -2135,7 +2174,7 @@ details > summary::-webkit-details-marker { display: none; }
   position: fixed;
   inset: 0;
   z-index: 70;
-  background: rgba(28, 24, 21, 0.45);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2352,11 +2391,11 @@ details > summary::-webkit-details-marker { display: none; }
     border: var(--border);
     padding: 8px 12px;
   }
-  .settings-nav .nav-item[aria-selected="true"] {
+  .settings-nav .nav-item[aria-current="page"] {
     background: var(--accent-soft);
     border-color: transparent;
   }
-  .settings-nav .nav-item[aria-selected="true"]::before { display: none; }
+  .settings-nav .nav-item[aria-current="page"]::before { display: none; }
   /* Neutralize the Documentation link's inline top-divider + margin. */
   .settings-nav > a.nav-item {
     margin-top: 0 !important;
@@ -2476,16 +2515,17 @@ details > summary::-webkit-details-marker { display: none; }
 .cmdk,
 .modal-card { animation: modal-pop var(--dur-slow) var(--ease-out-expo); }
 
-/* ── Inbox loop badge — open (ember ring) ⇄ closed (filled) ────
+/* ── Inbox loop badge — open (ring) ⇄ closed (filled) ──────────
    Replaces the inline-styled dot in InboxTable so the state flip
-   crossfades rather than snaps. */
+   crossfades rather than snaps. Brown, not ember: it sits on every
+   row, and shape (ring or dot) plus its label carry the state. */
 .loop-badge {
   width: 7px; height: 7px;
   border-radius: 999px;
   flex-shrink: 0;
   box-sizing: border-box;
   background: transparent;
-  border: 1.5px solid var(--accent);
+  border: 1.5px solid var(--mute);
   transition: background var(--dur-base) var(--ease-out-quart),
               border-color var(--dur-base) var(--ease-out-quart);
 }
@@ -2593,7 +2633,7 @@ details > summary::-webkit-details-marker { display: none; }
   position: fixed;
   inset: 0;
   z-index: 90;
-  background: rgba(28, 24, 21, 0.45);
+  background: var(--scrim);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-base) var(--ease-out-quart);
@@ -2662,13 +2702,11 @@ details > summary::-webkit-details-marker { display: none; }
   background: var(--bg);
   margin-bottom: 4px;
 }
-.help-search:focus-within { border-color: var(--accent); }
 .help-search-input {
   flex: 1;
   appearance: none;
   border: 0;
   background: transparent;
-  outline: 0;
   font-family: var(--font-body);
   font-size: var(--fs-body);
   color: var(--text);
@@ -2711,7 +2749,7 @@ details > summary::-webkit-details-marker { display: none; }
 .help-faq-item.open .help-a { padding-left: 2px; }
 .help-a p { margin: 0 0 8px; }
 .help-a-link {
-  color: var(--accent);
+  color: var(--accent-deep);
   font-weight: 500;
   text-decoration: none;
 }
@@ -2756,7 +2794,9 @@ details > summary::-webkit-details-marker { display: none; }
   color: var(--mute);
   font-size: var(--fs-sm);
   cursor: pointer;
-  padding: 2px 0;
+  /* A 26px target; the margin keeps the layout where 2px padding had it. */
+  padding: 4px 0;
+  margin: -2px 0;
 }
 .help-back:hover { color: var(--text); }
 .help-contact-lede {

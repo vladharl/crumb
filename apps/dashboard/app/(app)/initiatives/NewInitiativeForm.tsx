@@ -120,8 +120,8 @@ export function NewInitiativeForm({ disabled }: { disabled?: boolean }) {
               aria-label={`Pick ${c}`}
               onClick={() => setColor(c)}
               style={{
-                width: 22,
-                height: 22,
+                width: 24,
+                height: 24,
                 borderRadius: "50%",
                 background: c,
                 border: color === c ? "2px solid var(--ink)" : "1px solid var(--line)",

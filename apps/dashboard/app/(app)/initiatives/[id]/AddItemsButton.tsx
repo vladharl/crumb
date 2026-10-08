@@ -34,7 +34,7 @@ export function AddItemsButton({ initiativeId }: { initiativeId: string }) {
     listUnassignedItems().then(r => {
       setLoading(false);
       if (r.ok) setCandidates(r.items);
-      else setError(r.error === "forbidden" ? "Only admins and PMs can group items." : "Couldn't load items.");
+      else setError(r.error === "forbidden" ? "Only admins and PMs can group requests." : "Couldn't load requests.");
     });
   }
 
@@ -62,7 +62,7 @@ export function AddItemsButton({ initiativeId }: { initiativeId: string }) {
         setOpen(false);
         router.refresh();
       } else {
-        setError(r.error === "forbidden" ? "Only admins and PMs can group items." : "Couldn't add items.");
+        setError(r.error === "forbidden" ? "Only admins and PMs can group requests." : "Couldn't add requests.");
       }
     });
   }
@@ -70,17 +70,17 @@ export function AddItemsButton({ initiativeId }: { initiativeId: string }) {
   return (
     <>
       <Btn sm icon={<Ic.plus style={{ width: 12, height: 12 }} />} onClick={openPanel}>
-        Add items
+        Add requests
       </Btn>
 
       {open && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Add items to this initiative"
+          aria-label="Add requests to this initiative"
           onClick={() => !pending && setOpen(false)}
           style={{
-            position: "fixed", inset: 0, background: "rgba(28, 24, 21, 0.45)",
+            position: "fixed", inset: 0, background: "var(--scrim)",
             display: "flex", alignItems: "center", justifyContent: "center",
             zIndex: 55, padding: 24,
           }}
@@ -99,18 +99,18 @@ export function AddItemsButton({ initiativeId }: { initiativeId: string }) {
             }}
           >
             <div className="row between center">
-              <h3 className="serif" style={{ margin: 0, fontSize: 18 }}>Add items</h3>
+              <h3 className="serif" style={{ margin: 0, fontSize: 18 }}>Add requests</h3>
               <button
                 aria-label="Close"
                 onClick={() => setOpen(false)}
                 disabled={pending}
-                style={{ background: "none", border: 0, padding: 4, cursor: "pointer", color: "var(--mute)" }}
+                style={{ background: "none", border: 0, padding: 5, cursor: "pointer", color: "var(--mute)" }}
               >
                 <Ic.x style={{ width: 14, height: 14 }} />
               </button>
             </div>
             <p className="text-xs muted" style={{ margin: 0 }}>
-              Unassigned feedback in your workspace. Selecting items moves them into this initiative.
+              Feedback that isn&apos;t in an initiative yet. The requests you select move into this one.
             </p>
 
             <div className="row gap-2 center" style={{ position: "relative" }}>
@@ -119,6 +119,7 @@ export function AddItemsButton({ initiativeId }: { initiativeId: string }) {
                 autoFocus
                 value={query}
                 onChange={e => setQuery(e.target.value)}
+                aria-label="Filter by title or ID"
                 placeholder="Filter by title or ID…"
                 style={{
                   background: "var(--surface)", border: "1px solid var(--line, var(--hair))",
@@ -130,9 +131,9 @@ export function AddItemsButton({ initiativeId }: { initiativeId: string }) {
 
             <div className="col" style={{ overflow: "auto", flex: 1, minHeight: 120, border: "1px solid var(--line, var(--hair))", borderRadius: "var(--r-sm)" }}>
               {loading ? (
-                <div className="card-body"><span className="text-sm muted">Loading items…</span></div>
+                <div className="card-body"><span className="text-sm muted">Loading requests…</span></div>
               ) : filtered.length === 0 ? (
-                <div className="card-body"><span className="text-sm muted">{candidates.length === 0 ? "No unassigned feedback. Every item is already grouped." : "No items match that filter."}</span></div>
+                <div className="card-body"><span className="text-sm muted">{candidates.length === 0 ? "Every request is already in an initiative." : "No requests match that filter."}</span></div>
               ) : filtered.map(c => {
                 const checked = selected.has(c.id);
                 return (
@@ -176,7 +177,7 @@ export function AddItemsButton({ initiativeId }: { initiativeId: string }) {
               <div className="row gap-2">
                 <Btn onClick={() => setOpen(false)} disabled={pending}>Cancel</Btn>
                 <Btn variant="primary" onClick={add} disabled={pending || selected.size === 0}>
-                  {pending ? "Adding…" : `Add ${selected.size || ""} ${selected.size === 1 ? "item" : "items"}`.replace("  ", " ").trim()}
+                  {pending ? "Adding…" : `Add ${selected.size || ""} ${selected.size === 1 ? "request" : "requests"}`.replace("  ", " ").trim()}
                 </Btn>
               </div>
             </div>

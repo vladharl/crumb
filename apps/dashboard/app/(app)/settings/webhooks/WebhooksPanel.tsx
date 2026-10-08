@@ -240,7 +240,7 @@ export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; i
                   <span className="mono text-xs" style={{ wordBreak: "break-all", flex: 1 }}>{ep.url}</span>
                   <div className="row gap-2 center">
                     <Pill ring ringFill={ep.active}>{ep.active ? "Active" : "Paused"}</Pill>
-                    {isAdmin && <Switch on={ep.active} onClick={() => toggle(ep.id, !ep.active)} />}
+                    {isAdmin && <Switch on={ep.active} label={`Send events to ${ep.url}`} onClick={() => toggle(ep.id, !ep.active)} />}
                   </div>
                 </div>
                 {note && <span className="text-xs" style={{ color: "var(--err-text)" }}>{note}</span>}

@@ -73,7 +73,7 @@ async function main() {
   };
   const initiativeSeeds: InitiativeSeed[] = [
     { key: "exports",  name: "CSV & funnel exports",        status: "in_progress", roadmapColumn: "now",   order: 0, color: "#E27D3A", owner: "LR", isPublic: true,
-      description: "One-click export of cohort and funnel data — CSV first, XLSX to follow. Top ask from accounts prepping quarterly business reviews." },
+      description: "One-click export of cohort and funnel data: CSV first, XLSX to follow. Top ask from accounts prepping quarterly business reviews." },
     { key: "notify",   name: "Real-time notifications",     status: "in_progress", roadmapColumn: "now",   order: 1, color: "#6B8E5A", owner: "LR", isPublic: true,
       description: "Push status changes and replies to Slack and outbound webhooks, so teams hear about movement without living in the dashboard." },
     { key: "sso",      name: "Enterprise SSO & SAML",       status: "open",        roadmapColumn: "next",  order: 0, color: "#4A2E1F", owner: "SK", isPublic: true,
@@ -127,7 +127,7 @@ async function main() {
     { title: "Webhook for status change",                  type: "idea", status: "open",     acct: "Vora Studio",  submitter: "Sam",                   initiative: "notify",    createdAtOffsetMin: 60 * 48 },
     { title: "Custom embedded domain",                     type: "idea",        status: "planned",  acct: "Acme Co",      submitter: "Admin", assignee: "LR", initiative: "sso",       createdAtOffsetMin: 60 * 24 * 3 },
     { title: "Datepicker doesn't respect locale",          type: "bug",         status: "review",   acct: "Pinedrop",     submitter: "Tao",   assignee: "JK", initiative: "mobile",    createdAtOffsetMin: 60 * 24 * 4 },
-    { title: "SSO via Okta — more groups",                 type: "idea", status: "progress", acct: "Stratus Labs", submitter: "Lin",   assignee: "LR", initiative: "sso",       createdAtOffsetMin: 60 * 24 * 5 },
+    { title: "SSO via Okta: more groups",                  type: "idea", status: "progress", acct: "Stratus Labs", submitter: "Lin",   assignee: "LR", initiative: "sso",       createdAtOffsetMin: 60 * 24 * 5 },
     { title: "Export funnel data as XLSX",                 type: "idea",        status: "open",     acct: "Lumen Health", submitter: "Anika",                 initiative: "exports",   createdAtOffsetMin: 60 * 24 * 7 },
   ];
 
@@ -171,13 +171,13 @@ async function main() {
       { itemId: headItem.id, accountUserId: maya.id, body: headItem.body, internal: false,
         createdAt: new Date(t) },
       { itemId: headItem.id, workspaceUserId: lina.id, internal: false,
-        body: "Makes sense. Two quick scoping questions before we commit — per-cohort CSV, or funnel breakdown too? Blocker for this QBR, or nice-to-have?",
+        body: "Makes sense. Two quick scoping questions before we commit: per-cohort CSV, or funnel breakdown too? Blocker for this QBR, or nice-to-have?",
         createdAt: new Date(t + 60_000 * 60 * 24) },
       { itemId: headItem.id, accountUserId: maya.id, internal: false,
-        body: "Per-cohort priority. Funnel breakdown nice-to-have. Yes, blocking — QBR is in three weeks.",
+        body: "Per-cohort priority. Funnel breakdown nice-to-have. Yes, blocking. QBR is in three weeks.",
         createdAt: new Date(t + 60_000 * 60 * 48) },
       { itemId: headItem.id, workspaceUserId: lina.id, internal: true,
-        body: "@JK — is this two days or two weeks? Acme's QBR is in three weeks, third account asking, totaling $186k ARR.",
+        body: "@JK, is this two days or two weeks? Acme's QBR is in three weeks, third account asking, totaling $186k ARR.",
         createdAt: new Date(t + 60_000 * 60 * 50) },
       { itemId: headItem.id, workspaceUserId: jamie.id, internal: true,
         body: "Per-cohort CSV is a day, two with QA. Funnel adds three to four days. Ship CSV alone in v2.4.",

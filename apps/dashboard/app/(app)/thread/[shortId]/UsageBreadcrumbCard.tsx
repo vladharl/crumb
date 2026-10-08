@@ -29,7 +29,7 @@ export function UsageBreadcrumbCard({ entries }: { entries: UsageBreadcrumbEntry
   if (!entries.length) return null;
   return (
     <Card>
-      <CardHead title="Before this feedback" after={<Pill>{entries.length}</Pill>} />
+      <CardHead title="Before this request" after={<Pill>{entries.length}</Pill>} />
       <div className="card-body col gap-2">
         {entries.map((e, i) => {
           const path = shortPath(e.pageUrl);

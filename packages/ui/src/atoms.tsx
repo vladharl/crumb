@@ -1,3 +1,4 @@
+import { cloneElement, isValidElement, useId } from "react";
 import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, ReactNode } from "react";
 
 type CardProps = HTMLAttributes<HTMLDivElement> & { className?: string };
@@ -54,17 +55,51 @@ export const Avatar = ({ kind = "", size = "", children, className, ...rest }: A
   <span className={`avatar ${size} ${kind} ${className || ""}`} {...rest}>{children}</span>
 );
 
-export const Switch = ({ on, onClick }: { on?: boolean; onClick?: () => void }) => (
-  <button type="button" className={`switch ${on ? "on" : ""}`} onClick={onClick} role="switch" aria-checked={!!on} />
+type SwitchProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick" | "role"> & {
+  on?: boolean;
+  onClick?: () => void;
+  /** The switch's name, when no visible label is tied to it. */
+  label?: string;
+};
+// role=switch with aria-checked: announced as on or off. The track is 30×16;
+// a transparent child stretches the hit area to 30×24 (WCAG 2.5.8) without
+// changing the look.
+export const Switch = ({ on, onClick, label, disabled, className, style, ...rest }: SwitchProps) => (
+  <button
+    type="button"
+    role="switch"
+    aria-checked={!!on}
+    aria-label={label}
+    disabled={disabled}
+    className={["switch", on ? "on" : "", className].filter(Boolean).join(" ")}
+    onClick={onClick}
+    style={{ position: "relative", ...(disabled ? { opacity: 0.55, cursor: "default" } : null), ...style }}
+    {...rest}
+  >
+    <span aria-hidden="true" style={{ position: "absolute", inset: "-5px -1px" }} />
+  </button>
 );
 
-export const Field = ({ label, help, htmlFor, children }: { label?: ReactNode; help?: ReactNode; htmlFor?: string; children?: ReactNode }) => (
-  <div className="field">
-    {label && <label className="field-label" htmlFor={htmlFor}>{label}</label>}
-    {children}
-    {help && <span className="field-help">{help}</span>}
-  </div>
-);
+const LABELABLE = new Set(["input", "select", "textarea"]);
+
+export const Field = ({ label, help, htmlFor, children }: { label?: ReactNode; help?: ReactNode; htmlFor?: string; children?: ReactNode }) => {
+  // Without htmlFor, the label is tied to a lone input, select or textarea
+  // child (by its own id, else a generated one), so the label names it.
+  const autoId = useId();
+  let control = children;
+  let forId = htmlFor;
+  if (label && !forId && isValidElement<{ id?: string }>(children) && typeof children.type === "string" && LABELABLE.has(children.type)) {
+    forId = children.props.id ?? autoId;
+    if (!children.props.id) control = cloneElement(children, { id: autoId });
+  }
+  return (
+    <div className="field">
+      {label && <label className="field-label" htmlFor={forId}>{label}</label>}
+      {control}
+      {help && <span className="field-help">{help}</span>}
+    </div>
+  );
+};
 
 export const PageHead = ({ crumb, title, lede, actions, titleStyle }: {
   crumb?: ReactNode;

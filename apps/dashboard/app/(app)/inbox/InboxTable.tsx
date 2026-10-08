@@ -211,7 +211,7 @@ function InboxEmpty({
   // Waiting / Closed / other tabs at zero — accurate and quiet, no fanfare.
   const sub =
     tab === "waiting" ? "Nothing’s waiting on a customer right now."
-    : tab === "closed" ? "No closed loops yet. They collect here once an item reaches an outcome."
+    : tab === "closed" ? "No closed loops yet. They collect here once a request reaches an outcome."
     : tab === "eng-done" ? "Nothing here right now. Open loops show up here when their linked Linear, Jira or GitHub ticket is done and the customer hasn’t been told since."
     : "Nothing here yet.";
   return (
@@ -753,7 +753,7 @@ export function InboxTable({
   }, [visibleRows, cursorId]);
 
   function assignToMe(row: InboxRow) {
-    if (!canWrite) { toast.show({ message: "Viewers can't modify items.", tone: "error" }); return; }
+    if (!canWrite) { toast.show({ message: "Viewers can't modify requests.", tone: "error" }); return; }
     if (row.assigneeId === meId) { toast.show({ message: `${row.shortId} is already assigned to you.` }); return; }
     const prev = new Map([[row.id, row.assigneeId]]);
     startTransition(async () => {
@@ -813,7 +813,7 @@ export function InboxTable({
     if (!statusEmailsCustomer(status)) { applyStatus(status); return; }
     const label = statusLabel(status);
     void confirm({
-      title: `Move ${plural(selected.size, "item")} to ${label}?`,
+      title: `Move ${plural(selected.size, "request")} to ${label}?`,
       body: emailNote(selected.size, emailConfigured),
       confirmLabel: `Move to ${label}`,
     }).then(ok => { if (ok) applyStatus(status); });
@@ -890,7 +890,7 @@ export function InboxTable({
         clearSelection();
         router.refresh();
         toast.show({
-          message: name ? `${plural(res.affected, "item")} assigned to ${name}.` : `${plural(res.affected, "item")} unassigned.`,
+          message: name ? `${plural(res.affected, "request")} assigned to ${name}.` : `${plural(res.affected, "request")} unassigned.`,
           action: { label: "Undo", onClick: () => undoAssign(prev) },
         });
       } else {
@@ -931,7 +931,7 @@ export function InboxTable({
         clearSelection();
         router.refresh();
         toast.show({
-          message: name ? `${plural(ids.length, "item")} moved to ${name}.` : `${plural(ids.length, "item")} cleared of initiative.`,
+          message: name ? `${plural(ids.length, "request")} moved to ${name}.` : `${plural(ids.length, "request")} cleared of initiative.`,
           action: { label: "Undo", onClick: () => undoInitiative(prev) },
         });
       } else {
@@ -969,7 +969,7 @@ export function InboxTable({
       if (res.ok) {
         clearSelection();
         router.refresh();
-        toast.show({ message: res.suggested > 0 ? `Clustered ${plural(res.suggested, "item")} into initiatives.` : "No new clusters found." });
+        toast.show({ message: res.suggested > 0 ? `Clustered ${plural(res.suggested, "request")} into initiatives.` : "No new clusters found." });
       } else {
         toast.show({ message: errorMessage(res.error), tone: "error" });
       }
@@ -1062,7 +1062,6 @@ export function InboxTable({
               value={query}
               onChange={e => setQuery(e.target.value)}
               aria-label="Search feedback, comments, and people"
-              style={{ border: 0, padding: 0, background: "transparent" }}
             />
             {query && (
               <button
@@ -1070,7 +1069,8 @@ export function InboxTable({
                 onClick={() => setQuery("")}
                 aria-label="Clear search"
                 className="cmdk-esc"
-                style={{ border: 0, background: "transparent", cursor: "pointer", color: "var(--mute)", padding: 2, lineHeight: 0 }}
+                // A 24px hit area around the 12px icon; the margin keeps the box's size.
+                style={{ border: 0, background: "transparent", cursor: "pointer", color: "var(--mute)", padding: 6, margin: -4, lineHeight: 0 }}
               >
                 <Ic.x style={{ width: 12, height: 12 }} />
               </button>
@@ -1093,7 +1093,7 @@ export function InboxTable({
               />
             </div>
             {mergedTotal > 0 && (
-              <label className="row gap-2 center text-sm muted" style={{ flex: "0 0 auto", cursor: "pointer" }} title="Show duplicates that were merged into another item">
+              <label className="row gap-2 center text-sm muted" style={{ flex: "0 0 auto", cursor: "pointer" }} title="Show duplicates that were merged into another request">
                 <input type="checkbox" checked={showMerged} onChange={e => setShowMerged(e.target.checked)} style={{ cursor: "pointer" }} />
                 Merged · {mergedTotal}
               </label>
@@ -1233,7 +1233,7 @@ export function InboxTable({
             />
           </label>
           {selected.size > STATUS_BATCH_MAX && (
-            <span className="text-xs muted">Status changes take up to {STATUS_BATCH_MAX} items at a time.</span>
+            <span className="text-xs muted">Status changes take up to {STATUS_BATCH_MAX} requests at a time.</span>
           )}
 
           <label className="row gap-2 center text-sm" style={{ flex: "0 0 auto" }}>
@@ -1272,7 +1272,7 @@ export function InboxTable({
             </label>
           )}
           </>) : (
-            <span className="text-sm muted">Viewers can't modify items.</span>
+            <span className="text-sm muted">Viewers can't modify requests.</span>
           )}
 
           {isAdmin && (<>
@@ -1306,14 +1306,16 @@ export function InboxTable({
           <div ref={listRef} className="list" role="table" aria-label="Feedback inbox" tabIndex={-1}>
             <div className="list-row head inbox-grid" role="row">
               <span role="columnheader" className="inbox-col-check">
-                <input
-                  type="checkbox"
-                  checked={pageSelected}
-                  ref={el => { if (el) el.indeterminate = someSelected; }}
-                  onChange={toggleAll}
-                  aria-label="Select all on this page"
-                  style={{ cursor: "pointer" }}
-                />
+                <label style={CHECK_HIT}>
+                  <input
+                    type="checkbox"
+                    checked={pageSelected}
+                    ref={el => { if (el) el.indeterminate = someSelected; }}
+                    onChange={toggleAll}
+                    aria-label="Select all on this page"
+                    style={{ cursor: "pointer" }}
+                  />
+                </label>
               </span>
               <span role="columnheader" className="inbox-col-id">ID</span>
               <span role="columnheader" className="inbox-col-type">Type</span>
@@ -1353,13 +1355,15 @@ export function InboxTable({
                   onFocus={() => setCursorId(it.id)}
                 >
                   <span role="cell" className="inbox-col-check row-interactive">
-                    <input
-                      type="checkbox"
-                      checked={isSel}
-                      onChange={() => toggle(it.id)}
-                      aria-label={`Select ${it.shortId}`}
-                      style={{ cursor: "pointer" }}
-                    />
+                    <label style={CHECK_HIT}>
+                      <input
+                        type="checkbox"
+                        checked={isSel}
+                        onChange={() => toggle(it.id)}
+                        aria-label={`Select ${it.shortId}`}
+                        style={{ cursor: "pointer" }}
+                      />
+                    </label>
                   </span>
                   <span role="cell" className="inbox-col-id text-2xs mono muted">{it.shortId}</span>
                   <span role="cell" className="inbox-col-type"><TypeChip type={it.type as TypeKind} /></span>
@@ -1458,14 +1462,14 @@ export function InboxTable({
                           Set ARR
                         </Link>
                       ) : (
-                        <span className="text-2xs muted-2" style={{ flexShrink: 0 }} title="No ARR set on this account">not set</span>
+                        <span className="text-2xs muted" style={{ flexShrink: 0 }}>ARR not set</span>
                       )}
                     </span>
                     <span className="row between center gap-2" style={{ minWidth: 0 }}>
                       <span className="text-xs muted truncate" style={{ minWidth: 0 }}>{it.submitterName}</span>
                       {it.reachAccounts > 1 && (
                         <span
-                          className="text-2xs muted-2"
+                          className="text-2xs muted"
                           style={{ flexShrink: 0 }}
                           title={`${it.reachAccounts} accounts asking for this`}
                         >
@@ -1521,14 +1525,14 @@ export function InboxTable({
                         />
                       </span>
                     ) : (
-                      <span className="text-xs muted-2">—</span>
+                      <span className="text-xs muted-2" title="Unassigned">—</span>
                     )}
                   </span>
                   <span role="cell" className="inbox-col-activity"><LoopAge row={it} turn={turn} nowMs={nowMs} /></span>
                   <span role="cell" className="inbox-col-actions row-interactive">
                     <div className="row gap-1 center" style={{ justifyContent: "flex-end" }}>
-                      {/* Reply-in-place: prominent (ember) on "your turn" rows —
-                          where replying IS the active path — and a quiet ghost
+                      {/* Reply-in-place: prominent (ink outline) on "your turn"
+                          rows, where replying is the next move, and a quiet ghost
                           elsewhere. Opens an inline drawer; on phone it routes to
                           the full thread instead (the dense table is cramped). */}
                       <button
@@ -1656,9 +1660,9 @@ function ReplyDrawerMount({ open, children }: { open: boolean; children: ReactNo
 }
 
 // Brown-tonal magnitude bar for ARR at stake, sized against the workspace's
-// largest. Deliberately NOT ember: in the inbox ember is already the loop-state
-// accent and the selected-row marker, so a second ember here would be the "two
-// embers competing" the One-Trail Rule forbids. Revenue magnitude is structural
+// largest. Deliberately NOT ember: on inbox rows ember is kept to the
+// selected-row marker and the focus ring, and a second ember here would be the
+// "two embers competing" the One-Trail Rule forbids. Revenue magnitude is structural
 // (a tonal bar), not the trail. Decorative for SR — the dollar value carries
 // the meaning — so the bar is aria-hidden and the cell text speaks.
 function ArrMeter({ cents, max, reach }: { cents: number; max: number; reach: number }) {
@@ -1666,15 +1670,16 @@ function ArrMeter({ cents, max, reach }: { cents: number; max: number; reach: nu
   // accounts table). Scale-X, not width — see globals.css .arr-meter-fill.
   const frac = Math.max(0.03, Math.min(1, cents / max));
   return (
-    <span className="arr-meter" aria-hidden title={`${formatArr(cents)} at stake${reach > 1 ? ` across ${reach} accounts` : ""}`}>
+    <span className="arr-meter" aria-hidden title={`${formatArr(cents, " ARR at stake")}${reach > 1 ? ` across ${reach} accounts` : ""}`}>
       <span className="arr-meter-fill" style={{ transform: `scaleX(${frac})` }} />
     </span>
   );
 }
 
 // Loop state, distilled to the one binary that drives action: open (the trail
-// is still live — ember ring) or closed (the customer heard the outcome —
-// settled, muted). The full four-stage trail lives in the thread header now.
+// is still live, a ring) or closed (the customer heard the outcome, a filled
+// dot). Brown, not ember, as it sits on every row; the shape and the label
+// carry the state. The full four-stage trail lives in the thread header now.
 function LoopBadge({ closed }: { closed: boolean }) {
   // .loop-badge crossfades the ring→fill flip (see globals.css) so a loop that
   // closes settles into its dot instead of snapping.
@@ -1693,8 +1698,9 @@ function LoopBadge({ closed }: { closed: boolean }) {
 // external activity (latest non-internal reply, else creation). On "your turn"
 // rows the timestamp warms toward rust as the customer's wait grows — there
 // the last activity IS the moment the wait started, so the colored time and
-// the urgency basis agree. Plain text (not a link): the row's single title
-// link already navigates the whole row.
+// the urgency basis agree. A clock joins the colour from 3 days, so the
+// warning never rides on colour alone. Plain text (not a link): the row's
+// single title link already navigates the whole row.
 function LoopAge({ row, turn, nowMs }: { row: InboxRow; turn: LoopTurn; nowMs: number }) {
   // gmailTime formats in the runtime's local zone, so the server (UTC) and the
   // client produce different strings — suppressHydrationWarning lets React keep
@@ -1707,7 +1713,7 @@ function LoopAge({ row, turn, nowMs }: { row: InboxRow; turn: LoopTurn; nowMs: n
   }
   const since = waitingSince(row);
   const days = waitingDays(since, nowMs);
-  const color = days >= 7 ? "var(--rust)" : days >= 3 ? "var(--amber)" : undefined;
+  const color = days >= 7 ? "var(--rust-deep)" : days >= 3 ? "var(--amber-deep)" : undefined;
   return (
     <span
       suppressHydrationWarning
@@ -1715,8 +1721,20 @@ function LoopAge({ row, turn, nowMs }: { row: InboxRow; turn: LoopTurn; nowMs: n
       style={{ whiteSpace: "nowrap", ...(color ? { color, fontWeight: 600 } : {}) }}
       title={`Last reply ${stamp} · waiting ${ageFrom(since, nowMs)}`}
     >
+      {color && <WaitIc label={`Customer waiting ${plural(Math.floor(days), "day")}`} />}
       {stamp}
     </span>
+  );
+}
+
+// The clock beside a long wait: the age warning's cue that isn't colour alone,
+// named for screen readers.
+function WaitIc({ label }: { label: string }) {
+  return (
+    <svg role="img" aria-label={label} width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ verticalAlign: "-1px", marginRight: 4 }}>
+      <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.75" />
+      <path d="M8 4.5V8l2.5 1.75" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
@@ -1745,22 +1763,44 @@ function SuggestionChip({
         aria-label="Accept suggestion"
         disabled={disabled}
         onClick={e => { e.stopPropagation(); onAccept(); }}
-        style={iconBtn}
+        style={hitArea(20)}
       >
-        <Ic.check style={{ width: 11, height: 11 }} />
+        <span style={iconBtn}><Ic.check style={{ width: 11, height: 11 }} /></span>
       </button>
       <button
         type="button"
         aria-label="Dismiss suggestion"
         disabled={disabled}
         onClick={e => { e.stopPropagation(); onDismiss(); }}
-        style={iconBtn}
+        style={hitArea(20)}
       >
-        <Ic.x style={{ width: 11, height: 11 }} />
+        <span style={iconBtn}><Ic.x style={{ width: 11, height: 11 }} /></span>
       </button>
     </span>
   );
 }
+
+// The 13px checkbox sits in a padded label, so the click target clears 24px
+// (WCAG 2.5.8) while the negative margin keeps the cell's layout.
+const CHECK_HIT: React.CSSProperties = { display: "inline-flex", padding: 6, margin: -6, cursor: "pointer" };
+
+// A small chip button keeps its look, but the button around it is a 24px
+// target (WCAG 2.5.8). A negative margin (`overhang`) keeps the row's layout
+// where it was; 0 lets the target take its full 24px.
+const hitArea = (visual: number, overhang = true): React.CSSProperties => ({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 24,
+  height: 24,
+  margin: overhang ? (visual - 24) / 2 : 0,
+  padding: 0,
+  border: 0,
+  borderRadius: 6,
+  background: "transparent",
+  cursor: "pointer",
+  flexShrink: 0,
+});
 
 const iconBtn: React.CSSProperties = {
   display: "inline-flex",
@@ -1772,8 +1812,6 @@ const iconBtn: React.CSSProperties = {
   borderRadius: 4,
   background: "var(--surface)",
   color: "var(--text)",
-  cursor: "pointer",
-  padding: 0,
   flexShrink: 0,
 };
 
@@ -1802,8 +1840,8 @@ function SentimentGlyph({ score }: { score: number }) {
   let color = "var(--mute)";
   let label = "neutral";
   let arrow = "→";
-  if (score <= -0.2) { color = "var(--rust)"; label = "negative"; arrow = "↓"; }
-  else if (score >= 0.2) { color = "var(--green)"; label = "positive"; arrow = "↑"; }
+  if (score <= -0.2) { color = "var(--rust-deep)"; label = "negative"; arrow = "↓"; }
+  else if (score >= 0.2) { color = "var(--green-deep)"; label = "positive"; arrow = "↑"; }
   return (
     <span
       className="row gap-1 center"
@@ -1839,7 +1877,7 @@ function SourceBadge({ source, url }: { source: string; url: string | null }) {
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-2xs muted-2 row-interactive"
+        className="text-2xs muted row-interactive"
         title={`Open in ${label}`}
         style={{ flexShrink: 0, textDecoration: "none" }}
         onClick={e => e.stopPropagation()}
@@ -1849,7 +1887,7 @@ function SourceBadge({ source, url }: { source: string; url: string | null }) {
     );
   }
   return (
-    <span className="text-2xs muted-2" title={`Captured from ${label}`} style={{ flexShrink: 0 }}>
+    <span className="text-2xs muted" title={`Captured from ${label}`} style={{ flexShrink: 0 }}>
       {label}
     </span>
   );
@@ -1863,9 +1901,9 @@ function TagChips({ tags }: { tags: string[] }) {
   return (
     <span className="row gap-1 center" title={tags.join(", ")} style={{ minWidth: 0 }}>
       {shown.map(t => (
-        <span key={t} className="text-2xs muted-2" style={{ flexShrink: 0 }}>#{t}</span>
+        <span key={t} className="text-2xs muted" style={{ flexShrink: 0 }}>#{t}</span>
       ))}
-      {extra > 0 && <span className="text-2xs muted-2" style={{ flexShrink: 0 }}>+{extra}</span>}
+      {extra > 0 && <span className="text-2xs muted" style={{ flexShrink: 0 }}>+{extra}</span>}
     </span>
   );
 }
@@ -1877,13 +1915,11 @@ const ghostAvatar: React.CSSProperties = {
   width: 22,
   height: 22,
   borderRadius: "50%",
-  border: "1px dashed var(--accent)",
-  background: "var(--accent-soft)",
-  color: "var(--accent-deep)",
+  border: "1px dashed var(--mute)",
+  background: "transparent",
+  color: "var(--text)",
   fontSize: 9,
   fontWeight: 600,
-  cursor: "pointer",
-  padding: 0,
   flexShrink: 0,
 };
 
@@ -1897,8 +1933,6 @@ const iconBtnXs: React.CSSProperties = {
   borderRadius: 4,
   background: "var(--surface)",
   color: "var(--mute)",
-  cursor: "pointer",
-  padding: 0,
   flexShrink: 0,
 };
 
@@ -1917,23 +1951,25 @@ function TriageAssigneeChip({
   const title = reason ? `AI suggests ${assignee.name} · ${reason}` : `AI suggests ${assignee.name}`;
   return (
     <span className="row gap-1 center" style={{ minWidth: 0 }} title={title}>
+      {/* The ghost takes its full 24px so the dismiss target beside it can
+          overhang into the gap without the two overlapping. */}
       <button
         type="button"
         aria-label={`Assign to ${assignee.name}`}
         disabled={disabled}
         onClick={e => { e.stopPropagation(); onAccept(); }}
-        style={ghostAvatar}
+        style={{ ...hitArea(22, false), borderRadius: "50%" }}
       >
-        {assignee.initials}
+        <span style={ghostAvatar}>{assignee.initials}</span>
       </button>
       <button
         type="button"
         aria-label="Dismiss suggested assignee"
         disabled={disabled}
         onClick={e => { e.stopPropagation(); onDismiss(); }}
-        style={iconBtnXs}
+        style={hitArea(16)}
       >
-        <Ic.x style={{ width: 9, height: 9 }} />
+        <span style={iconBtnXs}><Ic.x style={{ width: 9, height: 9 }} /></span>
       </button>
     </span>
   );

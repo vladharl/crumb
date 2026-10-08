@@ -10,6 +10,7 @@ import { InitiativeStatusPill } from "./InitiativeChip";
 import { reorderInitiatives, setInitiativePublic, updateInitiative } from "./actions";
 import { MOVE_UNDONE, moveEmailsFollowers, movedMessage } from "./useColumnMove";
 import { formatArr } from "@/lib/priority";
+import { formatDate } from "@/lib/timefmt";
 import { sendAfterDelay, STATUS_EMAIL_DELAY_MS } from "@/components/ReplyComposer";
 import { useToast } from "@/components/toast";
 
@@ -57,26 +58,16 @@ const newestShipped = (a: BoardItem, b: BoardItem) => (b.shippedAt ?? "").locale
 // Why Public is locked on an unscheduled card (lib/roadmap onPublicRoadmapSql).
 export const PUBLIC_HINT = "Shows on the roadmap once it's in Now, Next or Later, or Shipped.";
 
-// The shared Switch has no disabled state: a locked one is the same control,
-// inert, and points at the sentence saying why.
+// A locked switch is off and disabled, and points at the sentence saying why.
 export function PublicSwitch({ on, locked, describedBy, onClick }: {
   on: boolean;
   locked: boolean;
   describedBy: string;
   onClick: () => void;
 }) {
-  if (!locked) return <Switch on={on} onClick={onClick} />;
-  return (
-    <button
-      type="button"
-      className="switch"
-      role="switch"
-      aria-checked={false}
-      aria-describedby={describedBy}
-      disabled
-      style={{ opacity: 0.55, cursor: "default" }}
-    />
-  );
+  return locked
+    ? <Switch on={false} disabled aria-describedby={describedBy} />
+    : <Switch on={on} onClick={onClick} />;
 }
 
 // Gives each listed card `column`, and its place in the list as its order.
@@ -101,14 +92,6 @@ type Held = {
 
 // The board with the held card back where it was.
 const unheld = (list: BoardItem[], h: Held) => list.map(i => (i.id === h.id ? { ...i, ...h.from } : i));
-
-function fmtDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-  } catch {
-    return "";
-  }
-}
 
 export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[]; canManage: boolean }) {
   const router = useRouter();
@@ -380,18 +363,18 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
                               <div
                                 className="col gap-1"
                                 title={it.arrAtStakeCents > 0
-                                  ? `${formatArr(it.arrAtStakeCents)} of open-feedback ARR across ${it.accountCount} ${it.accountCount === 1 ? "account" : "accounts"}`
-                                  : `Open feedback from ${it.accountCount} ${it.accountCount === 1 ? "account" : "accounts"}, no ARR set`}
+                                  ? `${formatArr(it.arrAtStakeCents, " ARR at stake")} across ${it.accountCount} ${it.accountCount === 1 ? "account" : "accounts"}`
+                                  : `Open feedback from ${it.accountCount} ${it.accountCount === 1 ? "account" : "accounts"}, ARR not set`}
                               >
                                 <div className="row between center gap-2">
                                   <span className="text-xs" style={{ color: "var(--text)" }}>
                                     {it.arrAtStakeCents > 0 ? (
-                                      <><span className="mono" style={{ fontWeight: 500 }}>{formatArr(it.arrAtStakeCents)}</span> at stake</>
+                                      <><span className="mono" style={{ fontWeight: 500 }}>{formatArr(it.arrAtStakeCents)}</span> ARR at stake</>
                                     ) : (
-                                      <span className="muted-2">ARR not set</span>
+                                      <span className="muted">ARR not set</span>
                                     )}
                                   </span>
-                                  <span className="text-2xs muted-2" style={{ flexShrink: 0 }}>
+                                  <span className="text-2xs muted" style={{ flexShrink: 0 }}>
                                     {it.accountCount} {it.accountCount === 1 ? "acct" : "accts"}
                                   </span>
                                 </div>
@@ -408,7 +391,7 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
                             <div className="row between center" style={{ flexWrap: "wrap", gap: 6 }}>
                               <span className="text-xs muted truncate">{it.ownerName ?? "Unassigned"}</span>
                               <span className="text-2xs muted mono">
-                                {it.shippedAt ? `Shipped ${fmtDate(it.shippedAt)}` : fmtDate(it.createdAt)}
+                                {it.shippedAt ? `Shipped ${formatDate(it.shippedAt)}` : formatDate(it.createdAt)}
                               </span>
                             </div>
                           </Link>

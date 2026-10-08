@@ -5,14 +5,8 @@ import { useRouter } from "next/navigation";
 import { Pill } from "@crumb/ui";
 import { useToast } from "@/components/toast";
 import { errorMessage } from "@/lib/action-error";
+import { formatArr } from "@/lib/priority";
 import { setAccountArr } from "../actions";
-
-// Display matches the server `arr()` formatter: $X.XM / $Xk / "Set ARR".
-function fmt(cents: number): string {
-  if (cents === 0) return "Set ARR";
-  if (cents >= 100_000_000) return `$${(cents / 100_000_000).toFixed(1)}M ARR`;
-  return `$${Math.round(cents / 100_000)}k ARR`;
-}
 
 // Click-to-edit ARR pill on the account header. Read-only Pill for viewers;
 // for admins/PMs it opens a whole-dollars input that saves on blur/Enter.
@@ -28,7 +22,7 @@ export function AccountArrEdit({ accountId, arrCents, canEdit }: {
   const [val, setVal] = useState("");
   const [pending, startTransition] = useTransition();
 
-  if (!canEdit) return <Pill solid>{fmt(cents)}</Pill>;
+  if (!canEdit) return <Pill solid>{formatArr(cents, " ARR")}</Pill>;
 
   function open() {
     setVal(cents > 0 ? String(Math.round(cents / 100)) : "");
@@ -55,11 +49,10 @@ export function AccountArrEdit({ accountId, arrCents, canEdit }: {
 
   if (editing) {
     return (
-      <span className="row gap-1 center" style={{
-        border: "1px solid var(--line)", borderRadius: 999, padding: "2px 10px", background: "var(--paper)",
-      }}>
+      <span className="row gap-1 center">
         <span className="muted text-sm">$</span>
         <input
+          className="input"
           autoFocus
           value={val}
           onChange={e => setVal(e.target.value)}
@@ -69,8 +62,9 @@ export function AccountArrEdit({ accountId, arrCents, canEdit }: {
             if (e.key === "Escape") setEditing(false);
           }}
           inputMode="numeric"
+          aria-label="ARR in dollars"
           placeholder="ARR in dollars"
-          style={{ width: 120, padding: "1px 2px", font: "inherit", fontSize: 13, border: 0, outline: "none", background: "transparent", color: "var(--ink)" }}
+          style={{ width: 140 }}
         />
       </span>
     );
@@ -81,9 +75,11 @@ export function AccountArrEdit({ accountId, arrCents, canEdit }: {
       onClick={open}
       disabled={pending}
       title="Edit ARR"
-      style={{ background: "none", border: 0, padding: 0, cursor: "pointer" }}
+      // The padding lifts the hit area to 24px; the margin keeps the layout.
+      style={{ background: "none", border: 0, padding: "3px 0", margin: "-3px 0", borderRadius: 999, cursor: "pointer" }}
     >
-      <Pill solid>{fmt(cents)}</Pill>
+      {/* Editors get the action instead of the zero state. */}
+      <Pill solid>{cents > 0 ? formatArr(cents, " ARR") : "Set ARR"}</Pill>
     </button>
   );
 }

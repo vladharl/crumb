@@ -64,7 +64,7 @@ export async function deleteAccount(id: string): Promise<MutationResult> {
     .select({ n: sql<number>`count(*)::int` })
     .from(items)
     .where(and(eq(items.workspaceId, workspace.id), eq(items.accountId, id)));
-  if (n > 0) return { ok: false, error: `Account still has ${n} item${n === 1 ? "" : "s"}. Reassign or delete those first.` };
+  if (n > 0) return { ok: false, error: `Account still has ${n} request${n === 1 ? "" : "s"}. Reassign or delete those first.` };
 
   await db.delete(accounts).where(and(eq(accounts.id, id), eq(accounts.workspaceId, workspace.id)));
   revalidatePath("/settings/account-mapping");

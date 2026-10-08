@@ -117,7 +117,7 @@ describe("lib/priority", () => {
 
     it("labels the missing-ARR case instead of pretending it's $0 of value", () => {
       const p = priority(input({ arrAtStakeCents: 0 }), NOW);
-      expect(p.factors[0]).toEqual({ key: "revenue", label: "No ARR set on the account", delta: null });
+      expect(p.factors[0]).toEqual({ key: "revenue", label: "ARR not set", delta: null });
     });
   });
 
@@ -136,9 +136,31 @@ describe("lib/priority", () => {
       expect(formatArr(5_000_00)).toBe("$5k"); // $5,000 → thousands step
       expect(formatArr(500_00)).toBe("$500"); // below $1,000 → exact dollars
     });
-    it("returns $0 for zero/negative (callers render 'not set' themselves)", () => {
-      expect(formatArr(0)).toBe("$0");
-      expect(formatArr(-1)).toBe("$0");
+    it("never shows $0k or $1k for amounts under $1k", () => {
+      expect(formatArr(400_00)).toBe("$400"); // the old copies said "$0k"
+      expect(formatArr(999_00)).toBe("$999"); // …and "$1k" here
+      expect(formatArr(1_00)).toBe("$1");
+      expect(formatArr(999_50)).toBe("$1k"); // rounds up to a whole thousand
+      expect(formatArr(1_499_00)).toBe("$1k");
+    });
+    it("rolls a rounded 1000k over to millions", () => {
+      expect(formatArr(999_499_00)).toBe("$999k");
+      expect(formatArr(999_500_00)).toBe("$1.0M");
+      expect(formatArr(1_000_000_00)).toBe("$1.0M");
+    });
+    it("has one zero state, never $0", () => {
+      expect(formatArr(0)).toBe("ARR not set");
+      expect(formatArr(-1)).toBe("ARR not set");
+      expect(formatArr(Number.NaN)).toBe("ARR not set");
+    });
+    it("appends a suffix to amounts but not to the zero state", () => {
+      expect(formatArr(480_000_00, " ARR")).toBe("$480k ARR");
+      expect(formatArr(500_00, " at stake")).toBe("$500 at stake");
+      expect(formatArr(0, " ARR")).toBe("ARR not set");
+    });
+    it("lets a subset sum read $0 instead of ARR not set", () => {
+      expect(formatArr(0, "", "$0")).toBe("$0");
+      expect(formatArr(480_000_00, "", "$0")).toBe("$480k");
     });
   });
 });

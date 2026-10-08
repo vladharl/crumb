@@ -1,5 +1,5 @@
-import { SkeletonCard } from "@crumb/ui";
+import { SkeletonCard, SkeletonPill } from "@crumb/ui";
 
 export default function Loading() {
-  return <SkeletonCard title="Audit log" lines={6} />;
+  return <SkeletonCard title="Audit log" after={<SkeletonPill width={96} />} lines={6} />;
 }

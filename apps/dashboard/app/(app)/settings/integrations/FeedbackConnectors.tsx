@@ -5,6 +5,7 @@ import { Card, CardHead, Dropdown, Pill } from "@crumb/ui";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm";
 import { errorMessage } from "@/lib/action-error";
+import { gmailTime } from "@/lib/timefmt";
 import {
   connectFeedbackSource, disconnectFeedbackSource, estimateFeedbackBacklog, syncFeedbackNow,
 } from "./FeedbackConnectorsActions";
@@ -53,7 +54,7 @@ const PROVIDERS: ProviderDef[] = [
   {
     id: "intercom",
     name: "Intercom",
-    blurb: "Pull conversations; turn the product feedback in them into items.",
+    blurb: "Pull conversations; turn the product feedback in them into requests.",
     fields: [{ key: "accessToken", label: "Access token", secret: true }],
     credential: "access token",
     noun: "conversations",
@@ -61,7 +62,7 @@ const PROVIDERS: ProviderDef[] = [
   {
     id: "freshchat",
     name: "Freshchat",
-    blurb: "Pull chat conversations (webhook ingest is the recommended follow-up).",
+    blurb: "Pull chat conversations; turn the product feedback in them into requests.",
     fields: [
       { key: "baseUrl", label: "API base URL", placeholder: "https://acme.freshchat.com/v2", configKey: "baseUrl" },
       { key: "apiToken", label: "API token", secret: true },
@@ -137,15 +138,16 @@ export function FeedbackConnectors({
     <Card>
       <CardHead
         title="Feedback sources (Autopilot)"
-        after={<Pill>{paused ? "Paused" : connections.length ? `${connections.length} connected` : "Inbound"}</Pill>}
+        after={<Pill>{paused ? "Paused" : connections.length ? `${connections.length} connected` : "None connected"}</Pill>}
       />
       <div className="col gap-3" style={{ padding: "0 4px 4px" }}>
         <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "64ch" }}>
           {paused
-            ? "Paused: your plan no longer includes feedback connectors, so nothing syncs. You can still disconnect them."
+            ? `Paused: your plan no longer includes feedback connectors, so nothing syncs. ${canManage ? "You" : "A workspace admin"} can still disconnect them.`
             : <>Pull feedback from where customers already talk. {aiEnabled
-                ? "New, relevant items are added automatically; near-duplicates fold into the existing item; anything unclear waits in the Inbox. Autopilot has its own monthly AI allowance, separate from Ask and triage."
-                : "On self-host, every pulled record lands in the Inbox for review (the AI new-and-relevant filter is a Cloud feature)."}</>}
+                ? "New, relevant requests are added automatically; near-duplicates fold into the existing request; anything unclear waits in the Inbox. Autopilot has its own monthly AI allowance, separate from Ask and triage."
+                : "Every pulled record lands in the Inbox for you to review. On Crumb Cloud, AI adds the new, relevant ones for you."}
+                {!canManage && " Only workspace admins can connect or change them."}</>}
         </p>
         {shown.map((p) => (
           <ConnectorRow key={p.id} def={p} conn={byProvider.get(p.id)} canManage={canManage} aiEnabled={aiEnabled} paused={paused} />
@@ -229,8 +231,9 @@ function ConnectorRow({
 
         {connected && (
           <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
-            <span className="text-xs muted">
-              {conn!.lastSyncedAt ? `Last synced ${new Date(conn!.lastSyncedAt).toLocaleString()}` : "Not synced yet"}
+            {/* Local time: the server's zone and the viewer's can differ. */}
+            <span className="text-xs muted" suppressHydrationWarning>
+              {conn!.lastSyncedAt ? `Last synced ${gmailTime(conn!.lastSyncedAt)}` : "Not synced yet"}
               {note && !paused ? ` · ${note}` : ""}
             </span>
             {canManage && (

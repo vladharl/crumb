@@ -57,7 +57,7 @@ export async function AccountFeedbackTile({ accountId }: { accountId: string }) 
       <div className="list embed-stack">
         {feedback.length === 0 && (
           <div className="card-body">
-            <p className="text-sm muted" style={{ margin: 0 }}>No submissions yet.</p>
+            <p className="text-sm muted" style={{ margin: 0 }}>No feedback yet.</p>
           </div>
         )}
         {feedback.map(it => (

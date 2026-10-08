@@ -5,6 +5,8 @@ import { requireSession } from "@/lib/auth";
 import { hasFeature } from "@/lib/entitlements";
 import { accountRiskSignals, atRiskAccounts, atRiskArrCents } from "@/lib/insights/churn";
 import { loopOpenSql } from "@/lib/loop-sql";
+import { formatArr } from "@/lib/priority";
+import { formatDate } from "@/lib/timefmt";
 import { PrintButton } from "./PrintButton";
 
 export const dynamic = "force-dynamic";
@@ -15,12 +17,6 @@ export const metadata = { title: "QBR" };
 // Covers the last 90 days. Reuses the same churn signals as Insights, and the
 // same counting: unmerged items only, open = not closed (Set aside included).
 
-function arr(cents: number): string {
-  if (!cents) return "$0";
-  if (cents >= 100_000_000) return `$${(cents / 100_000_000).toFixed(2)}M`;
-  if (cents >= 100_000) return `$${Math.round(cents / 100_000)}k`;
-  return `$${Math.round(cents / 100)}`;
-}
 function humanDuration(seconds: number): string {
   if (!seconds || seconds < 0) return "—";
   const h = Math.round(seconds / 3600);
@@ -77,13 +73,14 @@ export default async function QbrPage() {
   const themes = themeRows as unknown as Array<{ name: string; n: number }>;
   const top = topRows as unknown as Array<{ id: string; name: string; arr_cents: number | string; total: number | string; open: number | string; shipped: number | string }>;
   const atRisk = atRiskAccounts(signals);
-  const generated = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  // A printed report outlives the year it was made in, so the year always shows.
+  const generated = formatDate(new Date(), { year: true });
 
-  const th: React.CSSProperties = { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid var(--oat-deep)", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em" };
+  const th: React.CSSProperties = { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid var(--text)", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.04em" };
   const td: React.CSSProperties = { padding: "6px 8px", borderBottom: "1px solid var(--hair-strong)", fontSize: 13 };
 
   return (
-    <main style={{ maxWidth: 860, margin: "0 auto", padding: "40px 28px", color: "var(--oat-deep)", fontFamily: "var(--font-body, system-ui)" }}>
+    <main style={{ maxWidth: 860, margin: "0 auto", padding: "40px 28px", color: "var(--text)", fontFamily: "var(--font-body, system-ui)" }}>
       <style>{`@media print { .no-print { display: none !important; } main { padding: 0 !important; } @page { margin: 16mm; } }`}</style>
 
       <div className="no-print" style={{ display: "flex", gap: 12, justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
@@ -91,15 +88,15 @@ export default async function QbrPage() {
         <PrintButton />
       </div>
 
-      <header style={{ borderBottom: "3px solid var(--oat-deep)", paddingBottom: 16, marginBottom: 24 }}>
-        <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: "#8a8077" }}>Quarterly Business Review</div>
+      <header style={{ borderBottom: "3px solid var(--text)", paddingBottom: 16, marginBottom: 24 }}>
+        <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--mute)" }}>Quarterly Business Review</div>
         <h1 style={{ fontSize: 30, margin: "4px 0 2px", fontWeight: 600 }}>{workspace.name}</h1>
-        <div style={{ fontSize: 13, color: "#8a8077" }}>Last 90 days · generated {generated}</div>
+        <div style={{ fontSize: 13, color: "var(--mute)" }}>Last 90 days · generated {generated}</div>
       </header>
 
       <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 16, marginBottom: 28 }}>
         {[
-          { label: "Total ARR", value: arr(Number(pf.total_arr)) },
+          { label: "Total ARR", value: formatArr(Number(pf.total_arr)) },
           { label: "Accounts", value: String(pf.accounts) },
           { label: "New feedback", value: String(act.new_90) },
           { label: "Shipped", value: String(act.shipped_90) },
@@ -108,7 +105,7 @@ export default async function QbrPage() {
         ].map(k => (
           <div key={k.label}>
             <div style={{ fontSize: 26, fontWeight: 600 }}>{k.value}</div>
-            <div style={{ fontSize: 12, color: "#8a8077" }}>{k.label}</div>
+            <div style={{ fontSize: 12, color: "var(--mute)" }}>{k.label}</div>
           </div>
         ))}
       </section>
@@ -116,8 +113,8 @@ export default async function QbrPage() {
       {aiEntitled && atRisk.length > 0 && (
         <section style={{ marginBottom: 28 }}>
           <h2 style={{ fontSize: 18, margin: "0 0 8px" }}>Accounts at risk</h2>
-          <div style={{ fontSize: 12, color: "#8a8077", marginBottom: 8 }}>
-            Trending negative on sentiment or with open severe issues. {arr(atRiskArrCents(signals))} ARR.
+          <div style={{ fontSize: 12, color: "var(--mute)", marginBottom: 8 }}>
+            Trending negative on sentiment or with open severe issues. {formatArr(atRiskArrCents(signals), " ARR")}.
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Account</th><th style={th}>ARR</th><th style={th}>Sentiment</th><th style={th}>Trend</th><th style={th}>Open</th></tr></thead>
@@ -125,9 +122,9 @@ export default async function QbrPage() {
               {atRisk.slice(0, 10).map(a => (
                 <tr key={a.accountId}>
                   <td style={td}>{a.name}</td>
-                  <td style={td}>{arr(a.arrCents)}</td>
+                  <td style={td}>{formatArr(a.arrCents)}</td>
                   <td style={td}>{a.avgSentiment != null ? a.avgSentiment.toFixed(2) : "—"}</td>
-                  <td style={{ ...td, color: a.sentimentTrend != null && a.sentimentTrend < 0 ? "var(--rust)" : "var(--green)" }}>
+                  <td style={{ ...td, color: a.sentimentTrend != null && a.sentimentTrend < 0 ? "var(--rust-deep)" : "var(--green-deep)" }}>
                     {a.sentimentTrend != null ? `${a.sentimentTrend < 0 ? "↓" : "↑"} ${a.sentimentTrend.toFixed(2)}` : "—"}
                   </td>
                   <td style={td}>{a.openCount}</td>
@@ -146,7 +143,7 @@ export default async function QbrPage() {
             {top.map(t => (
               <tr key={t.id}>
                 <td style={td}>{t.name}</td>
-                <td style={td}>{arr(Number(t.arr_cents))}</td>
+                <td style={td}>{formatArr(Number(t.arr_cents))}</td>
                 <td style={td}>{Number(t.total)}</td>
                 <td style={td}>{Number(t.open)}</td>
                 <td style={td}>{Number(t.shipped)}</td>
@@ -160,7 +157,7 @@ export default async function QbrPage() {
         <section style={{ marginBottom: 28 }}>
           <h2 style={{ fontSize: 18, margin: "0 0 8px" }}>Top themes</h2>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={th}>Theme</th><th style={th}>Items</th></tr></thead>
+            <thead><tr><th style={th}>Theme</th><th style={th}>Requests</th></tr></thead>
             <tbody>
               {themes.map(t => (
                 <tr key={t.name}><td style={td}>{t.name}</td><td style={td}>{t.n}</td></tr>
@@ -170,7 +167,7 @@ export default async function QbrPage() {
         </section>
       )}
 
-      <footer style={{ marginTop: 40, paddingTop: 12, borderTop: "1px solid var(--hair-strong)", fontSize: 11, color: "var(--mute-2)" }}>
+      <footer style={{ marginTop: 40, paddingTop: 12, borderTop: "1px solid var(--hair-strong)", fontSize: 11, color: "var(--mute)" }}>
         Generated by Crumb · {workspace.name} · {generated}
       </footer>
     </main>

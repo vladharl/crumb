@@ -529,7 +529,7 @@ textarea.field { min-height: 84px; }
 .pending-attachment svg { width: 11px; height: 11px; opacity: 0.55; }
 .pending-attachment .filename { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
 .pending-attachment .size { font-size: 10px; color: var(--c-ink-2); }
-.pending-attachment button { background: none; border: 0; padding: 2px; cursor: pointer; color: var(--c-ink-2); }
+.pending-attachment button { background: none; border: 0; padding: 7px; margin: -5px; cursor: pointer; color: var(--c-ink-2); }
 ` +
 // A thread: one column at the default size; expanded, the status history
 // opens as a side rail. The reply box is one line at rest and autoGrow()
@@ -672,6 +672,8 @@ textarea.field.reply-box { flex: 1; min-height: 0; max-height: 160px; resize: no
   width: 18px; height: 18px; border-radius: 999px; background: #fff;
   box-shadow: 0 1px 2px rgba(74, 46, 31, 0.3); transition: transform 160ms var(--ease);
 }
+/* A clear layer stretches the 22px-high track to a 24px target, per WCAG 2.5.8. */
+.sw::before { content: ""; position: absolute; inset: -1px 0; }
 .sw.on { background: var(--c-accent); }
 .sw.on::after { transform: translateX(16px); }
 .sw:disabled { cursor: default; }

@@ -10,12 +10,15 @@ import { log } from "../log";
 //   users:read        — list members
 //   users:read.email  — resolve workspace_user.email → slack user_id
 //   app_mentions:read — receive app_mention events (Phase-0 sizing bot)
+//   commands          — the /crumb slash command
 //
 // Self-host: vendor registers their own Slack app at api.slack.com and
 // sets SLACK_CLIENT_ID/SECRET + redirect URL to /api/integrations/slack/callback.
 // Cloud: we hold the creds; same code path. Adding a scope requires connected
 // workspaces to re-connect (the callback overwrites the token + scopes).
-const BOT_SCOPES = "chat:write,im:write,users:read,users:read.email,app_mentions:read";
+// The one list: the install URL asks for these, and the self-host setup helper
+// (settings/integrations/SelfHostSetup.tsx) shows operators the same ones.
+export const SLACK_BOT_SCOPES = ["chat:write", "im:write", "users:read", "users:read.email", "app_mentions:read", "commands"];
 
 export function slackConfigured(): boolean {
   return !!process.env.SLACK_CLIENT_ID?.trim() && !!process.env.SLACK_CLIENT_SECRET?.trim();
@@ -36,7 +39,7 @@ export function buildAuthUrl(workspaceId: string, redirectUrl: string): string {
   if (!clientId) throw new Error("SLACK_CLIENT_ID is not configured");
   const params = new URLSearchParams({
     client_id: clientId,
-    scope: BOT_SCOPES,
+    scope: SLACK_BOT_SCOPES.join(","),
     redirect_uri: redirectUrl,
     state: signState("slack", workspaceId),
   });

@@ -82,7 +82,7 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
   async function dismiss() {
     const ok = await confirm({
       title: "Dismiss this capture?",
-      body: "It won't become a feedback item. You can undo right after.",
+      body: "It won't become a request. You can undo right after.",
       confirmLabel: "Dismiss",
       destructive: true,
     });
@@ -163,12 +163,12 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
               value={title}
               onChange={e => setTitle(e.target.value)}
               placeholder="Give it a short title"
-              aria-label="Item title"
+              aria-label="Request title"
               disabled={pending}
               style={{ flex: "1 1 220px", minWidth: 160 }}
             />
             <Btn sm variant="primary" icon={<Ic.plus style={{ width: 12, height: 12 }} />} onClick={create} disabled={pending || noAccount || !title.trim()}>
-              {pending ? "Creating…" : "Create item"}
+              {pending ? "Creating…" : "Create request"}
             </Btn>
             {/* A hairline + ghost styling separate the lesser, guarded action
                 from the primary one so a fast click doesn't drop a capture. */}

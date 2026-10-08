@@ -90,7 +90,7 @@ function loadSentry() {
       console.error(JSON.stringify({
         time: new Date().toISOString(),
         level: "warn",
-        msg: "SENTRY_DSN set but @sentry/node not installed — error reporting disabled",
+        msg: "SENTRY_DSN set but @sentry/node not installed, so error reporting is disabled",
       }));
       return null;
     }

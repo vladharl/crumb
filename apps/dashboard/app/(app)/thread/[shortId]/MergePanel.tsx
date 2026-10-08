@@ -8,6 +8,7 @@ import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm";
 import { cancelWaitingMove, firstName, noEmailNote } from "@/components/ReplyComposer";
 import { errorMessage } from "@/lib/action-error";
+import { formatArr } from "@/lib/priority";
 import type { NotifyPlan } from "@/lib/notify/customer-plan";
 import {
   mergeItems,
@@ -33,13 +34,6 @@ export type ThreadMergeData = {
   // Whether on-demand "find similar" is available (Cloud + AI; embeddings exist).
   dedupAvailable: boolean;
 };
-
-function formatArr(cents: number): string {
-  if (!cents) return "$0";
-  if (cents >= 100_000_000) return `$${(cents / 100_000_000).toFixed(1)}M`;
-  if (cents >= 100_000) return `$${Math.round(cents / 100_000)}k`;
-  return `$${Math.round(cents / 100)}`;
-}
 
 const requests = (n: number) => (n === 1 ? "1 request" : `${n} requests`);
 
@@ -169,7 +163,7 @@ export function MergePanel({
                 distinct accounts asking (followers — people — kept as the
                 secondary count). */}
             <span className="text-xs muted">
-              {formatArr(merge.combinedArrCents)} at stake · {merge.accountCount} {merge.accountCount === 1 ? "account" : "accounts"}
+              {formatArr(merge.combinedArrCents, " ARR at stake")} · {merge.accountCount} {merge.accountCount === 1 ? "account" : "accounts"}
               {merge.followerCount > merge.accountCount && ` · ${merge.followerCount} ${merge.followerCount === 1 ? "follower" : "followers"}`}
             </span>
           </div>
@@ -178,7 +172,7 @@ export function MergePanel({
         {offersMerge && (
           <div className="row gap-2 center between" style={{ flexWrap: "wrap" }}>
             <span className="text-xs muted">
-              {swap ? `The item you pick folds into ${itemShortId}.` : `${itemShortId} folds into the item you pick.`}
+              {swap ? `The request you pick folds into ${itemShortId}.` : `${itemShortId} folds into the request you pick.`}
             </span>
             <Btn sm variant="ghost" aria-pressed={swap} onClick={() => setSwap(s => !s)} disabled={pending}>
               Swap direction
@@ -207,10 +201,10 @@ export function MergePanel({
         {merge.dedupAvailable && canManage && (
           <>
             <Btn sm icon={<Ic.search style={{ width: 11, height: 11 }} />} onClick={findSimilar} disabled={pending || searching}>
-              {searching ? "Searching…" : "Find similar items"}
+              {searching ? "Searching…" : "Find similar requests"}
             </Btn>
             {searched && candidates && candidates.length === 0 && (
-              <span className="text-xs muted">No similar items found.</span>
+              <span className="text-xs muted">No similar requests found.</span>
             )}
             {candidates && candidates.length > 0 && (
               <div className="col gap-2">

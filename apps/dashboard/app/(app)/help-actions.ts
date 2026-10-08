@@ -27,7 +27,7 @@ export async function submitSupportRequest(input: {
     return { ok: false, error: "Add a subject and a message." };
   }
   if (subject.length > SUBJECT_MAX || message.length > MESSAGE_MAX) {
-    return { ok: false, error: "That message is too long — please shorten it." };
+    return { ok: false, error: "That message is too long. Please shorten it." };
   }
 
   const to = supportContactAddress();

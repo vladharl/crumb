@@ -43,12 +43,12 @@ function selectProvider(): { provider: EmailProvider; from: string } {
   let provider: EmailProvider;
   if (choice === "resend") {
     if (!isCloud()) {
-      console.warn("[crumb/email] CRUMB_EMAIL_PROVIDER=resend requires CRUMB_TIER=cloud. Managed email delivery is a Cloud feature — falling back to stdout. Self-hosters can use CRUMB_EMAIL_PROVIDER=smtp with their own relay.");
+      console.warn("[crumb/email] CRUMB_EMAIL_PROVIDER=resend requires CRUMB_TIER=cloud. Managed email delivery is a Cloud feature, so email falls back to stdout. Self-hosters can use CRUMB_EMAIL_PROVIDER=smtp with their own relay.");
       provider = stdoutProvider;
     } else {
       const apiKey = process.env.RESEND_API_KEY;
       if (!apiKey) {
-        console.warn("[crumb/email] CRUMB_EMAIL_PROVIDER=resend but RESEND_API_KEY is unset — falling back to stdout.");
+        console.warn("[crumb/email] CRUMB_EMAIL_PROVIDER=resend but RESEND_API_KEY is unset. Falling back to stdout.");
         provider = stdoutProvider;
       } else if (!process.env.CRUMB_EMAIL_FROM) {
         console.warn("[crumb/email] CRUMB_EMAIL_FROM is unset; Resend will reject sends. Falling back to stdout.");
@@ -66,7 +66,7 @@ function selectProvider(): { provider: EmailProvider; from: string } {
     const pass = process.env.SMTP_PASS ?? "";
     const secure = (process.env.SMTP_SECURE ?? "").toLowerCase() === "true";
     if (!host || !Number.isFinite(port)) {
-      console.warn("[crumb/email] CRUMB_EMAIL_PROVIDER=smtp but SMTP_HOST/SMTP_PORT not set — falling back to stdout.");
+      console.warn("[crumb/email] CRUMB_EMAIL_PROVIDER=smtp but SMTP_HOST/SMTP_PORT not set. Falling back to stdout.");
       provider = stdoutProvider;
     } else if (!process.env.CRUMB_EMAIL_FROM) {
       console.warn("[crumb/email] CRUMB_EMAIL_FROM is unset; most SMTP relays will reject sends. Falling back to stdout.");

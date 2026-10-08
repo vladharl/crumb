@@ -67,7 +67,7 @@ type Cand = {
   group_accts: string | number;
 };
 
-const arrText = (cents: number) => (cents > 0 ? `${formatArr(cents)} ARR` : "ARR not set");
+const arrText = (cents: number) => formatArr(cents, " ARR");
 
 // What came in during the window, counted by the database: submissions,
 // distinct accounts, and those accounts' combined ARR.
@@ -103,7 +103,7 @@ export async function askFeedback(
       const span = intent.windowDays === 1 ? "the last day" : `the last ${intent.windowDays} days`;
       const t = await windowTotals(workspace.id, intent.windowDays);
       if (t.n === 0) answer = `No feedback came in during ${span}.`;
-      else totals = `In ${span}, ${t.n} pieces of feedback came in from ${t.accts} accounts (${arrText(t.arr)} between them).`;
+      else totals = `In ${span}, ${t.n} ${t.n === 1 ? "request" : "requests"} came in from ${t.accts} ${t.accts === 1 ? "account" : "accounts"} (${t.arr > 0 ? `${arrText(t.arr)} between them` : "ARR not set"}).`;
     }
 
     if (!answer) {
@@ -149,18 +149,18 @@ export async function askFeedback(
         .map((r) => {
           const accts = Number(r.group_accts);
           const groupArr = Number(r.group_arr);
-          const reach = accts > 1 ? `; ${accts} accounts asking${groupArr > 0 ? `, ${formatArr(groupArr)} ARR combined` : ""}` : "";
+          const reach = accts > 1 ? `; ${accts} accounts asking${groupArr > 0 ? `, ${formatArr(groupArr, " ARR at stake")}` : ""}` : "";
           return `[${r.short_id}] ${r.title}${r.body ? `: ${r.body.slice(0, 400)}` : ""} (from ${r.account}, ${arrText(Number(r.arr))}${reach}; status ${statusLabel(r.status)}; received ${r.day})`;
         })
         .join("\n");
-      const prompt = `You are answering a question using ONLY the customer feedback items below. Each item shows the account that sent it and that account's ARR, how many accounts are asking for it when more than one, its status, and the date it came in. Cite the items you rely on by their bracketed id (e.g. FB-12) inline. If the items don't answer the question, say so plainly. Never invent facts.
-${intent.byArr ? "\nThe items are listed from the highest-ARR account down. When revenue matters to the answer, name the accounts and their ARR.\n" : ""}${totals ? `\nAll feedback received in this window, across every topic, counted by the database. Use these numbers only for questions about overall volume; for a specific topic, count only the matching items listed below, and never add up ARR yourself:\n${totals}\n` : ""}
-Feedback items:
+      const prompt = `You are answering a question using ONLY the customer feedback requests below. Each request shows the account that sent it and that account's ARR, how many accounts are asking for it when more than one, its status, and the date it came in. Cite the requests you rely on by their bracketed id (e.g. FB-12) inline. If the requests don't answer the question, say so plainly. Never invent facts.
+${intent.byArr ? "\nThe requests are listed from the highest-ARR account down. When revenue matters to the answer, name the accounts and their ARR.\n" : ""}${totals ? `\nAll feedback received in this window, across every topic, counted by the database. Use these numbers only for questions about overall volume; for a specific topic, count only the matching requests listed below, and never add up ARR yourself:\n${totals}\n` : ""}
+Feedback requests:
 ${context}
 
 Question: ${q}
 
-Answer in 2 to 5 sentences, grounded strictly in the items and totals above, with inline [FB-N] citations. ${NO_EM_DASH_RULE}`;
+Answer in 2 to 5 sentences, grounded strictly in the requests and totals above, with inline [FB-N] citations. ${NO_EM_DASH_RULE}`;
 
       answer = await aistackChat(prompt, { maxTokens: 1500, temperature: 0.2, scope: "crumb/ai" });
       if (!answer) return { ok: false, error: "answer_failed" };

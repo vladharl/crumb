@@ -118,7 +118,7 @@ export async function extractActionTrace(
         out.push(`${fmt(ts)} clicked${label ? ` "${label}"` : ""}`);
         recentClicks.push(ts);
         recentClicks = recentClicks.filter(x => ts - x <= 1500);
-        if (recentClicks.length >= 3) { out.push(`${fmt(ts)} (rapid repeated clicks — possible frustration)`); recentClicks = []; }
+        if (recentClicks.length >= 3) { out.push(`${fmt(ts)} (rapid repeated clicks, possible frustration)`); recentClicks = []; }
         lastWasTyping = false;
       } else if (src === 5) {
         if (!lastWasTyping) { out.push(`${fmt(ts)} typed in a field`); lastWasTyping = true; }

@@ -10,6 +10,7 @@ export function SessionRecordToggle({ enabled, disabled }: { enabled: boolean; d
     <span style={{ opacity: disabled || pending ? 0.55 : 1 }}>
       <Switch
         on={enabled}
+        label="Session recording"
         onClick={() => {
           if (disabled || pending) return;
           startTransition(async () => {

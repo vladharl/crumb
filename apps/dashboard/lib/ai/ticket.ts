@@ -51,15 +51,15 @@ export type SuggestTicketResult = {
 };
 
 // "Customer impact: Acme Co, $250k ARR. 4 requesters across 3 accounts, $410k
-// ARR combined." then a link to the thread. A GitHub repo can be public, so a
+// ARR at stake." then a link to the thread. A GitHub repo can be public, so a
 // GitHub ticket never names the customer or what they pay: "Customer impact:
 // 4 requesters across 3 accounts." and the link.
 export function ticketImpactFooter(t: TicketImpact, provider?: SuggestTicketInput["provider"]): string {
   const publicRepo = provider === "github";
-  const arr = t.arrCents > 0 ? `${formatArr(t.arrCents)} ARR` : "ARR not set";
+  const arr = formatArr(t.arrCents, " ARR");
   const people = `${t.requesters} ${t.requesters === 1 ? "requester" : "requesters"}`;
   const reach = t.accounts > 1
-    ? `${people} across ${t.accounts} accounts${!publicRepo && t.combinedArrCents > 0 ? `, ${formatArr(t.combinedArrCents)} ARR combined` : ""}`
+    ? `${people} across ${t.accounts} accounts${!publicRepo && t.combinedArrCents > 0 ? `, ${formatArr(t.combinedArrCents, " ARR at stake")}` : ""}`
     : people;
   const lines = [publicRepo ? `Customer impact: ${reach}.` : `Customer impact: ${t.accountName}, ${arr}. ${reach}.`];
   if (t.threadUrl) lines.push(`Thread in Crumb: ${t.threadUrl}`);

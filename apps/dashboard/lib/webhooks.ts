@@ -426,48 +426,48 @@ const AT = "2026-01-01T12:00:00.000Z";
 
 export const EVENT_DOCS: { [K in EventType]: { when: string; sample: Extract<CrumbEvent, { type: K }> } } = {
   "item.created": {
-    when: "An item was created from the widget, the dashboard, Slack, MCP, an accepted capture or an Autopilot connector.",
+    when: "A request was created from the widget, the dashboard, Slack, MCP, an accepted capture or an Autopilot connector.",
     sample: { type: "item.created", workspace: "acme", item: ITEM, account: "Globex", at: AT },
   },
   "item.status_changed": {
-    when: "An item moved to a new status, including when the customer closes it. reason is set when one was given.",
+    when: "A request moved to a new status, including when the customer closes it. reason is set when one was given.",
     sample: { type: "item.status_changed", workspace: "acme", item: ITEM, from_status: "open", to_status: "planned", reason: null, at: AT },
   },
   "item.reply_created": {
-    when: "Your team or the customer replied on an item (is_customer tells which). Internal notes are never sent.",
+    when: "Your team or the customer replied on a request (is_customer tells which). Internal notes are never sent.",
     sample: {
       type: "item.reply_created", workspace: "acme", item: ITEM,
       reply: { id: "0b6f7a52-4c1e-4f0e-9a51-3d2f1b7e9c11", internal: false, author: "Dana Reyes", is_customer: false }, at: AT,
     },
   },
   "item.assigned": {
-    when: "An item was assigned to a teammate. assignee is null when it was unassigned.",
+    when: "A request was assigned to a teammate. assignee is null when it was unassigned.",
     sample: {
       type: "item.assigned", workspace: "acme", item: ITEM,
       assignee: { id: "5d1c2e9a-7b3f-4a8e-b6d4-2f9e8c7a1b30", name: "Dana Reyes" }, at: AT,
     },
   },
   "item.merged": {
-    when: "An item was merged into another one as a duplicate.",
+    when: "A request was merged into another one as a duplicate.",
     sample: { type: "item.merged", workspace: "acme", item: { ...ITEM, short_id: "FB-57" }, into: { short_id: "FB-42" }, at: AT },
   },
   "item.external_status_changed": {
-    when: "The Linear, Jira or GitHub ticket linked to an item changed status in that tracker.",
+    when: "The Linear, Jira or GitHub ticket linked to a request changed status in that tracker.",
     sample: {
       type: "item.external_status_changed", workspace: "acme", item: ITEM, ticket: TICKET,
       from_status: "In Progress", to_status: "Done", at: AT,
     },
   },
   "ticket.linked": {
-    when: "An item was linked to a new Linear, Jira or GitHub ticket.",
+    when: "A request was linked to a new Linear, Jira or GitHub ticket.",
     sample: { type: "ticket.linked", workspace: "acme", item: ITEM, ticket: TICKET, at: AT },
   },
   "ticket.unlinked": {
-    when: "An item's tracker ticket was unlinked. ticket is the one it was linked to.",
+    when: "A request's tracker ticket was unlinked. ticket is the one it was linked to.",
     sample: { type: "ticket.unlinked", workspace: "acme", item: ITEM, ticket: TICKET, at: AT },
   },
   "customer.notified": {
-    when: "The customer was emailed about an item: a reply (kind reply) or a status change (kind status, with to_status).",
+    when: "The customer was emailed about a request: a reply (kind reply) or a status change (kind status, with to_status).",
     sample: {
       type: "customer.notified", workspace: "acme", item: ITEM,
       notification: { kind: "status", channel: "email", to_status: "shipped" }, at: AT,

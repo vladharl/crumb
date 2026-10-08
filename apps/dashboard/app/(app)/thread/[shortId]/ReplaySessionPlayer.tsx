@@ -312,7 +312,7 @@ export function ReplaySessionPlayer({ replayId, chunks, durationMs, viewportW, v
       aria-modal="true"
       onClick={onClose}
       style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)",
+        position: "fixed", inset: 0, background: "var(--scrim)",
         zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center",
       }}
     >
@@ -375,7 +375,7 @@ export function ReplaySessionPlayer({ replayId, chunks, durationMs, viewportW, v
         </div>
 
         {loading && (
-          <div className="row center" style={{ padding: 14, color: "var(--mute-2)" }}>
+          <div className="row center" style={{ padding: 14, color: "var(--mute)" }}>
             Loading replay…
           </div>
         )}
@@ -408,7 +408,7 @@ export function ReplaySessionPlayer({ replayId, chunks, durationMs, viewportW, v
                       position: "absolute", top: 0, height: 3, borderRadius: 2,
                       left: `${(rg.start / durationMs) * 100}%`,
                       width: `${Math.max(0.4, ((rg.end - rg.start) / durationMs) * 100)}%`,
-                      background: "var(--warn, #d4a24c)", opacity: 0.6,
+                      background: "var(--amber)", opacity: 0.6,
                     }}
                   />
                 ))}

@@ -68,23 +68,23 @@ export function AccountChannelsForm({ accountId, initial, canWrite }: { accountI
     <div className="col gap-3">
       <div className="col gap-1">
         <span className="eyebrow">Slack channel webhook {initial.slackSet && <span className="text-2xs muted">· configured</span>}</span>
-        <input className="input" placeholder={initial.slackSet ? "Replace…" : "https://hooks.slack.com/…"} value={slackUrl} onChange={(e) => setSlackUrl(e.target.value)} disabled={pending} />
+        <input className="input" aria-label="Slack channel webhook" placeholder={initial.slackSet ? "Replace…" : "https://hooks.slack.com/…"} value={slackUrl} onChange={(e) => setSlackUrl(e.target.value)} disabled={pending} />
         {initial.slackSet && (
           <div className="row gap-2"><button type="button" className="text-2xs muted" style={linkBtn} onClick={() => test("slack")} disabled={pending}>Send test</button><button type="button" className="text-2xs muted" style={linkBtn} onClick={() => clearOne("slack")} disabled={pending}>Remove</button></div>
         )}
       </div>
       <div className="col gap-1">
         <span className="eyebrow">Teams channel webhook {initial.teamsSet && <span className="text-2xs muted">· configured</span>}</span>
-        <input className="input" placeholder={initial.teamsSet ? "Replace…" : "https://…webhook.office.com/…"} value={teamsUrl} onChange={(e) => setTeamsUrl(e.target.value)} disabled={pending} />
+        <input className="input" aria-label="Teams channel webhook" placeholder={initial.teamsSet ? "Replace…" : "https://…webhook.office.com/…"} value={teamsUrl} onChange={(e) => setTeamsUrl(e.target.value)} disabled={pending} />
         {initial.teamsSet && (
           <div className="row gap-2"><button type="button" className="text-2xs muted" style={linkBtn} onClick={() => test("teams")} disabled={pending}>Send test</button><button type="button" className="text-2xs muted" style={linkBtn} onClick={() => clearOne("teams")} disabled={pending}>Remove</button></div>
         )}
       </div>
 
       <div className="col gap-2">
-        <span className="row gap-2 center text-sm"><Switch on={replies} onClick={() => setReplies((v) => !v)} /> Replies</span>
-        <span className="row gap-2 center text-sm"><Switch on={status} onClick={() => setStatus((v) => !v)} /> Status changes</span>
-        <span className="row gap-2 center text-sm"><Switch on={roadmap} onClick={() => setRoadmap((v) => !v)} /> Roadmap updates</span>
+        <span className="row gap-2 center text-sm"><Switch on={replies} label="Replies" onClick={() => setReplies((v) => !v)} /> Replies</span>
+        <span className="row gap-2 center text-sm"><Switch on={status} label="Status changes" onClick={() => setStatus((v) => !v)} /> Status changes</span>
+        <span className="row gap-2 center text-sm"><Switch on={roadmap} label="Roadmap updates" onClick={() => setRoadmap((v) => !v)} /> Roadmap updates</span>
       </div>
 
       <div className="row gap-2 center">
@@ -96,4 +96,5 @@ export function AccountChannelsForm({ accountId, initial, canWrite }: { accountI
   );
 }
 
-const linkBtn: React.CSSProperties = { background: "none", border: 0, padding: 0, cursor: "pointer", textDecoration: "underline" };
+// The padding lifts the hit area to 24px; the margin keeps the layout.
+const linkBtn: React.CSSProperties = { background: "none", border: 0, padding: "5px 0", margin: "-5px 0", cursor: "pointer", textDecoration: "underline" };

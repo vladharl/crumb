@@ -114,7 +114,7 @@ export function DisconnectJiraButton({ siteUrl }: { siteUrl: string | null }) {
         onClick={async () => {
           if (!(await confirm({
             title: `Disconnect ${site}?`,
-            body: "Existing ticket links stay on items; status sync stops.",
+            body: "Existing ticket links stay on requests; status sync stops.",
             confirmLabel: "Disconnect",
             destructive: true,
           }))) return;

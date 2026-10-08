@@ -6,6 +6,8 @@ import { getActiveWorkspace } from "@/lib/server";
 import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { accountRiskSignals, atRiskArrCents } from "@/lib/insights/churn";
 import { loopOpenSql } from "@/lib/loop-sql";
+import { formatArr } from "@/lib/priority";
+import { formatMonth } from "@/lib/timefmt";
 import { accountUsageSignals } from "@/lib/usage/signals";
 
 // Account · ARR (bar + value) · Open · Shipped · Total · [Active] · Since
@@ -81,12 +83,6 @@ async function loadAccounts(workspaceId: string) {
     .orderBy(sql`${accounts.arrCents} DESC`);
 }
 
-function arr(arrCents: number): string {
-  if (arrCents === 0) return "—";
-  if (arrCents >= 100_000_000) return `$${(arrCents / 100_000_000).toFixed(1)}M`;
-  return `$${Math.round(arrCents / 100_000)}k`;
-}
-
 // Feedback health → a colored dot. Red when high-value work is waiting on us.
 function health(openCount: number, awaitingCount: number): { color: string; label: string } {
   if (awaitingCount > 0) return { color: "var(--err-text)", label: `${awaitingCount} awaiting reply` };
@@ -156,11 +152,11 @@ export async function AccountsTableTile() {
       {/* Portfolio KPI header — revenue at a glance + what's at risk. */}
       <Card>
         <div className="card-body row gap-6" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
-          <Kpi label="Total ARR" value={arr(totalArr)} />
+          <Kpi label="Total ARR" value={formatArr(totalArr)} />
           <Kpi label="Accounts" value={String(rows.length)} />
-          <Kpi label="ARR with open feedback" value={arr(openArr)} />
-          <Kpi label="Awaiting-reply ARR" value={arr(atRiskArr)} />
-          {aiEntitled && <Kpi label="Sentiment-risk ARR" value={arr(sentimentRiskArr)} />}
+          <Kpi label="ARR at stake" value={formatArr(openArr, "", "$0")} />
+          <Kpi label="Awaiting-reply ARR" value={formatArr(atRiskArr, "", "$0")} />
+          {aiEntitled && <Kpi label="Sentiment-risk ARR" value={formatArr(sentimentRiskArr, "", "$0")} />}
         </div>
       </Card>
 
@@ -190,12 +186,12 @@ export async function AccountsTableTile() {
                   <Avatar kind="ink">{r.name[0]}</Avatar>
                   <div className="col" style={{ minWidth: 0 }}>
                     <span className="row gap-2 center" style={{ minWidth: 0 }}>
-                      <span className="serif text-md truncate">{r.name}</span>
+                      <span className="fw-med text-md truncate">{r.name}</span>
                       {showRisk && (
                         <span
                           className="text-2xs fw-med"
                           title={`Sentiment ${risk!.avgSentiment?.toFixed(2) ?? "—"}${risk!.sentimentTrend != null ? ` · trend ${risk!.sentimentTrend > 0 ? "+" : ""}${risk!.sentimentTrend.toFixed(2)}` : ""}`}
-                          style={{ color: risk!.riskLevel === "high" ? "var(--rust)" : "var(--amber)", flexShrink: 0 }}
+                          style={{ color: risk!.riskLevel === "high" ? "var(--rust-deep)" : "var(--amber-deep)", flexShrink: 0 }}
                         >
                           ↓ at-risk
                         </span>
@@ -209,9 +205,9 @@ export async function AccountsTableTile() {
                 </div>
                 <div className="acct-arr row gap-2 center" style={{ minWidth: 0 }}>
                   <div style={{ flex: 1, height: 6, background: "var(--surface-2)", borderRadius: 999, overflow: "hidden", minWidth: 40 }}>
-                    <div style={{ width: `${r.arrCents > 0 ? pct : 0}%`, height: "100%", background: "var(--accent)", borderRadius: 999 }} />
+                    <div style={{ width: `${r.arrCents > 0 ? pct : 0}%`, height: "100%", background: "var(--brown-65)", borderRadius: 999 }} />
                   </div>
-                  <span className="mono text-sm" style={{ width: 48, textAlign: "right", flexShrink: 0 }}>{arr(r.arrCents)}</span>
+                  <span className={r.arrCents > 0 ? "mono text-sm" : "text-xs muted"} style={{ minWidth: 48, textAlign: "right", flexShrink: 0 }}>{formatArr(r.arrCents)}</span>
                 </div>
                 <span className="acct-open text-sm">{r.openCount > 0 ? <Pill ring ringFill>{r.openCount}</Pill> : <span className="muted-2">—</span>}</span>
                 <span className="acct-shipped text-sm muted">{r.shippedCount}</span>
@@ -222,7 +218,7 @@ export async function AccountsTableTile() {
                   </span>
                 )}
                 <span className="acct-since text-xs muted">
-                  {r.since ? new Date(r.since).toLocaleDateString("en-US", { month: "short", year: "2-digit" }) : "—"}
+                  {r.since ? formatMonth(r.since) : "—"}
                 </span>
               </Link>
             );

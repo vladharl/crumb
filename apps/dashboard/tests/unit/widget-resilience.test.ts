@@ -31,10 +31,11 @@ describe("widget error copy", () => {
     expect(w.friendlyError("jwt_expired", 401)).toMatch(/session expired/i);
     expect(w.friendlyError("jwt_signature", 401)).toMatch(/signed in/i);
     expect(w.friendlyError("network")).toMatch(/connect/i);
-    expect(w.friendlyError("rate_limited", 429)).toMatch(/too many requests/i);
+    expect(w.friendlyError("rate_limited", 429)).toMatch(/too many attempts/i);
     expect(w.friendlyError("", 413)).toMatch(/too large/i);
     expect(w.friendlyError("unsupported_type", 415)).toMatch(/isn.t supported/i);
     expect(w.friendlyError("not_your_item", 403)).toBe("This request belongs to someone else.");
+    expect(w.friendlyError("already_closed", 409)).toBe("This request is already closed.");
     expect(w.friendlyError("", 502)).toMatch(/on our end/i);
   });
 });

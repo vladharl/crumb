@@ -40,7 +40,7 @@ test("forwarded email creates a pending capture you can confirm", async ({ page,
   await card.getByRole("button", { name: "Assign account" }).click();
   await page.getByPlaceholder("Search…").fill("Acme Co");
   await page.getByRole("option", { name: "Acme Co" }).click();
-  await card.getByRole("button", { name: /Create item/i }).click();
+  await card.getByRole("button", { name: /Create request/i }).click();
 
   // The capture leaves the triage list once accepted.
   await expect(card.getByText(body)).toHaveCount(0, { timeout: 15_000 });

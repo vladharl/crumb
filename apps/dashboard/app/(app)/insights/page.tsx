@@ -7,6 +7,8 @@ import { getActiveSession } from "@/lib/server";
 import { hasFeature } from "@/lib/entitlements";
 import { accountRiskSignals, atRiskAccounts, atRiskArrCents } from "@/lib/insights/churn";
 import { loopOpenSql } from "@/lib/loop-sql";
+import { formatArr } from "@/lib/priority";
+import { formatDate } from "@/lib/timefmt";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Insights" };
@@ -15,7 +17,7 @@ export const metadata = { title: "Insights" };
 // "resolved" close included), so the bars add up to the item-count pill.
 const STATUS_ORDER = Object.keys(STATUS_LABELS) as Status[];
 const TYPE_LABEL: Record<string, string> = { bug: "Bugs", idea: "Ideas", question: "Questions", integration: "Integrations" };
-const TIER_LABEL: Record<string, string> = { enterprise: "Enterprise (≥$100k)", mid: "Mid-market ($10–100k)", smb: "SMB (<$10k)", none: "No ARR set" };
+const TIER_LABEL: Record<string, string> = { enterprise: "Enterprise (≥$100k)", mid: "Mid-market ($10–100k)", smb: "SMB (<$10k)", none: "ARR not set" };
 const TIER_ORDER = ["enterprise", "mid", "smb", "none"] as const;
 
 // Tonal brown ramp for the tier mix — stays two-tone, no second hue.
@@ -62,13 +64,6 @@ function humanDuration(seconds: number): string {
   return `${Math.round(h / 24)}d`;
 }
 
-function arr(cents: number): string {
-  if (!cents) return "$0";
-  if (cents >= 100_000_000) return `$${(cents / 100_000_000).toFixed(1)}M`;
-  if (cents >= 100_000) return `$${Math.round(cents / 100_000)}k`;
-  return `$${Math.round(cents / 100)}`;
-}
-
 type Delta = { arrow: string; mag: string; word: string; tone: "good" | "bad" | "muted" } | null;
 
 // Period-over-period change for a duration metric (lower is better, so a drop
@@ -82,7 +77,7 @@ function durDelta(cur: number, prev: number, curN: number, prevN: number, wDays:
 }
 
 function deltaTone(tone: "good" | "bad" | "muted") {
-  return tone === "good" ? "var(--green)" : tone === "bad" ? "var(--rust-deep)" : "var(--mute)";
+  return tone === "good" ? "var(--green-deep)" : tone === "bad" ? "var(--rust-deep)" : "var(--mute)";
 }
 
 function deltaNode(d: Delta): ReactNode {
@@ -134,14 +129,14 @@ function TrendChart({ points }: { points: { label: string; value: number }[] }) 
       <line x1={padX} y1={y(max)} x2={w - padX} y2={y(max)} stroke="var(--hair)" strokeDasharray="3 5" />
       <text x={padX} y={y(max) - 4} fontSize="11" fill="var(--mute)">{max}</text>
       <line x1={padX} y1={base} x2={w - padX} y2={base} stroke="var(--hair)" />
-      <path d={area} fill="var(--accent-soft)" />
-      <path d={line} fill="none" stroke="var(--accent)" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+      <path d={area} fill="var(--brown-06)" />
+      <path d={line} fill="none" stroke="var(--brown-65)" strokeWidth={2} vectorEffect="non-scaling-stroke" />
       {points.map((p, i) => (
-        <circle key={i} cx={x(i)} cy={y(p.value)} r={i === peakIdx ? 3.5 : 2.5} fill={i === peakIdx ? "var(--accent)" : "var(--accent-deep)"}>
+        <circle key={i} cx={x(i)} cy={y(p.value)} r={i === peakIdx ? 3.5 : 2.5} fill={i === peakIdx ? "var(--text)" : "var(--brown-65)"}>
           <title>{`${p.label}: ${p.value}`}</title>
         </circle>
       ))}
-      {max > 0 && <text x={x(peakIdx)} y={y(points[peakIdx].value) - 8} fontSize="11" fontWeight="600" fill="var(--accent-deep)" textAnchor="middle">{points[peakIdx].value}</text>}
+      {max > 0 && <text x={x(peakIdx)} y={y(points[peakIdx].value) - 8} fontSize="11" fontWeight="600" fill="var(--text)" textAnchor="middle">{points[peakIdx].value}</text>}
       {labelIdx.map(i => (
         <text key={i} x={x(i)} y={h - 7} fontSize="11" fill="var(--mute)" textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"}>{points[i].label}</text>
       ))}
@@ -149,8 +144,9 @@ function TrendChart({ points }: { points: { label: string; value: number }[] }) 
   );
 }
 
-// Horizontal bar list (themes). Leading row takes ember as the highlight;
-// the rest are a quiet brown so ember stays scarce. Labels truncate.
+// Horizontal bar list (themes). Leading row takes the full mid-brown as the
+// highlight, the rest a quieter brown: a ranking isn't the trail, so no ember
+// (One-Trail Rule). Labels truncate.
 function BarList({ rows, accentTop = false }: { rows: { label: string; n: number }[]; accentTop?: boolean }) {
   const max = Math.max(1, ...rows.map(r => r.n));
   return (
@@ -159,7 +155,7 @@ function BarList({ rows, accentTop = false }: { rows: { label: string; n: number
         <div key={r.label} className="row gap-3 center">
           <span className="text-sm truncate" title={r.label} style={{ width: 150, flexShrink: 0 }}>{r.label}</span>
           <div style={{ flex: 1, height: 8, background: "var(--surface-2)", borderRadius: 999, overflow: "hidden" }}>
-            <div style={{ width: `${Math.round((r.n / max) * 100)}%`, height: "100%", background: accentTop && i === 0 ? "var(--accent)" : "rgba(74,46,31,0.30)", borderRadius: 999 }} />
+            <div style={{ width: `${Math.round((r.n / max) * 100)}%`, height: "100%", background: accentTop && i === 0 ? "var(--brown-65)" : "var(--brown-30)", borderRadius: 999 }} />
           </div>
           <span className="text-sm tabular" style={{ width: 32, textAlign: "right" }}>{r.n}</span>
         </div>
@@ -253,7 +249,7 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
     `),
     // 12-week created trend (fixed momentum view; generate_series fills empty weeks).
     db.execute(sql`
-      select to_char(wk, 'Mon DD') as label, coalesce(c.n, 0)::int as n
+      select to_char(wk, 'YYYY-MM-DD') as day, coalesce(c.n, 0)::int as n
       from generate_series(date_trunc('week', now()) - interval '11 weeks', date_trunc('week', now()), interval '1 week') wk
       left join (
         select date_trunc('week', created_at) as w, count(*) as n
@@ -327,7 +323,7 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
   const vol = (volRows as unknown as Array<{ cur: number; prev: number }>)[0] ?? { cur: 0, prev: 0 };
   const resp = (respRows as unknown as Array<{ cur: number; prev: number; cur_n: number; prev_n: number }>)[0] ?? { cur: 0, prev: 0, cur_n: 0, prev_n: 0 };
   const awaiting = (awaitingRows as unknown as Array<{ n: number }>)[0]?.n ?? 0;
-  const trend = (trendRows as unknown as Array<{ label: string; n: number }>).map(r => ({ label: r.label, value: r.n }));
+  const trend = (trendRows as unknown as Array<{ day: string; n: number }>).map(r => ({ label: formatDate(r.day, { utc: true }), value: r.n }));
   const loop = (loopRows as unknown as Array<{ cur: number; prev: number; cur_n: number; prev_n: number }>)[0] ?? { cur: 0, prev: 0, cur_n: 0, prev_n: 0 };
   const openLoops = (openLoopRows as unknown as Array<{ n: number; arr_cents: number | string }>)[0] ?? { n: 0, arr_cents: 0 };
   const openLoopArr = Number(openLoops.arr_cents); // bigint sums arrive as strings from the driver
@@ -363,7 +359,7 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
         <>
           <div className="seg" role="group" aria-label="Time range">
             {RANGE_KEYS.map(k => (
-              <Link key={k} href={k === DEFAULT_RANGE ? "/insights" : `/insights?range=${k}`} aria-selected={k === rangeKey} prefetch={false}>
+              <Link key={k} href={k === DEFAULT_RANGE ? "/insights" : `/insights?range=${k}`} aria-current={k === rangeKey ? "page" : undefined} prefetch={false}>
                 {RANGES[k].short}
               </Link>
             ))}
@@ -441,36 +437,36 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
       {/* Supporting KPIs */}
       <div className="kpi-strip" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(168px, 1fr))", gap: 12 }}>
         <Kpi label="Open loops" value={String(openLoops.n)} sub={`${awaiting} still waiting on a first reply`} />
-        <Kpi label="ARR in open loops" value={arr(openLoopArr)} sub="accounts waiting on an answer" />
+        <Kpi label="ARR at stake" value={formatArr(openLoopArr, "", "$0")} sub="accounts waiting on an answer" />
         <Kpi label="Median first response" value={humanDuration(resp.cur)} delta={deltaNode(respDelta)} sub={resp.cur_n > 0 ? `across ${resp.cur_n} answered · ${scopedSub}` : "none answered yet"} />
         <Kpi label={`New · ${scopedSub}`} value={String(vol.cur)} sub={volDelta} />
-        {aiEntitled && <Kpi label="ARR at risk" value={arr(sentimentRiskArr)} sub="accounts trending negative · now" />}
+        {aiEntitled && <Kpi label="ARR at risk" value={formatArr(sentimentRiskArr, "", "$0")} sub="accounts trending negative · now" />}
       </div>
 
       <Card>
         <CardHead title="Feedback over time" after={<Pill ring>12 weeks</Pill>} />
         <div className="card-body" style={{ padding: 18 }}>
           {trendTotal === 0
-            ? <p className="text-sm muted" style={{ margin: 0 }}>No feedback in the last 12 weeks yet. The trend appears once items come in.</p>
+            ? <p className="text-sm muted" style={{ margin: 0 }}>No feedback in the last 12 weeks yet. The trend appears once feedback comes in.</p>
             : <TrendChart points={trend} />}
         </div>
       </Card>
 
       {aiEntitled && atRisk.length > 0 && (
         <Card>
-          <CardHead title="Accounts at risk" after={<Pill ring>{arr(sentimentRiskArr)} ARR</Pill>} />
+          <CardHead title="Accounts at risk" after={<Pill ring>{formatArr(sentimentRiskArr, " ARR")}</Pill>} />
           <div className="card-body col gap-2" style={{ padding: 18 }}>
             <p className="text-xs muted" style={{ margin: "0 0 6px" }}>High-ARR accounts trending negative on sentiment or with open severe issues. Highest revenue first.</p>
             {atRisk.map(a => (
               <Link key={a.accountId} href={`/accounts/${a.accountId}`} className="row gap-3 center between" style={{ textDecoration: "none", color: "inherit", padding: "6px 0", borderBottom: "1px solid var(--hair)" }}>
                 <span className="row gap-2 center" style={{ minWidth: 0 }}>
                   <span aria-hidden style={{ width: 8, height: 8, borderRadius: 999, background: a.riskLevel === "high" ? "var(--rust)" : "var(--amber)", flexShrink: 0 }} />
-                  <span className="text-xs" style={{ textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500, color: a.riskLevel === "high" ? "var(--rust)" : "var(--amber)", flexShrink: 0 }}>{a.riskLevel}</span>
-                  <span className="serif text-md truncate">{a.name}</span>
+                  <span className="text-xs" style={{ textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 500, color: a.riskLevel === "high" ? "var(--rust-deep)" : "var(--amber-deep)", flexShrink: 0 }}>{a.riskLevel}</span>
+                  <span className="fw-med text-md truncate">{a.name}</span>
                 </span>
                 <span className="row gap-3 center text-xs muted" style={{ flexShrink: 0 }}>
-                  <span className="mono">{arr(a.arrCents)}</span>
-                  {a.sentimentTrend != null && <span style={{ color: a.sentimentTrend < 0 ? "var(--rust)" : "var(--green)" }}>{a.sentimentTrend < 0 ? "↓" : "↑"} {a.sentimentTrend.toFixed(2)}</span>}
+                  <span className="mono">{formatArr(a.arrCents)}</span>
+                  {a.sentimentTrend != null && <span style={{ color: a.sentimentTrend < 0 ? "var(--rust-deep)" : "var(--green-deep)" }}>{a.sentimentTrend < 0 ? "↓" : "↑"} {a.sentimentTrend.toFixed(2)}</span>}
                   {a.openCount > 0 && <span>{a.openCount} open</span>}
                 </span>
               </Link>
@@ -480,10 +476,10 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
       )}
 
       <Card>
-        <CardHead title="Status breakdown" after={<Pill ring>{statusTotal} items · {scopedSub}</Pill>} />
+        <CardHead title="Status breakdown" after={<Pill ring>{statusTotal} {statusTotal === 1 ? "request" : "requests"} · {scopedSub}</Pill>} />
         <div className="card-body col gap-3" style={{ padding: 18 }}>
           {statusTotal === 0 ? (
-            <p className="text-sm muted" style={{ margin: 0 }}>No feedback {wDays == null ? "yet" : `in the ${windowLabel}`}. Once items come in, they'll break down by status here.</p>
+            <p className="text-sm muted" style={{ margin: 0 }}>No feedback {wDays == null ? "yet" : `in the ${windowLabel}`}. Once feedback comes in, it breaks down by status here.</p>
           ) : (
             STATUS_ORDER.filter(s => (statusCounts.get(s) ?? 0) > 0).map(s => {
               const n = statusCounts.get(s) ?? 0;
@@ -512,14 +508,14 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
           <CardHead title="Top themes" />
           <div className="card-body" style={{ padding: 18 }}>
             {themes.length === 0
-              ? <p className="text-sm muted" style={{ margin: 0 }}>Assign items to initiatives to see themes rank here.</p>
+              ? <p className="text-sm muted" style={{ margin: 0 }}>Group requests into initiatives to see themes rank here.</p>
               : <BarList rows={themes} accentTop />}
           </div>
         </Card>
       </div>
 
       <Card>
-        <CardHead title="By type" after={<Pill ring>{typeTotal} items</Pill>} />
+        <CardHead title="By type" after={<Pill ring>{typeTotal} {typeTotal === 1 ? "request" : "requests"}</Pill>} />
         <div className="card-body row gap-6" style={{ padding: 18, flexWrap: "wrap" }}>
           {byType.length === 0 ? (
             <span className="text-sm muted">No feedback in this period.</span>

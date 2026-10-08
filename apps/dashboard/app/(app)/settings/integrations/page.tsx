@@ -5,7 +5,9 @@ import { Card, CardHead, Pill } from "@crumb/ui";
 import { getActiveSession } from "@/lib/server";
 import { isCloud } from "@/lib/tier";
 import { SelfHostSetup } from "./SelfHostSetup";
+import type { Provider } from "@/lib/integrations/state";
 import { originFromHeaders } from "@/lib/origin";
+import { formatDate } from "@/lib/timefmt";
 import { hasFeature, integrationsAllowed, workspacePlan } from "@/lib/entitlements";
 import { slackConfigured } from "@/lib/slack/install";
 import { linearConfigured } from "@/lib/integrations/linear";
@@ -33,69 +35,114 @@ import { UpgradeNotice } from "@/components/UpgradeNotice";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Integrations · Settings" };
 
-// Every callback's session check (lib/integrations/callback.ts).
-const SESSION_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+// What a callback's ?{provider}={code} means, in words. `operator` is the next
+// step for whoever runs the server, added on self-host only: Cloud admins
+// can't change Crumb's own app credentials.
+type BannerCopy = { kind: "ok" | "err"; text: string; operator?: string };
+
+// Every callback's session check (lib/integrations/callback.ts), and the
+// failures each OAuth provider shares.
+const SESSION_BANNER: Record<string, BannerCopy> = {
   error_wrong_workspace: { kind: "err", text: "You're signed in to a different workspace than the one that started this connection. Switch workspaces and connect again." },
   error_forbidden:       { kind: "err", text: "Only workspace admins can finish connecting an integration." },
+  error_bad_state:       { kind: "err", text: "This connection couldn't be verified, or it took too long. Start it again from this page." },
+  error_workspace_gone:  { kind: "err", text: "This workspace couldn't be found while finishing the connection." },
 };
 
-const SLACK_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+const SLACK_BANNER: Record<string, BannerCopy> = {
   ...SESSION_BANNER,
-  connected:                  { kind: "ok",  text: "Slack connected. Members can now choose Slack delivery in their notification preferences." },
-  error_missing_params:       { kind: "err", text: "Slack didn't include a valid response. Please try again." },
-  error_bad_state:            { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
-  error_workspace_gone:       { kind: "err", text: "Workspace not found while finishing the install." },
-  error_exchange_failed:      { kind: "err", text: "Slack rejected the token exchange. Check your app's client secret + scopes." },
+  connected:                  { kind: "ok",  text: "Slack connected. Teammates can now choose Slack for their alerts in their notification settings." },
+  error_missing_params:       { kind: "err", text: "Slack didn't send back everything Crumb needs. Please try again." },
+  error_exchange_failed:      { kind: "err", text: "Slack didn't accept the connection. Please try again.", operator: "If it keeps failing, check the Slack app's client secret and scopes." },
   error_team_already_connected: { kind: "err", text: "That Slack workspace is already connected to another Crumb workspace. Disconnect it there first." },
 };
 
-const LINEAR_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+const LINEAR_BANNER: Record<string, BannerCopy> = {
   ...SESSION_BANNER,
-  connected:             { kind: "ok",  text: "Linear connected. From any thread, click Create ticket in the Engineering panel to push the item out." },
-  error_missing_params:  { kind: "err", text: "Linear didn't include a valid response. Please try again." },
-  error_bad_state:       { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
-  error_workspace_gone:  { kind: "err", text: "Workspace not found while finishing the install." },
-  error_exchange_failed: { kind: "err", text: "Linear rejected the token exchange. Check your OAuth app's client secret + redirect URL." },
+  connected:             { kind: "ok",  text: "Linear connected. From any thread, click Create ticket in the Engineering panel to push the request out." },
+  error_missing_params:  { kind: "err", text: "Linear didn't send back everything Crumb needs. Please try again." },
+  error_exchange_failed: { kind: "err", text: "Linear didn't accept the connection. Please try again.", operator: "If it keeps failing, check the Linear app's client secret and redirect URL." },
 };
 
-const JIRA_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+const JIRA_BANNER: Record<string, BannerCopy> = {
   ...SESSION_BANNER,
-  connected:               { kind: "ok",  text: "Jira connected. From any thread, click Create ticket in the Engineering panel to push the item out." },
-  connected_no_sync:       { kind: "ok",  text: "Jira connected, but status sync couldn't be set up. Reconnect to retry; ticket creation works." },
+  connected:               { kind: "ok",  text: "Jira connected. From any thread, click Create ticket in the Engineering panel to push the request out." },
+  connected_no_sync:       { kind: "ok",  text: "Jira connected, but status sync couldn't be set up. Reconnect to try again. Creating tickets works." },
   pick_site:               { kind: "ok",  text: "Jira connected. Your Atlassian login reaches more than one Jira site, so choose the one this workspace uses below." },
-  error_missing_params:    { kind: "err", text: "Jira didn't include a valid response. Please try again." },
-  error_bad_state:         { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
-  error_workspace_gone:    { kind: "err", text: "Workspace not found while finishing the install." },
-  error_exchange_failed:   { kind: "err", text: "Atlassian rejected the token exchange. Check your OAuth app's client secret + redirect URL." },
-  error_resources_failed:  { kind: "err", text: "Couldn't discover your Atlassian site after install. Check that the app has access to at least one Jira site." },
-  error_no_resources:      { kind: "err", text: "No Jira sites accessible with this user's credentials." },
+  error_missing_params:    { kind: "err", text: "Jira didn't send back everything Crumb needs. Please try again." },
+  error_exchange_failed:   { kind: "err", text: "Atlassian didn't accept the connection. Please try again.", operator: "If it keeps failing, check the Atlassian app's client secret and callback URL." },
+  error_resources_failed:  { kind: "err", text: "Couldn't find your Jira site after connecting. Check that your Atlassian login can reach at least one Jira site." },
+  error_no_resources:      { kind: "err", text: "Your Atlassian login can't reach any Jira site. Connect with an account that can." },
 };
 
-const GITHUB_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+const GITHUB_BANNER: Record<string, BannerCopy> = {
   ...SESSION_BANNER,
-  connected:           { kind: "ok",  text: "GitHub connected. Create tickets from any thread; the AI draft also pulls README + repo structure for any provider's drafts." },
-  error_missing_params:{ kind: "err", text: "GitHub didn't include a valid response. Please try again." },
-  error_bad_state:     { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
-  error_workspace_gone:{ kind: "err", text: "Workspace not found while finishing the install." },
-  error_meta_failed:   { kind: "err", text: "Couldn't fetch the App installation metadata. Check that the App's private key is configured." },
+  connected:           { kind: "ok",  text: "GitHub connected. Create issues from any thread, and choose the repository new issues start in below." },
+  error_missing_params:{ kind: "err", text: "GitHub didn't send back everything Crumb needs. Please try again." },
+  error_meta_failed:   { kind: "err", text: "Crumb couldn't read that GitHub installation. Please try again.", operator: "If it keeps failing, check the GitHub App's private key." },
   error_install_taken: { kind: "err", text: "That GitHub installation is already connected to another Crumb workspace." },
-  error_not_owner:     { kind: "err", text: "GitHub couldn't confirm you can access that installation. Start again from this page; if the App was installed earlier, reinstall it, or set GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET with user authorization during installation turned on." },
+  error_not_owner:     { kind: "err", text: "GitHub couldn't confirm you can access that installation. Start again from this page, and if the app was installed before, reinstall it.", operator: "This check needs the GitHub App's client ID and secret, with user authorization during installation turned on." },
+  // GitHub's setup_action=request: a member asked an organization owner to install the app.
+  error_request:       { kind: "ok",  text: "GitHub sent your install request to an organization owner. Once they approve it, connect again from this page." },
 };
 
-const CRM_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
+const CRM_BANNER: Record<string, BannerCopy> = {
   ...SESSION_BANNER,
   connected:             { kind: "ok",  text: "CRM connected. Accounts are syncing to the Accounts page. ARR syncs from the field chosen below, and manually set ARR is never overwritten." },
-  error_missing_params:  { kind: "err", text: "The CRM didn't include a valid response. Please try again." },
-  error_bad_state:       { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
-  error_workspace_gone:  { kind: "err", text: "Workspace not found while finishing the install." },
-  error_exchange_failed: { kind: "err", text: "The CRM rejected the token exchange. Check your app's client secret + redirect URL." },
+  error_missing_params:  { kind: "err", text: "The CRM didn't send back everything Crumb needs. Please try again." },
+  error_exchange_failed: { kind: "err", text: "The CRM didn't accept the connection. Please try again.", operator: "If it keeps failing, check the CRM app's client secret and redirect URL." },
 };
+
+// The banner for a callback result, or null. A code with no copy (whatever a
+// provider put in its own `error`) never reaches the page as-is.
+function bannerFor(map: Record<string, BannerCopy>, code: string | undefined, name: string, cloud: boolean): BannerCopy | null {
+  if (!code) return null;
+  const b: BannerCopy = map[code] ?? {
+    kind: "err",
+    text: code === "error_access_denied"
+      ? `Connecting ${name} was cancelled, so nothing changed.`
+      : `${name} didn't finish connecting. Please try again.`,
+  };
+  return { kind: b.kind, text: !cloud && b.operator ? `${b.text} ${b.operator}` : b.text };
+}
+
+// A provider this server has no app credentials for: muted, so it never reads
+// as Connected. The card body says what that means for whoever's looking.
+const NOT_SET_UP = <Pill variant="muted">Not set up</Pill>;
+
+// Why a card that isn't connected has no Connect button, in plain words. Not
+// set up: the server has no app for the provider, and only admins on
+// self-host (the people who run the server) see how to add one, env var names
+// and all. Set up: the viewer isn't an admin.
+function ConnectNote({ name, provider, canInstall, isAdmin, cloud, origin }: {
+  name: string;
+  provider: Provider;
+  canInstall: boolean;
+  isAdmin: boolean;
+  cloud: boolean;
+  origin: string | null;
+}) {
+  const note = { margin: 0, lineHeight: 1.55, maxWidth: "62ch" } as const;
+  if (canInstall) return isAdmin ? null : <p className="text-xs muted" style={note}>Only workspace admins can connect {name}.</p>;
+  return (
+    <>
+      <p className="text-xs muted" style={note}>
+        {cloud
+          ? "Not set up on this server yet."
+          : isAdmin
+            ? `Not set up on this server yet. Create a ${name} app with the values below, give Crumb its keys, and restart.`
+            : "Not set up on this server yet. Whoever runs Crumb for your team can turn it on."}
+      </p>
+      {!cloud && isAdmin && <SelfHostSetup provider={provider} origin={origin} />}
+    </>
+  );
+}
 
 function Banner({ kind, text }: { kind: "ok" | "err"; text: string }) {
   return (
     <div className="text-sm" style={{
-      background: kind === "ok" ? "var(--ok-bg, var(--surface-2))" : "var(--err-bg)",
-      border: `1px solid ${kind === "ok" ? "var(--ok-border, var(--line))" : "var(--err-border)"}`,
+      background: kind === "ok" ? "var(--surface-2)" : "var(--err-bg)",
+      border: `1px solid ${kind === "ok" ? "var(--hair)" : "var(--err-border)"}`,
       color: kind === "ok" ? "var(--ink)" : "var(--err-text)",
       borderRadius: "var(--r-sm)",
       padding: "10px 12px",
@@ -127,28 +174,20 @@ export default async function IntegrationsPage({
 
   const slackInstalled = !!ws.slackBotToken;
   const slackCanInstall = slackConfigured();
-  const slackBanner = searchParams.slack
-    ? (SLACK_BANNER[searchParams.slack] ?? { kind: "err" as const, text: searchParams.slack.replace(/^error_/, "") })
-    : null;
+  const slackBanner = bannerFor(SLACK_BANNER, searchParams.slack, "Slack", cloud);
 
   const linearInstalled = !!ws.linearAccessToken;
   const linearCanInstall = linearConfigured();
-  const linearBanner = searchParams.linear
-    ? (LINEAR_BANNER[searchParams.linear] ?? { kind: "err" as const, text: searchParams.linear.replace(/^error_/, "") })
-    : null;
+  const linearBanner = bannerFor(LINEAR_BANNER, searchParams.linear, "Linear", cloud);
 
   const jiraInstalled = !!ws.jiraAccessToken;
   const jiraCanInstall = jiraConfigured();
   const jiraStatusSync = jiraStatusSyncReady(ws);
-  const jiraBanner = searchParams.jira
-    ? (JIRA_BANNER[searchParams.jira] ?? { kind: "err" as const, text: searchParams.jira.replace(/^error_/, "") })
-    : null;
+  const jiraBanner = bannerFor(JIRA_BANNER, searchParams.jira, "Jira", cloud);
 
   const githubInstalled = !!ws.githubAppInstallId;
   const githubCanInstall = githubConfigured();
-  const githubBanner = searchParams.github
-    ? (GITHUB_BANNER[searchParams.github] ?? { kind: "err" as const, text: searchParams.github.replace(/^error_/, "") })
-    : null;
+  const githubBanner = bannerFor(GITHUB_BANNER, searchParams.github, "GitHub", cloud);
 
   // CRM: account count + last sync per provider, for the connected-state copy.
   const crmStatRows = await db
@@ -161,22 +200,17 @@ export default async function IntegrationsPage({
     .where(and(eq(accounts.workspaceId, ws.id), isNotNull(accounts.externalCrmProvider)))
     .groupBy(accounts.externalCrmProvider);
   const crmStats = Object.fromEntries(crmStatRows.map(r => [r.provider, { count: r.count, lastSync: r.lastSync }]));
-  const fmtSync = (d: Date | null | undefined) =>
-    d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null;
+  const fmtSync = (d: Date | null | undefined) => (d ? formatDate(d) : null);
 
   const hubspotInstalled = !!ws.hubspotAccessToken;
   const hubspotCanInstall = crmConfigured("hubspot");
   const hubspotArrField = getCrmAdapter("hubspot").arrField(ws);
-  const hubspotBanner = searchParams.hubspot
-    ? (CRM_BANNER[searchParams.hubspot] ?? { kind: "err" as const, text: searchParams.hubspot.replace(/^error_/, "") })
-    : null;
+  const hubspotBanner = bannerFor(CRM_BANNER, searchParams.hubspot, "HubSpot", cloud);
 
   const salesforceInstalled = !!ws.salesforceAccessToken;
   const salesforceCanInstall = crmConfigured("salesforce");
   const salesforceArrField = getCrmAdapter("salesforce").arrField(ws);
-  const salesforceBanner = searchParams.salesforce
-    ? (CRM_BANNER[searchParams.salesforce] ?? { kind: "err" as const, text: searchParams.salesforce.replace(/^error_/, "") })
-    : null;
+  const salesforceBanner = bannerFor(CRM_BANNER, searchParams.salesforce, "Salesforce", cloud);
 
   // Inbound feedback connectors (Autopilot). Creds-gated like the rest; the AI
   // new-and-relevant filter additionally needs the "ai" feature (Cloud). On a
@@ -206,7 +240,7 @@ export default async function IntegrationsPage({
             linearInstalled
               ? <Pill ring ringFill>Connected</Pill>
               : !linearCanInstall
-                ? <Pill ring ringFill>{cloud ? "Cloud" : "Set LINEAR_CLIENT_ID"}</Pill>
+                ? NOT_SET_UP
                 : <Pill>Not connected</Pill>
           }
         />
@@ -218,14 +252,15 @@ export default async function IntegrationsPage({
               <p className="text-sm note">
                 Connected to <strong style={{ fontWeight: 500 }}>{ws.linearTeamName ?? "Linear"}</strong>
                 {ws.linearInstalledAt && (
-                  <> since {ws.linearInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
+                  <> since {formatDate(ws.linearInstalledAt)}</>
                 )}.
               </p>
               <p className="text-xs muted note">
-                Crumb status stays canonical. Engineering status from Linear writes to a separate field on the item, displayed in the thread sidebar, never authoritative.
+                The status customers see stays the one you set in Crumb. The issue&apos;s status in Linear shows beside it in the thread, for reference.
               </p>
-              {/* Cloud's Linear app carries the webhook; self-host adds its own. */}
-              {!cloud && (
+              {/* Cloud's Linear app carries the webhook; self-host adds its own,
+                  which only an admin (who runs the server) can. */}
+              {!cloud && isAdmin && (
                 <details style={{ borderTop: "var(--border)", paddingTop: 10 }}>
                   <summary className="text-xs" style={{ cursor: "pointer", color: "var(--ink)" }}>
                     Status sync needs a webhook in Linear
@@ -254,16 +289,9 @@ export default async function IntegrationsPage({
             <>
               {notice("linear")}
               <p className="text-sm muted note">
-                Push Crumb items out as Linear issues, with status synced back via webhook. On Cloud, an AI draft suggests a title + body that matches your team's voice.
+                Create Linear issues from feedback and see their status back in Crumb. On Cloud plans with AI, Crumb drafts the title and description in your team&apos;s voice.
               </p>
-              {!linearCanInstall && (
-                <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-                  {cloud
-                    ? "Linear isn't configured on this deployment yet."
-                    : <>Self-host needs a registered Linear OAuth app: set <span className="mono">LINEAR_CLIENT_ID</span> and <span className="mono">LINEAR_CLIENT_SECRET</span>, then restart.</>}
-                </p>
-              )}
-              {!linearCanInstall && !cloud && <SelfHostSetup provider="linear" origin={origin} />}
+              <ConnectNote name="Linear" provider="linear" canInstall={linearCanInstall} isAdmin={isAdmin} cloud={cloud} origin={origin} />
               <div className="row gap-2">
                 {isAdmin && linearCanInstall && integrationsEntitled
                   ? <ConnectLinearButton />
@@ -282,7 +310,7 @@ export default async function IntegrationsPage({
             jiraInstalled
               ? <Pill ring ringFill>Connected</Pill>
               : !jiraCanInstall
-                ? <Pill ring ringFill>{cloud ? "Cloud" : "Set JIRA_CLIENT_ID"}</Pill>
+                ? NOT_SET_UP
                 : <Pill>Not connected</Pill>
           }
         />
@@ -309,21 +337,21 @@ export default async function IntegrationsPage({
               <p className="text-sm note">
                 Connected to <strong style={{ fontWeight: 500 }}>{ws.jiraSiteUrl ? ws.jiraSiteUrl.replace(/^https?:\/\//, "") : "Jira"}</strong>
                 {ws.jiraInstalledAt && (
-                  <> since {ws.jiraInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
+                  <> since {formatDate(ws.jiraInstalledAt)}</>
                 )}
                 {ws.jiraDefaultProjectKey && (
                   <> · default project <span className="mono">{ws.jiraDefaultProjectKey}</span></>
                 )}.
               </p>
               <p className="text-xs muted note">
-                Crumb status stays canonical. Engineering status from Jira writes to a separate field on the item, displayed in the thread sidebar, never authoritative.
+                The status customers see stays the one you set in Crumb. The issue&apos;s status in Jira shows beside it in the thread, for reference.
               </p>
               {cloud && !jiraStatusSync && (
                 <p className="text-xs note" style={{ color: "var(--err-text)" }}>
                   Status sync isn&apos;t set up, so linked tickets won&apos;t update here. Reconnect Jira to try again; creating tickets still works.
                 </p>
               )}
-              {!cloud && (
+              {!cloud && isAdmin && (
                 <details style={{ borderTop: "var(--border)", paddingTop: 10 }}>
                   <summary className="text-xs" style={{ cursor: "pointer", color: "var(--ink)" }}>
                     Status sync needs a webhook in Jira
@@ -353,16 +381,9 @@ export default async function IntegrationsPage({
             <>
               {notice("jira")}
               <p className="text-sm muted note">
-                Push Crumb items out as Jira issues, with status synced back via webhook. Atlassian Cloud only.
+                Create Jira issues from feedback and see their status back in Crumb. Works with Jira Cloud, not Jira Server or Data Center.
               </p>
-              {!jiraCanInstall && (
-                <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-                  {cloud
-                    ? "Jira isn't configured on this deployment yet."
-                    : <>Self-host needs a registered Atlassian 3LO OAuth app: set <span className="mono">JIRA_CLIENT_ID</span> and <span className="mono">JIRA_CLIENT_SECRET</span>, then restart.</>}
-                </p>
-              )}
-              {!jiraCanInstall && !cloud && <SelfHostSetup provider="jira" origin={origin} />}
+              <ConnectNote name="Jira" provider="jira" canInstall={jiraCanInstall} isAdmin={isAdmin} cloud={cloud} origin={origin} />
               <div className="row gap-2">
                 {isAdmin && jiraCanInstall && integrationsEntitled
                   ? <ConnectJiraButton />
@@ -381,7 +402,7 @@ export default async function IntegrationsPage({
             githubInstalled
               ? <Pill ring ringFill>Connected</Pill>
               : !githubCanInstall
-                ? <Pill ring ringFill>{cloud ? "Cloud" : "Set GITHUB_APP_*"}</Pill>
+                ? NOT_SET_UP
                 : <Pill>Not connected</Pill>
           }
         />
@@ -393,7 +414,7 @@ export default async function IntegrationsPage({
               <p className="text-sm note">
                 Installed on <strong style={{ fontWeight: 500 }}>{ws.githubAppInstallAccount ?? "GitHub"}</strong>
                 {ws.githubInstalledAt && (
-                  <> since {ws.githubInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
+                  <> since {formatDate(ws.githubInstalledAt)}</>
                 )}
                 {ws.githubDefaultRepo && (
                   <> · default repo <span className="mono">{ws.githubDefaultRepo}</span></>
@@ -401,7 +422,7 @@ export default async function IntegrationsPage({
               </p>
               <p className="text-xs muted note">
                 {ws.githubDefaultRepo
-                  ? "When AI drafting is enabled (Cloud + ANTHROPIC_API_KEY), README + repo structure also feed Linear/Jira drafts, not just GitHub."
+                  ? "New issues start in this repo. On Cloud plans with AI, ticket drafts for Linear and Jira and Slack request sizing also read its README and file layout."
                   : "Choose a default repository. New issues start there, and AI drafts and Slack sizing (Cloud) read its README and file layout."}
               </p>
               {isAdmin
@@ -417,16 +438,9 @@ export default async function IntegrationsPage({
             <>
               {notice("github")}
               <p className="text-sm muted note">
-                Push Crumb items out as GitHub issues. Status syncs back via webhook. When installed, README + repo structure also enrich AI drafts for any provider.
+                Create GitHub issues from feedback and see their status back in Crumb. On Cloud plans with AI, ticket drafts for any tracker and Slack request sizing also read your repo&apos;s README and file layout.
               </p>
-              {!githubCanInstall && (
-                <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-                  {cloud
-                    ? "GitHub App isn't configured on this deployment yet."
-                    : <>Self-host needs a registered GitHub App: set <span className="mono">GITHUB_APP_ID</span>, <span className="mono">GITHUB_APP_PRIVATE_KEY</span>, and <span className="mono">GITHUB_APP_SLUG</span>, then restart.</>}
-                </p>
-              )}
-              {!githubCanInstall && !cloud && <SelfHostSetup provider="github" origin={origin} />}
+              <ConnectNote name="GitHub" provider="github" canInstall={githubCanInstall} isAdmin={isAdmin} cloud={cloud} origin={origin} />
               <div className="row gap-2">
                 {isAdmin && githubCanInstall && integrationsEntitled
                   ? <ConnectGithubButton />
@@ -445,7 +459,7 @@ export default async function IntegrationsPage({
             hubspotInstalled
               ? <Pill ring ringFill>Connected</Pill>
               : !hubspotCanInstall
-                ? <Pill ring ringFill>{cloud ? "Cloud" : "Set HUBSPOT_CLIENT_ID"}</Pill>
+                ? NOT_SET_UP
                 : <Pill>Not connected</Pill>
           }
         />
@@ -457,7 +471,7 @@ export default async function IntegrationsPage({
               <p className="text-sm note">
                 Connected{ws.hubspotPortalId ? <> to portal <span className="mono">{ws.hubspotPortalId}</span></> : ""}
                 {ws.hubspotInstalledAt && (
-                  <> since {ws.hubspotInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
+                  <> since {formatDate(ws.hubspotInstalledAt)}</>
                 )}.{" "}
                 {crmStats["hubspot"] ? <>{crmStats["hubspot"].count} accounts synced{fmtSync(crmStats["hubspot"].lastSync) ? <> · last {fmtSync(crmStats["hubspot"].lastSync)}</> : null}.</> : "Run a sync to pull accounts."}
               </p>
@@ -478,16 +492,9 @@ export default async function IntegrationsPage({
             <>
               {notice("hubspot")}
               <p className="text-sm muted note">
-                One-way sync of companies + ARR from HubSpot, so prioritization by revenue uses live dollar figures instead of hand-entered ones.
+                Sync your HubSpot companies and their ARR into Accounts, so ranking by revenue uses live figures instead of hand-entered ones. Crumb only reads from HubSpot.
               </p>
-              {!hubspotCanInstall && (
-                <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-                  {cloud
-                    ? "HubSpot isn't configured on this deployment yet."
-                    : <>Self-host needs a registered HubSpot app: set <span className="mono">HUBSPOT_CLIENT_ID</span> and <span className="mono">HUBSPOT_CLIENT_SECRET</span>, then restart.</>}
-                </p>
-              )}
-              {!hubspotCanInstall && !cloud && <SelfHostSetup provider="hubspot" origin={origin} />}
+              <ConnectNote name="HubSpot" provider="hubspot" canInstall={hubspotCanInstall} isAdmin={isAdmin} cloud={cloud} origin={origin} />
               <div className="row gap-2">
                 {isAdmin && hubspotCanInstall && integrationsEntitled ? <ConnectHubspotButton /> : null}
               </div>
@@ -504,7 +511,7 @@ export default async function IntegrationsPage({
             salesforceInstalled
               ? <Pill ring ringFill>Connected</Pill>
               : !salesforceCanInstall
-                ? <Pill ring ringFill>{cloud ? "Cloud" : "Set SALESFORCE_CLIENT_ID"}</Pill>
+                ? NOT_SET_UP
                 : <Pill>Not connected</Pill>
           }
         />
@@ -516,7 +523,7 @@ export default async function IntegrationsPage({
               <p className="text-sm note">
                 Connected{ws.salesforceInstanceUrl ? <> to <span className="mono">{ws.salesforceInstanceUrl.replace(/^https?:\/\//, "")}</span></> : ""}
                 {ws.salesforceInstalledAt && (
-                  <> since {ws.salesforceInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
+                  <> since {formatDate(ws.salesforceInstalledAt)}</>
                 )}.{" "}
                 {crmStats["salesforce"] ? <>{crmStats["salesforce"].count} accounts synced{fmtSync(crmStats["salesforce"].lastSync) ? <> · last {fmtSync(crmStats["salesforce"].lastSync)}</> : null}.</> : "Run a sync to pull accounts."}
               </p>
@@ -537,16 +544,9 @@ export default async function IntegrationsPage({
             <>
               {notice("salesforce")}
               <p className="text-sm muted note">
-                One-way sync of Accounts + ARR from Salesforce. Sandboxes are supported via <span className="mono">SALESFORCE_LOGIN_URL</span>.
+                Sync your Salesforce accounts and their ARR into Accounts, so ranking by revenue uses live figures instead of hand-entered ones. Crumb only reads from Salesforce.
               </p>
-              {!salesforceCanInstall && (
-                <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-                  {cloud
-                    ? "Salesforce isn't configured on this deployment yet."
-                    : <>Self-host needs a Salesforce Connected App: set <span className="mono">SALESFORCE_CLIENT_ID</span> and <span className="mono">SALESFORCE_CLIENT_SECRET</span>, then restart.</>}
-                </p>
-              )}
-              {!salesforceCanInstall && !cloud && <SelfHostSetup provider="salesforce" origin={origin} />}
+              <ConnectNote name="Salesforce" provider="salesforce" canInstall={salesforceCanInstall} isAdmin={isAdmin} cloud={cloud} origin={origin} />
               <div className="row gap-2">
                 {isAdmin && salesforceCanInstall && integrationsEntitled ? <ConnectSalesforceButton /> : null}
               </div>
@@ -555,15 +555,15 @@ export default async function IntegrationsPage({
         </div>
       </Card>
 
-      {/* ─── Slack (vendor notifications) ──────────────────── */}
+      {/* ─── Slack (your team's alerts, /crumb, @mention sizing) ─ */}
       <Card>
         <CardHead
-          title="Vendor-side Slack"
+          title="Slack"
           after={
             slackInstalled
               ? <Pill ring ringFill>Connected</Pill>
               : !slackCanInstall
-                ? <Pill ring ringFill>{cloud ? "Cloud" : "Set SLACK_CLIENT_ID"}</Pill>
+                ? NOT_SET_UP
                 : <Pill>Not connected</Pill>
           }
         />
@@ -575,11 +575,11 @@ export default async function IntegrationsPage({
               <p className="text-sm note">
                 Connected to <strong style={{ fontWeight: 500 }}>{ws.slackTeamName ?? "Slack"}</strong>
                 {ws.slackInstalledAt && (
-                  <> since {ws.slackInstalledAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>
+                  <> since {formatDate(ws.slackInstalledAt)}</>
                 )}.
               </p>
               <p className="text-xs muted note">
-                Members who pick <em>Slack</em> as their delivery channel on <a href="/settings/notifications" style={{ color: "var(--ink)" }}>their preferences</a> get DMs instead of email for customer replies. We look each member up by email the first time we DM them; failures fall back to email.
+                Teammates who choose <em>Slack</em> in <a href="/settings/notifications" style={{ color: "var(--ink)" }}>their notification settings</a> get their alerts (customer replies, mentions, assignments, new feedback) as DMs instead of email. Crumb finds each teammate in Slack by their email address, and emails them when it can&apos;t. Anyone in your Slack can type <span className="mono">/crumb</span> to capture feedback for a customer.
               </p>
               {isAdmin
                 ? <DisconnectSlackButton teamName={ws.slackTeamName} />
@@ -589,16 +589,9 @@ export default async function IntegrationsPage({
             <>
               {notice("slack")}
               <p className="text-sm muted note">
-                Post new submissions, status changes, and replies into your team's Slack. Customer-side Slack is configured separately by each customer admin from inside the widget.
+                Send your team&apos;s Crumb alerts as Slack DMs, to each teammate who chooses Slack in their notification settings. Capture feedback for a customer with <span className="mono">/crumb</span>, and on Cloud&apos;s Team and Growth plans, @mention Crumb on a message to size the request. Customers can get their own updates in Slack too: their account admin connects a channel from the widget.
               </p>
-              {!slackCanInstall && (
-                <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-                  {cloud
-                    ? "Slack isn't configured on this deployment yet."
-                    : <>Self-host needs a registered Slack app: set <span className="mono">SLACK_CLIENT_ID</span> and <span className="mono">SLACK_CLIENT_SECRET</span>, then restart.</>}
-                </p>
-              )}
-              {!slackCanInstall && !cloud && <SelfHostSetup provider="slack" origin={origin} />}
+              <ConnectNote name="Slack" provider="slack" canInstall={slackCanInstall} isAdmin={isAdmin} cloud={cloud} origin={origin} />
               <div className="row gap-2">
                 {isAdmin && slackCanInstall && integrationsEntitled
                   ? <ConnectSlackButton />
@@ -617,12 +610,12 @@ export default async function IntegrationsPage({
         />
         <div className="card-body col gap-3">
           <p className="text-sm muted note">
-            Post new submissions, customer replies, and status changes to a Teams channel. In Teams, add a <strong style={{ fontWeight: 500 }}>Workflows</strong> → "When a Teams webhook request is received" flow and paste its URL here. No app install required.
+            Post new feedback, customer replies, and status changes to a Teams channel. In Teams, add a <strong style={{ fontWeight: 500 }}>Workflows</strong> → "When a Teams webhook request is received" flow and paste its URL here. No app install required.
           </p>
           {teamsConnected ? (
             <>
               <p className="text-sm" style={{ margin: 0 }}>
-                Connected{ws.teamsConnectedAt && <> since {ws.teamsConnectedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>}.
+                Connected{ws.teamsConnectedAt && <> since {formatDate(ws.teamsConnectedAt)}</>}.
               </p>
               {isAdmin
                 ? <TeamsConnectedActions />
@@ -643,7 +636,7 @@ export default async function IntegrationsPage({
           after={
             sessionRecordEntitled
               ? (ws.sessionRecordEnabled ? <Pill ring ringFill>On</Pill> : <Pill>Off</Pill>)
-              : <Pill ring ringFill>{cloud ? "Growth plan" : "Cloud"}</Pill>
+              : <Pill variant="muted">{cloud ? "Growth plan" : "Cloud only"}</Pill>
           }
         />
         <div className="card-body col gap-3">
@@ -659,15 +652,15 @@ export default async function IntegrationsPage({
               <SessionRecordToggle enabled={ws.sessionRecordEnabled} disabled={!isAdmin} />
               <span className="text-sm">
                 {ws.sessionRecordEnabled
-                  ? "Capturing new sessions across your installed widget."
-                  : "Off. Widget skips loading the recorder bundle."}
+                  ? "On. Customers can send a recording of their session with their feedback."
+                  : "Off. The widget doesn't load the recorder."}
               </span>
             </div>
           ) : cloud ? (
             <UpgradeNotice feature="session_record" isAdmin={isAdmin} />
           ) : (
             <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-              Session record is available on Crumb Cloud. Self-host can wire it manually by setting a non-local <span className="mono">CRUMB_STORAGE_PROVIDER</span>; the cleanup cron deletes replays after <span className="mono">CRUMB_REPLAY_RETENTION_DAYS</span> (default 30).
+              Session record is available on Crumb Cloud&apos;s Growth plan. Self-hosted Crumb doesn&apos;t include it.
             </p>
           )}
           {!isAdmin && sessionRecordEntitled && (

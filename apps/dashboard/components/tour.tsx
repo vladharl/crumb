@@ -40,8 +40,8 @@ const STEPS: TourStep[] = [
   {
     target: "inbox",
     icon: "inbox",
-    title: "Every item is an open loop",
-    body: "Customers drop feedback here from your widget, email, or Slack, with account and session attached. Each one is a loop that stays open until they hear back.",
+    title: "Every request is an open loop",
+    body: "Feedback lands here from your widget, email and connected tools, with the customer's account attached. Each request is a loop that stays open until the customer hears the outcome.",
   },
   {
     target: "accounts",
@@ -71,13 +71,13 @@ const STEPS: TourStep[] = [
     target: "notifs",
     icon: "bell",
     title: "When the ball comes back",
-    body: "Replies, new submissions, and mentions land in this bell. Each one means it's your turn again. Tune what reaches you in Settings → Notifications.",
+    body: "New feedback, replies and @mentions show up under this bell. Choose which ones also reach you by email or Slack in Settings → Notifications.",
   },
   {
     target: "settings",
     icon: "settings",
     title: "Close your first loop",
-    body: "Open this menu to install the widget, connect Slack or your CRM, and invite teammates. When something ships, Crumb tells the customer. The loop closes itself. Follow the trail.",
+    body: "Open this menu to install the widget, connect Slack or your CRM, and invite teammates. When something ships, mark it Shipped: Crumb tells the customer, and that closes the loop. Follow the trail.",
   },
 ];
 
@@ -270,7 +270,7 @@ function CarouselOverlay({
       aria-modal="true"
       aria-label="Getting started"
       style={{
-        position: "fixed", inset: 0, background: "rgba(28, 24, 21, 0.45)",
+        position: "fixed", inset: 0, background: "var(--scrim)",
         display: "flex", alignItems: "center", justifyContent: "center",
         zIndex: 60, padding: 24,
       }}
@@ -355,7 +355,7 @@ export function TourLauncher() {
     <button
       onClick={start}
       className="link-back"
-      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}
+      style={{ background: "none", border: "none", padding: "4px 0", margin: "-4px 0", cursor: "pointer", textAlign: "left" }}
     >
       Getting started →
     </button>

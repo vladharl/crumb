@@ -187,8 +187,8 @@ describe.skipIf(!reachable && !process.env.CI)("vendor notifications", () => {
     await notifyAssignedMany({ workspaceId: ws, itemIds: [fb[1], fb[2], fb[3]], assigneeId: m.pia, actorWorkspaceUserId: m.ada });
     const [mail] = sent;
     expect(recipients()).toEqual(["pia@vendor.test"]);
-    expect(mail.subject).toBe("Assigned to you · 3 items");
-    expect(mail.text).toContain("Ada assigned 3 items to you");
+    expect(mail.subject).toBe("Assigned to you · 3 requests");
+    expect(mail.text).toContain("Ada assigned 3 requests to you");
     expect(mail.text).toContain("Assigned to you (3)\n- FB-3 Item 3");
     expect(mail.text).toContain(`${APP}/thread/FB-1`);
 

@@ -55,7 +55,7 @@ export default async function WebhooksPage() {
         <CardHead title="Outbound webhooks" after={<Pill ring>{rows.length} endpoint{rows.length === 1 ? "" : "s"}</Pill>} />
         <div className="card-body col gap-4">
           <p className="text-sm muted note">
-            Get a signed POST to your own services when feedback moves: items created, status changes, replies, tracker updates, customer notifications, initiative changes and new captures. Drive your own automations (notify a channel, update a dashboard, kick off a deploy). Pick the events each endpoint receives; each signs payloads with its own secret.
+            Get a signed POST to your own services when feedback moves: requests created, status changes, replies, tracker updates, customer notifications, initiative changes and new captures. Drive your own automations (notify a channel, update a dashboard, kick off a deploy). Pick the events each endpoint receives; each signs payloads with its own secret.
           </p>
           <WebhooksPanel initial={initial} isAdmin={user.role === "admin"} />
         </div>

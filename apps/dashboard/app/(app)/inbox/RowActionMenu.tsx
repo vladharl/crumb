@@ -34,8 +34,8 @@ type Pane = "root" | "assign" | "status" | "initiative" | "reason";
 export function emailNote(count: number, emailConfigured: boolean): string {
   if (!emailConfigured) return "Email delivery isn't set up yet, so nobody gets emailed.";
   return count === 1
-    ? "The submitter gets an email about this, unless they opted out or the item didn't come in through the widget."
-    : "Submitters get an email about this, unless they opted out or their item didn't come in through the widget.";
+    ? "The submitter gets an email about this, unless they opted out or the request didn't come in through the widget."
+    : "Submitters get an email about this, unless they opted out or their request didn't come in through the widget.";
 }
 
 type StatusResult = Awaited<ReturnType<typeof bulkUpdateStatus>>;
@@ -49,13 +49,13 @@ export function statusToast(r: StatusResult, label: string, name?: string): { me
   const skipped = r.skipped ?? 0;
   if (skipped > 0 && r.affected === 0 && r.failed === 0) {
     return { message: name
-      ? `${name} is merged into another item, so it follows that item's status.`
-      : "Nothing moved. Merged duplicates follow the item they were merged into." };
+      ? `${name} is merged into another request, so it follows that request's status.`
+      : "Nothing moved. Merged duplicates follow the request they were merged into." };
   }
   const note = skipped === 0 ? ""
-    : skipped === 1 ? " Skipped 1 merged duplicate. It follows the item it was merged into."
-    : ` Skipped ${skipped} merged duplicates. They follow the items they were merged into.`;
-  if (r.failed === 0) return { message: `${name ?? `${r.affected} ${r.affected === 1 ? "item" : "items"}`} moved to ${label}.${note}` };
+    : skipped === 1 ? " Skipped 1 merged duplicate. It follows the request it was merged into."
+    : ` Skipped ${skipped} merged duplicates. They follow the requests they were merged into.`;
+  if (r.failed === 0) return { message: `${name ?? `${r.affected} ${r.affected === 1 ? "request" : "requests"}`} moved to ${label}.${note}` };
   if (r.affected === 0) return { message: `${errorMessage(r.firstError)}${note}`, tone: "error" };
   return { message: `${r.affected} moved, ${r.failed} failed. ${errorMessage(r.firstError)}${note}`, tone: "error" };
 }
@@ -96,7 +96,7 @@ export function ReasonForm({ status, count, emailConfigured, pending, onCancel, 
       <div className="row gap-2">
         <Btn sm onClick={onCancel} disabled={pending}>Cancel</Btn>
         <Btn sm variant="primary" onClick={() => onSubmit(text.trim())} disabled={pending || !text.trim()}>
-          {pending ? "Saving…" : count > 1 ? `Move ${count} items to ${label}` : `Move to ${label}`}
+          {pending ? "Saving…" : count > 1 ? `Move ${count} requests to ${label}` : `Move to ${label}`}
         </Btn>
       </div>
     </div>

@@ -152,13 +152,13 @@ function ComposeModal({
             aria-label="Close"
             onClick={onClose}
             disabled={pending}
-            style={{ background: "none", border: 0, padding: 4, cursor: "pointer", color: "var(--mute)" }}
+            style={{ background: "none", border: 0, padding: 5, cursor: "pointer", color: "var(--mute)" }}
           >
             <Ic.x style={{ width: 14, height: 14 }} />
           </button>
         </div>
         <p className="text-xs muted" style={{ margin: "0 0 14px", lineHeight: 1.55 }}>
-          For when a customer emails or calls instead of using the widget. The item appears as if they submitted it themselves; reply threads + notifications flow to their email.
+          For when a customer emails or calls instead of using the widget. The request appears as if they sent it themselves, and replies and notifications go to their email.
         </p>
 
         <div className="col gap-3">
@@ -227,7 +227,7 @@ function ComposeModal({
           <Field label="Type">
             <div className="seg" style={{ width: "100%" }}>
               {TYPES.map(t => (
-                <button key={t.key} aria-selected={fields.type === t.key} onClick={() => fields.setType(t.key)} style={{ flex: 1 }}>
+                <button key={t.key} aria-selected={fields.type === t.key} aria-pressed={fields.type === t.key} onClick={() => fields.setType(t.key)} style={{ flex: 1 }}>
                   {t.label}
                 </button>
               ))}
@@ -268,7 +268,7 @@ function ComposeModal({
           <div className="row gap-2" style={{ justifyContent: "flex-end" }}>
             <Btn variant="ghost" onClick={onClose} disabled={pending}>Cancel</Btn>
             <Btn variant="primary" icon={<Ic.send style={{ width: 12, height: 12 }} />} onClick={submit} disabled={pending}>
-              {pending ? "Creating…" : "Create item"}
+              {pending ? "Creating…" : "Create request"}
             </Btn>
           </div>
         </div>

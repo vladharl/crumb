@@ -63,14 +63,15 @@ export function AccountMappingPanel({ initial, isManager }: { initial: AccountVi
             value={newName}
             onChange={e => setNewName(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") add(); }}
+            aria-label="New account name"
             placeholder="New account name"
             style={{ ...inputStyle, flex: 1, minWidth: 200 }}
           />
           <Btn variant="primary" icon={<Ic.plus style={{ width: 11, height: 11 }} />} onClick={add} disabled={pending || !newName.trim()}>Add account</Btn>
           <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onImportFile} style={{ display: "none" }} />
           <Btn variant="ghost" onClick={() => fileRef.current?.click()} disabled={pending}>Import CSV</Btn>
-          <a href="/settings/account-mapping/export" className="text-sm" style={{ color: "var(--ink)" }}>
-            <Btn variant="ghost" icon={<Ic.doc style={{ width: 12, height: 12 }} />}>Export</Btn>
+          <a href="/settings/account-mapping/export" className="btn ghost" style={{ textDecoration: "none" }}>
+            <Ic.doc style={{ width: 12, height: 12 }} />Export
           </a>
         </div>
       )}
@@ -87,6 +88,7 @@ export function AccountMappingPanel({ initial, isManager }: { initial: AccountVi
                 {editing?.id === acc.id ? (
                   <div className="row gap-2 center" style={{ flex: 1 }}>
                     <input
+                      aria-label="Account name"
                       value={editing.name}
                       onChange={e => setEditing({ id: acc.id, name: e.target.value })}
                       style={{ ...inputStyle, flex: 1 }}
@@ -99,10 +101,10 @@ export function AccountMappingPanel({ initial, isManager }: { initial: AccountVi
                   <>
                     <button
                       onClick={() => setExpanded(s => ({ ...s, [acc.id]: !s[acc.id] }))}
-                      style={{ background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--ink)", display: "flex", alignItems: "center", gap: 8, flex: 1, textAlign: "left" }}
+                      style={{ background: "none", border: 0, padding: "4px 0", margin: "-4px 0", cursor: "pointer", color: "var(--ink)", display: "flex", alignItems: "center", gap: 8, flex: 1, textAlign: "left" }}
                     >
                       <Ic.chevR style={{ width: 12, height: 12, transform: expanded[acc.id] ? "rotate(90deg)" : "none", transition: "transform 120ms ease", color: "var(--mute)" }} />
-                      <span className="serif text-md">{acc.name}</span>
+                      <span className="fw-med text-md">{acc.name}</span>
                       <span className="text-xs muted">{acc.users.length} {acc.users.length === 1 ? "user" : "users"}</span>
                     </button>
                     {isManager && (

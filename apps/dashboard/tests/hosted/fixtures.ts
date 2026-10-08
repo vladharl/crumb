@@ -47,7 +47,7 @@ export type ProviderMeta = {
   key: string;            // slack | linear | jira | github | hubspot | salesforce
   title: string;         // card title shown on /settings/integrations
   connectBtn: string;    // exact accessible name of the Connect button
-  setEnvText: string;    // self-host "not configured" pill text (unique per provider)
+  setEnvText: string;    // an env var the self-host "Not set up" card names in its setup details (admins only; unique per provider)
   authorizeOrigin: string;
   authorizePathExact?: string;
   authorizePathRe?: RegExp;
@@ -59,20 +59,20 @@ export type ProviderMeta = {
 export const PROVIDERS: ProviderMeta[] = [
   {
     key: "slack",
-    title: "Vendor-side Slack",
+    title: "Slack",
     connectBtn: "Connect Slack",
-    setEnvText: "Set SLACK_CLIENT_ID",
+    setEnvText: "SLACK_CLIENT_ID",
     authorizeOrigin: "https://slack.com",
     authorizePathExact: "/oauth/v2/authorize",
     hasRedirectUri: true,
     hasClientId: true,
-    scopeIncludes: ["chat:write", "im:write", "users:read", "users:read.email"],
+    scopeIncludes: ["chat:write", "im:write", "users:read", "users:read.email", "app_mentions:read", "commands"],
   },
   {
     key: "linear",
     title: "Linear",
     connectBtn: "Connect Linear",
-    setEnvText: "Set LINEAR_CLIENT_ID",
+    setEnvText: "LINEAR_CLIENT_ID",
     authorizeOrigin: "https://linear.app",
     authorizePathExact: "/oauth/authorize",
     hasRedirectUri: true,
@@ -83,7 +83,7 @@ export const PROVIDERS: ProviderMeta[] = [
     key: "jira",
     title: "Jira",
     connectBtn: "Connect Jira",
-    setEnvText: "Set JIRA_CLIENT_ID",
+    setEnvText: "JIRA_CLIENT_ID",
     authorizeOrigin: "https://auth.atlassian.com",
     authorizePathExact: "/authorize",
     hasRedirectUri: true,
@@ -94,7 +94,7 @@ export const PROVIDERS: ProviderMeta[] = [
     key: "github",
     title: "GitHub",
     connectBtn: "Install GitHub App",
-    setEnvText: "Set GITHUB_APP_*",
+    setEnvText: "GITHUB_APP_ID",
     authorizeOrigin: "https://github.com",
     // /apps/<slug>/installations/new
     authorizePathRe: /^\/apps\/[^/]+\/installations\/new$/,
@@ -106,7 +106,7 @@ export const PROVIDERS: ProviderMeta[] = [
     key: "hubspot",
     title: "HubSpot",
     connectBtn: "Connect HubSpot",
-    setEnvText: "Set HUBSPOT_CLIENT_ID",
+    setEnvText: "HUBSPOT_CLIENT_ID",
     authorizeOrigin: "https://app.hubspot.com",
     authorizePathExact: "/oauth/authorize",
     hasRedirectUri: true,
@@ -117,7 +117,7 @@ export const PROVIDERS: ProviderMeta[] = [
     key: "salesforce",
     title: "Salesforce",
     connectBtn: "Connect Salesforce",
-    setEnvText: "Set SALESFORCE_CLIENT_ID",
+    setEnvText: "SALESFORCE_CLIENT_ID",
     // Default login host; a sandbox (SALESFORCE_LOGIN_URL) would differ — the
     // spec asserts the path, and only asserts the origin for the default host.
     authorizeOrigin: "https://login.salesforce.com",

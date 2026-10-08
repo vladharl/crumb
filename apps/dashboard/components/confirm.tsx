@@ -1,7 +1,9 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { Btn } from "@crumb/ui";
+import { Dialog } from "@/components/Dialog";
 
 export type ConfirmOptions = {
   title: string;
@@ -31,81 +33,62 @@ export function useConfirm() {
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<Pending | null>(null);
-  // Whatever had focus when the dialog opened (usually the trigger button).
-  // Captured before render, since autoFocus moves focus during commit.
-  const returnFocus = useRef<HTMLElement | null>(null);
 
-  const confirm = useCallback((opts: ConfirmOptions) => {
-    returnFocus.current = document.activeElement as HTMLElement | null;
-    return new Promise<boolean>(resolve => setPending({ ...opts, resolve }));
-  }, []);
+  const confirm = useCallback(
+    (opts: ConfirmOptions) => new Promise<boolean>(resolve => setPending({ ...opts, resolve })),
+    [],
+  );
 
-  const close = useCallback((ok: boolean) => {
-    setPending(prev => {
-      prev?.resolve(ok);
-      return null;
-    });
-    returnFocus.current?.focus();
-    returnFocus.current = null;
-  }, []);
+  // Close first, synchronously: the page is live again and focus is back on
+  // the opener (Dialog) before the caller's `await confirm()` resumes.
+  function settle(ok: boolean) {
+    flushSync(() => setPending(null));
+    pending?.resolve(ok);
+  }
 
-  // Escape cancels. Enter is left to the focused button, so Enter on Cancel
-  // cancels (a window-level Enter used to confirm whatever had focus).
-  useEffect(() => {
-    if (!pending) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); close(false); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [pending, close]);
-
+  // Escape and the scrim cancel (Dialog). Enter is left to the focused
+  // button, so Enter on Cancel cancels (a window-level Enter used to confirm
+  // whatever had focus).
   return (
     <ConfirmCtx.Provider value={confirm}>
       {children}
       {pending && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={pending.title}
-          className="modal-scrim"
-          onClick={() => close(false)}
-          style={{
-            position: "fixed", inset: 0, background: "rgba(28, 24, 21, 0.45)",
+        <Dialog
+          label={pending.title}
+          onClose={() => settle(false)}
+          scrimClassName="modal-scrim"
+          scrimStyle={{
+            position: "fixed", inset: 0, background: "var(--scrim, rgba(28, 24, 21, 0.45))",
             display: "flex", alignItems: "center", justifyContent: "center",
             zIndex: 60, padding: 24,
           }}
+          className="modal-card"
+          style={{
+            background: "var(--paper, var(--surface))",
+            border: "1px solid var(--line, var(--hair))",
+            borderRadius: "var(--r-md)",
+            padding: 20,
+            width: "min(420px, 100%)",
+            boxShadow: "var(--sh-soft)",
+          }}
         >
-          <div
-            className="modal-card"
-            onClick={e => e.stopPropagation()}
-            style={{
-              background: "var(--paper, var(--surface))",
-              border: "1px solid var(--line, var(--hair))",
-              borderRadius: "var(--r-md)",
-              padding: 20,
-              width: "min(420px, 100%)",
-              boxShadow: "var(--sh-soft)",
-            }}
-          >
-            <h3 className="serif" style={{ margin: "0 0 8px", fontSize: 17 }}>{pending.title}</h3>
-            {pending.body && (
-              <p className="text-sm muted" style={{ margin: "0 0 16px", lineHeight: 1.55 }}>{pending.body}</p>
-            )}
-            {/* Initial focus: Cancel on destructive confirms so a reflex Enter
-                backs out, the primary action otherwise. */}
-            <div className="row gap-2" style={{ justifyContent: "flex-end" }}>
-              <Btn autoFocus={!!pending.destructive} onClick={() => close(false)}>{pending.cancelLabel ?? "Cancel"}</Btn>
-              <Btn
-                autoFocus={!pending.destructive}
-                variant={pending.destructive ? "danger" : "primary"}
-                onClick={() => close(true)}
-              >
-                {pending.confirmLabel ?? "Confirm"}
-              </Btn>
-            </div>
+          <h3 className="serif" style={{ margin: "0 0 8px", fontSize: 17 }}>{pending.title}</h3>
+          {pending.body && (
+            <p className="text-sm muted" style={{ margin: "0 0 16px", lineHeight: 1.55 }}>{pending.body}</p>
+          )}
+          {/* Initial focus: Cancel on destructive confirms so a reflex Enter
+              backs out, the primary action otherwise. */}
+          <div className="row gap-2" style={{ justifyContent: "flex-end" }}>
+            <Btn autoFocus={!!pending.destructive} onClick={() => settle(false)}>{pending.cancelLabel ?? "Cancel"}</Btn>
+            <Btn
+              autoFocus={!pending.destructive}
+              variant={pending.destructive ? "danger" : "primary"}
+              onClick={() => settle(true)}
+            >
+              {pending.confirmLabel ?? "Confirm"}
+            </Btn>
           </div>
-        </div>
+        </Dialog>
       )}
     </ConfirmCtx.Provider>
   );

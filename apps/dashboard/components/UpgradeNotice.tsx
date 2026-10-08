@@ -3,6 +3,7 @@ import { getActiveSession } from "@/lib/server";
 import { PLAN_FEATURES, planDisplayName, type Feature, type Plan } from "@/lib/entitlements";
 import { isActiveStatus } from "@/lib/stripe";
 import { supportContactAddress } from "@/lib/email";
+import { formatDate } from "@/lib/timefmt";
 
 // Paywall and AI-budget notices: say what's locked or paused, and give admins
 // the way through to billing. Server components (they read PLAN_FEATURES, and
@@ -46,7 +47,7 @@ export function aiUsageCopy(
   percent: number, resetsAt: Date, isAdmin: boolean, plan: Plan, contact: string | null = null,
 ): NoticeCopy | null {
   if (percent < 80) return null;
-  const date = resetsAt.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  const date = formatDate(resetsAt, { utc: true });
   const text = percent >= 100
     ? `AI is paused until ${date}.`
     : `You've used ${percent}% of this month's AI operations. Resets ${date}.`;

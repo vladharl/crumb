@@ -21,7 +21,7 @@ type ToggleRow = {
 
 // One row per nudge lib/vendor-notify.ts actually sends.
 const ROWS: ToggleRow[] = [
-  { key: "newSubmissionRealtime", label: "New submission" },
+  { key: "newSubmissionRealtime", label: "New feedback" },
   { key: "assignedRealtime",      label: "Assigned to me" },
   { key: "replyRealtime",         label: "Customer reply" },
   { key: "mentionRealtime",       label: "Mention" },
@@ -65,6 +65,7 @@ export function PreferencesCard({
               <button
                 key={v}
                 aria-selected={prefs.digestFrequency === v}
+                aria-pressed={prefs.digestFrequency === v}
                 onClick={() => update("digestFrequency", v)}
                 disabled={pending}
               >
@@ -87,6 +88,7 @@ export function PreferencesCard({
                 <button
                   key={v}
                   aria-selected={prefs.delivery === v}
+                  aria-pressed={prefs.delivery === v}
                   onClick={() => slackBlocked ? router.push("/settings/integrations") : update("delivery", v)}
                   disabled={pending}
                   title={slackBlocked ? "Connect Slack in Settings → Integrations to enable" : undefined}
@@ -106,15 +108,9 @@ export function PreferencesCard({
           const value = prefs[r.key];
           return (
             <div key={r.key} className="row gap-3 center">
-              <button
-                onClick={() => update(r.key, !value)}
-                disabled={pending}
-                style={{ background: "none", border: 0, padding: 0, cursor: pending ? "default" : "pointer" }}
-                aria-pressed={value}
-                aria-label={r.label}
-              >
-                <Switch on={value} />
-              </button>
+              {/* The switch is the button (no button around it). Clicks wait
+                  out a save in flight, as the old disabled wrapper did. */}
+              <Switch on={value} label={r.label} onClick={() => { if (!pending) update(r.key, !value); }} />
               <span className="text-sm grow">{r.label}</span>
             </div>
           );

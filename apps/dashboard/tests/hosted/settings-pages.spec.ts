@@ -16,7 +16,7 @@ test.describe("settings pages render", () => {
     await page.goto("/settings/integrations");
     for (const title of [
       "Linear", "Jira", "GitHub", "HubSpot", "Salesforce",
-      "Vendor-side Slack", "Microsoft Teams", "Session record",
+      "Slack", "Microsoft Teams", "Session record",
     ]) {
       await expect(page.getByText(title, { exact: false }).first(), `card: ${title}`).toBeVisible();
     }

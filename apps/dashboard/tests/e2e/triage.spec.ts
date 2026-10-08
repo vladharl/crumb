@@ -17,7 +17,7 @@ async function composeItem(page: Page, title: string): Promise<string> {
   await panel.getByPlaceholder("Acme Co").fill("Triage Test Co");
   await panel.getByPlaceholder("maya@acme.co").fill(`triage+${Date.now()}@example.com`);
   await panel.getByPlaceholder("One line: what's the gist?").fill(title);
-  await panel.getByRole("button", { name: "Create item" }).click();
+  await panel.getByRole("button", { name: "Create request" }).click();
   await page.waitForURL(/\/thread\/FB-\d+$/, { timeout: 30_000 });
   return page.url().split("/thread/")[1]!;
 }
