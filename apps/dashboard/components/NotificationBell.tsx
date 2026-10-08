@@ -44,8 +44,9 @@ export function NotificationBell({ initialUnread = 0 }: { initialUnread?: number
     }
   }
 
-  // Poll the unread count while the tab is visible.
+  // Load the unread count now, then poll it while the tab is visible.
   useEffect(() => {
+    refresh(false);
     const id = setInterval(() => { if (!document.hidden) refresh(false); }, 60_000);
     const onVis = () => { if (!document.hidden) refresh(false); };
     document.addEventListener("visibilitychange", onVis);

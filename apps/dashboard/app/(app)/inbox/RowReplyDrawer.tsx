@@ -7,7 +7,7 @@ import { Avatar, Btn, Ic, Pill, REASON_PLACEHOLDER, StatusDot, StatusPill, Trail
 import type { Status } from "@crumb/ui";
 import { LOOP_CLOSED_STATUSES } from "@/lib/loop";
 import { useToast } from "@/components/toast";
-import { ReplyComposer, useStatusMove, runAction, firstName } from "@/components/ReplyComposer";
+import { ReplyComposer, useStatusMove, runAction, firstName, statusEmailees, reasonNote } from "@/components/ReplyComposer";
 import { translateItem } from "@/app/(app)/thread/[shortId]/actions";
 import { getReplyContext, type ReplyContext, type ReplyDrawerMessage } from "./reply-actions";
 import type { InboxRow } from "./InboxTable";
@@ -118,6 +118,7 @@ export function RowReplyDrawer({
     first,
     source: row.source,
     plan: ctx?.notifyPlan.status ?? { willEmail: true },
+    mergedReach: ctx?.mergedReach ?? 0,
     onMoved: () => {
       setReason("");
       if (alive.current) onCollapse();
@@ -130,6 +131,11 @@ export function RowReplyDrawer({
   const atCap = (messages?.length ?? 0) >= 5;
   const foreign = !!ctx?.detectedLang && ctx.detectedLang !== "en";
   const closeDisabled = !ctx || statusMove.saving;
+  // Both outcomes email the submitter when their plan allows it, and the
+  // customers whose requests were merged into this one.
+  const emailees = ctx && (ctx.notifyPlan.status.willEmail || ctx.mergedReach > 0)
+    ? statusEmailees(first, ctx.notifyPlan.status.willEmail, ctx.mergedReach)
+    : null;
 
   function onSent(closedAs?: "shipped" | "declined") {
     // Something landed (the composer toasts what): refresh the inbox so the
@@ -283,6 +289,9 @@ export function RowReplyDrawer({
               onChange={e => setReason(e.target.value)}
               disabled={closeDisabled}
             />
+            {ctx && reasonNote(first, ctx.notifyPlan.status.willEmail, ctx.mergedReach) && (
+              <span className="text-xs muted">{reasonNote(first, ctx.notifyPlan.status.willEmail, ctx.mergedReach)}</span>
+            )}
             <div className="row gap-2">
               <Btn sm onClick={() => { setReasonOpen(false); setReason(""); }} disabled={statusMove.saving}>Cancel</Btn>
               <Btn sm variant="primary" onClick={submitWontShip} disabled={closeDisabled || !reason.trim()}>
@@ -293,8 +302,7 @@ export function RowReplyDrawer({
         ) : (
           <div className="rd-foot row gap-2 center" style={{ flexWrap: "wrap" }}>
             <span className="eyebrow">Close the loop</span>
-            {/* Both outcomes email the customer when their plan allows it. */}
-            {ctx?.notifyPlan.status.willEmail && <span className="text-2xs muted">emails {first}</span>}
+            {emailees && <span className="text-2xs muted">emails {emailees}</span>}
             <div className="row gap-2 center" style={{ marginLeft: "auto" }}>
               <Btn sm icon={<StatusDot status="shipped" />} onClick={() => void statusMove.move("shipped")} disabled={closeDisabled}>Mark shipped</Btn>
               <Btn sm icon={<StatusDot status="declined" />} onClick={() => setReasonOpen(true)} disabled={closeDisabled}>Won’t ship</Btn>

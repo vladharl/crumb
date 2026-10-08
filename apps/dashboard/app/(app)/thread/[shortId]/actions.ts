@@ -4,7 +4,7 @@ import {
   db, items, accounts, accountUsers, replies, statusEvents, workspaces, ticketSuggestions, dedupeSuggestions, replaySessions,
   type Workspace,
 } from "@crumb/db";
-import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { findDuplicateCandidates } from "@/lib/ai/dedup";
 import { replyConfigured, draftReply, translate } from "@/lib/ai/reply";
 import { withAiBudget } from "@/lib/ai/run";
@@ -21,8 +21,10 @@ import { open } from "@/lib/crypto-at-rest";
 import { IntegrationAuthError, clearProviderInstall } from "@/lib/integrations/revoke";
 import { emitEvent } from "@/lib/webhooks";
 import {
-  createItemReply, updateItemStatus, replyAndSetItemStatus, assignItemTo, type Status, type VendorRole,
+  createItemReply, updateItemStatus, replyAndSetItemStatus, assignItemTo, notifyMergedItem, mergeNoticePlan,
+  type Status, type VendorRole,
 } from "@/lib/items/mutations";
+import type { NotifyPlan } from "@/lib/notify/customer-plan";
 import { log } from "@/lib/log";
 
 // On a provider auth failure (revoked/expired token), clear the install so
@@ -613,15 +615,28 @@ export async function listDuplicateCandidates(
   };
 }
 
+// Who mergeItems would email about folding `sourceShortId` in, and whether it
+// goes out, so MergePanel can say so before the vendor confirms.
+export async function mergeNotice(
+  sourceShortId: string,
+): Promise<{ ok: true; name: string; accountName: string; source: string | null; plan: NotifyPlan } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+  const notice = await mergeNoticePlan(workspace.id, sourceShortId);
+  return notice ? { ok: true, ...notice } : { ok: false, error: "not_found" };
+}
+
 // Fold `source` into `target` (the canonical). Source becomes status=duplicate
 // with merged_into_id set; its replay sessions re-point to the canonical so
-// they surface there, and any pending dedupe suggestion resolves. The group's
-// combined ARR/followers are computed at read time (ThreadViewTile), never
-// stored, so they stay correct as ARR changes. Admin/pm only.
+// they surface there, and any pending dedupe suggestion resolves. Its
+// submitter is emailed once (notifyMergedItem); `emailed` says whether a real
+// provider took it. The group's combined ARR/followers are computed at read
+// time (ThreadViewTile), never stored, so they stay correct as ARR changes.
+// Admin/pm only.
 export async function mergeItems(
   sourceShortId: string,
   targetShortId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; emailed: boolean } | { ok: false; error: string }> {
   if (sourceShortId === targetShortId) return { ok: false, error: "same_item" };
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
@@ -643,7 +658,7 @@ export async function mergeItems(
     .limit(1);
   if (dep) return { ok: false, error: "source_has_duplicates" };
 
-  await db
+  const [folded] = await db
     .update(items)
     .set({
       status: "duplicate",
@@ -652,7 +667,11 @@ export async function mergeItems(
       mergedByWorkspaceUserId: user.id,
       updatedAt: new Date(),
     })
-    .where(eq(items.id, source.id));
+    .where(and(eq(items.id, source.id), or(isNull(items.mergedIntoId), ne(items.mergedIntoId, target.id))))
+    .returning({ id: items.id });
+  // Already merged into this target (a repeated submit): nothing changed, so
+  // no second timeline row and no second email.
+  if (!folded) return { ok: true, emailed: false };
   await db.insert(statusEvents).values({
     itemId: source.id,
     fromStatus: source.status,
@@ -676,10 +695,17 @@ export async function mergeItems(
     at: new Date().toISOString(),
   });
 
+  // Told once: a request moved here from another canonical item was told when
+  // it was first merged.
+  const emailed = source.mergedIntoId ? false : await notifyMergedItem(
+    { workspaceId: workspace.id, actorWorkspaceUserId: user.id, role: user.role as VendorRole },
+    { itemShortId: source.shortId, origin: originFromHeaders(headers()) },
+  );
+
   revalidatePath(`/thread/${targetShortId}`);
   revalidatePath(`/thread/${sourceShortId}`);
   revalidatePath("/inbox");
-  return { ok: true };
+  return { ok: true, emailed };
 }
 
 // Reverse a merge: the item returns to the open inbox as a standalone request.

@@ -503,11 +503,12 @@ Schedule the dump however you like (host cron, a sidecar) and ship the file off-
 
 ### Maintenance cron
 
-Three internal endpoints do scheduled work. Set `CRUMB_INTERNAL_SWEEP_SECRET`, then `POST` to each with the header `X-Crumb-Sweep-Secret: <secret>` (they return 503 until the secret is set):
+Four internal endpoints do scheduled work. Set `CRUMB_INTERNAL_SWEEP_SECRET`, then `POST` to each with the header `X-Crumb-Sweep-Secret: <secret>` (they return 503 until the secret is set):
 
 - `/api/v1/internal/replay-sweep`, hourly: prunes orphaned uploads and replay sessions, enforces replay retention, drops aged usage events (a bounded batch per run).
 - `/api/v1/internal/crm-sync`, every few hours: refreshes accounts and ARR from a connected CRM.
 - `/api/v1/internal/feedback-sync`, every 15 to 30 minutes: pulls new tickets and calls from connected feedback sources.
+- `/api/v1/internal/digest`, daily: emails each teammate's daily or weekly digest (at most one per period), then embeds the items AI-entitled workspaces still lack, so dedup and Similar items cover them (Cloud).
 
 ```bash
 curl -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" \

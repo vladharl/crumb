@@ -24,6 +24,8 @@ type IssuesEvent = {
     number: number;
     html_url: string;
     state: string;
+    // Why it closed: "completed", "not_planned" or "duplicate" (null on older issues).
+    state_reason?: string | null;
     labels?: Array<{ name: string }>;
   };
   repository: { full_name: string };
@@ -77,7 +79,12 @@ export async function POST(req: Request) {
   const installationId = event.installation?.id;
   if (installationId == null) return NextResponse.json({ received: true });
   const ticketRef = issueTicketRef(event.repository.full_name, event.issue.number);
-  const newStatus = event.issue.state; // "open" | "closed"
+  // "open" | "closed", or "closed (not planned)" / "closed (duplicate)": an
+  // issue closed without doing the work must not read as engineering done.
+  const reason = event.issue.state_reason;
+  const newStatus = event.issue.state === "closed" && reason && reason !== "completed"
+    ? `closed (${reason.replace(/_/g, " ")})`
+    : event.issue.state;
 
   try {
     await syncExternalStatus(and(

@@ -125,8 +125,9 @@ async function resolveAccount(
 }
 
 // Store the embedding, write advisory AI fields, and apply auto-tags for a newly
-// promoted item. Mirrors the autoTriage enrichment in app/api/v1/items/route.ts,
-// but reuses the extraction we already have instead of a second model call.
+// promoted item. Mirrors the autoTriage enrichment in lib/items/create.ts (which
+// composeItem skips here, triage: false), but reuses the extraction we already
+// have instead of a second model call.
 async function enrichPromotedItem(
   ws: Workspace,
   itemId: string,
@@ -184,8 +185,8 @@ export async function applyTags(ws: Workspace, itemId: string, names: string[]):
 // canonical — this grows the canonical's reach/ARR-at-stake via the existing
 // merge-group aggregation. Otherwise we just leave an internal note. Either way
 // no new open loop, the customer is not emailed, and nothing announces it as
-// new (no item.created, no Teams post). No `workspace` on the compose call, so
-// the duplicate isn't sent for AI clustering.
+// new (announce: false: no item.created, Teams post, new-submission alert or AI
+// clustering). triage: false, since its text was already extracted and embedded.
 async function attachToCanonical(
   ws: Workspace,
   source: CaptureSource,
@@ -210,6 +211,7 @@ async function attachToCanonical(
       source,
       sourceUrl: record.url,
       announce: false,
+      triage: false,
     });
     if (r.ok) {
       await db
@@ -370,6 +372,8 @@ export async function ingestRecord(
         submitterName: record.authorName ?? undefined,
         type: compositeType(unit.type), title: unit.title, body: unit.body,
         source, sourceUrl: record.url,
+        // Extracted + embedded above under autopilot_ai; enrichPromotedItem stores it.
+        triage: false,
       });
       if (r.ok) {
         await enrichPromotedItem(ws, r.itemId, unit, embedding);

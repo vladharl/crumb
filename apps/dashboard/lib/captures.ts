@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, accounts, inboundCaptures, type Workspace } from "@crumb/db";
 import { matchAccountConfigured, suggestAccount } from "@/lib/ai/match-account";
 import { withAiBudget } from "@/lib/ai/run";
@@ -48,6 +48,20 @@ export type CaptureInput = {
 export async function createInboundCapture(ws: Workspace, input: CaptureInput): Promise<string | null> {
   let suggestion = input.suggestion ?? null;
   if (suggestion === null && matchAccountConfigured() && hasFeature(ws, "ai")) {
+    // A provider retry of a record already captured would come back null from
+    // the insert anyway: check first, so it doesn't spend an AI unit.
+    if (input.externalId) {
+      const [seen] = await db
+        .select({ id: inboundCaptures.id })
+        .from(inboundCaptures)
+        .where(and(
+          eq(inboundCaptures.workspaceId, ws.id),
+          eq(inboundCaptures.source, input.source),
+          eq(inboundCaptures.externalId, input.externalId),
+        ))
+        .limit(1);
+      if (seen) return null;
+    }
     try {
       const rows = await db
         .select({ id: accounts.id, name: accounts.name })

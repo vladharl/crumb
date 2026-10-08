@@ -143,7 +143,7 @@ done) | docker compose exec -T postgres psql -U crumb -d crumb -q
 If you already keep `local` storage on a mounted volume, set
 `CRUMB_STORAGE_PROVIDER=local` in `.env` instead, before upgrading.
 
-**Maintenance cron.** Three internal endpoints do scheduled work. Each takes a
+**Maintenance cron.** Four internal endpoints do scheduled work. Each takes a
 `POST` with `CRUMB_INTERNAL_SWEEP_SECRET` in the `X-Crumb-Sweep-Secret` header,
 and returns 503 until that secret is set. Cron doesn't load `.env`, so each line
 reads the secret from it (adjust the path if you cloned somewhere other than
@@ -156,6 +156,8 @@ reads the secret from it (adjust the path if you cloned somewhere other than
 0 */6 * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $(sed -n 's/^CRUMB_INTERNAL_SWEEP_SECRET=//p' $HOME/crumb/.env)" http://127.0.0.1:3000/api/v1/internal/crm-sync
 # Every 20 minutes: pull new tickets and calls from connected feedback sources into the Inbox (no-op until one is connected)
 */20 * * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $(sed -n 's/^CRUMB_INTERNAL_SWEEP_SECRET=//p' $HOME/crumb/.env)" http://127.0.0.1:3000/api/v1/internal/feedback-sync
+# Daily at 9:00 (server time): email each teammate's daily or weekly digest (each gets at most one per period), then embed items AI-entitled workspaces still lack (Cloud)
+0 9 * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $(sed -n 's/^CRUMB_INTERNAL_SWEEP_SECRET=//p' $HOME/crumb/.env)" http://127.0.0.1:3000/api/v1/internal/digest
 ```
 These lines need a plain `CRUMB_INTERNAL_SWEEP_SECRET=<value>` line in `.env`
 (no quotes or trailing comment). Each replay-sweep run removes a bounded batch

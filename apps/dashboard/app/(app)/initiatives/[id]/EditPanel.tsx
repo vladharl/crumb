@@ -3,6 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Ic } from "@crumb/ui";
+import type { Announce } from "@/lib/changelog";
+import { AnnouncePrompt } from "@/app/(app)/changelog/Announce";
 import { updateInitiative } from "../actions";
 import { PRESET_COLORS } from "../presetColors";
 
@@ -80,6 +82,8 @@ export function EditPanel({
   const [eventDraft, setEventDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // Set when the initiative just shipped with its changelog entry unsent.
+  const [announce, setAnnounce] = useState<Announce | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
 
@@ -87,10 +91,12 @@ export function EditPanel({
 
   if (!editing) {
     return (
-      <div className="row gap-2">
+      <div className="col gap-2" style={{ alignItems: "flex-end", maxWidth: 560 }}>
         <Btn icon={<Ic.settings style={{ width: 12, height: 12 }} />} onClick={() => setEditing(true)}>
           Edit
         </Btn>
+        {/* "Done" right after shipping still leaves the announce prompt up. */}
+        {announce && <AnnouncePrompt announce={announce} onClose={() => setAnnounce(null)} />}
       </div>
     );
   }
@@ -102,7 +108,7 @@ export function EditPanel({
     setSaved(false);
     startTransition(async () => {
       const r = await updateInitiative(initiative.id, patch);
-      if (r.ok) { setSaved(true); router.refresh(); }
+      if (r.ok) { setSaved(true); if (r.announce) setAnnounce(r.announce); router.refresh(); }
       else setError(humanError(r.error));
     });
   }
@@ -144,7 +150,11 @@ export function EditPanel({
     addEvents(eventDraft);
     setEventDraft("");
   }
-  function pickStatus(v: string) { setStatus(v); persist({ status: v }); }
+  function pickStatus(v: string) {
+    setStatus(v);
+    if (v !== "shipped") setAnnounce(null);
+    persist({ status: v });
+  }
   function pickOwner(v: string) { setOwnerId(v); persist({ ownerWorkspaceUserId: v || null }); }
   function pickColor(c: string) { if (c === color) return; setColor(c); persist({ color: c }); }
 
@@ -210,6 +220,7 @@ export function EditPanel({
           {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
       </div>
+      {announce && <AnnouncePrompt announce={announce} onClose={() => setAnnounce(null)} />}
       <div className="col gap-1">
         <label className="eyebrow" htmlFor="ed-owner">Owner</label>
         <select id="ed-owner" value={ownerId} onChange={e => pickOwner(e.target.value)} style={inputStyle}>

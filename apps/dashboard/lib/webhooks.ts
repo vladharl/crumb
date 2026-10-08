@@ -6,6 +6,8 @@ import { and, eq, sql, type SQL } from "drizzle-orm";
 import { db, items, webhookDeliveries, webhookEndpoints, workspaces, type WebhookEndpoint } from "@crumb/db";
 import { isCloud } from "./tier";
 import { EVENT_TYPES, isEventType, type EventType } from "./event-catalog";
+import { LOOP_CLOSED_STATUSES, ticketDone } from "./loop";
+import { notifyEngDone } from "./vendor-notify";
 import { log } from "./log";
 
 // Re-export the client-safe catalog so server callers can keep importing it
@@ -337,12 +339,16 @@ export async function sendTestEvent(
 // ─── tracker status sync ─────────────────────────────────────
 // The Linear/Jira/GitHub status webhooks: set external_status on the items
 // `where` matches (the route's tenant scoping) and emit
-// item.external_status_changed for each one whose status actually moved.
+// item.external_status_changed for each one whose status actually moved. When
+// it moved to a done state on a loop that's still open, the team hears it
+// (notifyEngDone): engineering finished, so someone should tell the customer.
 // ponytail: read-then-update, so two near-simultaneous deliveries for one
 // ticket can report a stale from_status. Fine for a notification.
 export async function syncExternalStatus(where: SQL | undefined, toStatus: string | null): Promise<void> {
   const linked = await db
     .select({
+      id: items.id,
+      status: items.status,
       workspaceId: items.workspaceId,
       slug: workspaces.slug,
       shortId: items.shortId,
@@ -364,6 +370,7 @@ export async function syncExternalStatus(where: SQL | undefined, toStatus: strin
     .where(where);
 
   const at = new Date().toISOString();
+  const engDone: string[] = [];
   for (const r of linked) {
     if (r.fromStatus === toStatus) continue;
     void emitEvent(r.workspaceId, {
@@ -375,7 +382,12 @@ export async function syncExternalStatus(where: SQL | undefined, toStatus: strin
       to_status: toStatus,
       at,
     });
+    // Reaching done, not moving between done states (Jira's Resolved to Closed).
+    if (ticketDone(r.provider, toStatus) && !ticketDone(r.provider, r.fromStatus) && !LOOP_CLOSED_STATUSES.has(r.status)) {
+      engDone.push(r.id);
+    }
   }
+  if (engDone.length) void notifyEngDone({ itemIds: engDone });
 }
 
 // ─── docs ────────────────────────────────────────────────────
@@ -389,7 +401,7 @@ const AT = "2026-01-01T12:00:00.000Z";
 
 export const EVENT_DOCS: { [K in EventType]: { when: string; sample: Extract<CrumbEvent, { type: K }> } } = {
   "item.created": {
-    when: "An item was created from the dashboard, Slack, MCP, an accepted capture or an Autopilot connector. Not sent yet for widget submissions.",
+    when: "An item was created from the widget, the dashboard, Slack, MCP, an accepted capture or an Autopilot connector.",
     sample: { type: "item.created", workspace: "acme", item: ITEM, account: "Globex", at: AT },
   },
   "item.status_changed": {
@@ -437,7 +449,7 @@ export const EVENT_DOCS: { [K in EventType]: { when: string; sample: Extract<Cru
     },
   },
   "initiative.updated": {
-    when: "An initiative was edited or moved to another roadmap column. changes lists the fields that changed.",
+    when: "An initiative was edited, moved to another roadmap column, or made public or private. changes lists the fields that changed.",
     sample: {
       type: "initiative.updated", workspace: "acme",
       initiative: { short_id: "IN-7", name: "Faster exports", status: "in_progress", roadmap_column: "now" },

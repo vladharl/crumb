@@ -3,7 +3,9 @@ import {
 } from "@crumb/db";
 import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { statusLabel } from "@crumb/ui";
 import { getActiveSession } from "@/lib/server";
+import { lastTurnSideSql } from "@/lib/loop-sql";
 import { clusterConfigured } from "@/lib/ai/cluster";
 import { emailConfigured } from "@/lib/email";
 import { hasFeature, workspacePlan } from "@/lib/entitlements";
@@ -27,16 +29,11 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     WHERE replies.item_id = items.id AND replies.internal = false
   )`.as("reply_count");
 
-  // Whose turn is it: the side of the most recent non-internal reply. Vendor
-  // replied last -> the loop is waiting on the customer; customer replied last
-  // (or nobody has) -> the loop is on you. Derivation lives in lib/loop.ts.
-  const lastReplySide = sql<"vendor" | "customer" | null>`(
-    SELECT CASE WHEN r.workspace_user_id IS NOT NULL THEN 'vendor' ELSE 'customer' END
-    FROM replies r
-    WHERE r.item_id = items.id AND r.internal = false
-    ORDER BY r.created_at DESC
-    LIMIT 1
-  )`.as("last_reply_side");
+  // Whose turn is it: who moved last. A vendor reply, a status email the
+  // customer got, or Set aside -> the loop is waiting on the customer; a
+  // customer reply (or nothing yet) -> the loop is on you. lib/loop-sql.ts
+  // builds it, lib/loop.ts reads it.
+  const lastReplySide = lastTurnSideSql(items.id).as("last_reply_side");
 
   // Epoch ms (double precision -> JS number) of the latest non-internal reply,
   // so "waiting since" doesn't depend on driver timestamp parsing inside a raw
@@ -46,6 +43,14 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     FROM replies r
     WHERE r.item_id = items.id AND r.internal = false
   )`.as("last_external_reply_ms");
+
+  // Epoch ms of the newest notification the customer actually got (the loop
+  // ledger): "Eng done, not told" compares it with the ticket's last sync.
+  const lastNotifiedMs = sql<number | null>`(
+    SELECT (EXTRACT(EPOCH FROM MAX(cn.sent_at)) * 1000)::double precision
+    FROM customer_notifications cn
+    WHERE cn.item_id = items.id
+  )`.as("last_notified_ms");
 
   // Whether a vendor has ever answered (lights the trail's "Answered" crumb —
   // lastReplySide alone can't tell, since a later customer reply masks it).
@@ -145,6 +150,10 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
       lastReplySide,
       lastExternalReplyMs,
       vendorReplied,
+      externalProvider: items.externalProvider,
+      externalStatus: items.externalStatus,
+      externalSyncedAt: items.externalSyncedAt,
+      lastNotifiedMs,
       initiativeId: items.initiativeId,
       initiativeName: initiatives.name,
       initiativeColor: initiatives.color,
@@ -184,8 +193,9 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     shortId: r.shortId,
     title: r.title,
     preview: r.preview === null ? null : r.preview.length > 140 ? r.preview.slice(0, 140).trimEnd() + "…" : r.preview,
-    // Append tag names so the fuzzy search box matches on them too.
-    searchText: ((r.searchText ?? "") + " " + (r.tags ?? []).join(" ")).trim(),
+    // Append tag names and the status as people read it ("set aside", not
+    // "deferred") so the fuzzy search box matches on them too.
+    searchText: [r.searchText ?? "", ...(r.tags ?? []), statusLabel(r.status).toLowerCase()].join(" ").trim(),
     type: r.type,
     status: r.status,
     source: r.source,
@@ -203,6 +213,10 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     lastReplySide: r.lastReplySide,
     lastExternalReplyAtIso: r.lastExternalReplyMs === null ? null : new Date(r.lastExternalReplyMs).toISOString(),
     vendorReplied: r.vendorReplied,
+    externalProvider: r.externalProvider,
+    externalStatus: r.externalStatus,
+    externalSyncedAtIso: r.externalSyncedAt?.toISOString() ?? null,
+    lastNotifiedAtIso: r.lastNotifiedMs === null ? null : new Date(r.lastNotifiedMs).toISOString(),
     initiativeId: r.initiativeId,
     initiativeName: r.initiativeName,
     initiativeColor: r.initiativeColor,

@@ -3,7 +3,8 @@ import { secretMatches } from "@/lib/secret-match";
 import { and, desc, eq } from "drizzle-orm";
 import { db, items, accountUsers, replies, workspaces } from "@crumb/db";
 import { parseReplyAddress, pickReplyTarget } from "@/lib/reply-token";
-import { extractSender, stripQuotedTail } from "@/lib/inbound-text";
+import { extractSender, extractSenderName, normalizeMessageId, stripQuotedTail } from "@/lib/inbound-text";
+import { createInboundCapture } from "@/lib/captures";
 import { notifyVendorsOfCustomerReply, dashboardOriginFromHeaders } from "@/lib/customer-reply-notify";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { LIMITS } from "@/lib/validation";
@@ -22,7 +23,9 @@ export const runtime = "nodejs";
 //   from:     string               — sender (display name + addr allowed)
 //   text:     string               — plain-text body
 //
-// Optional: subject, html, message_id / messageId.
+// Optional: subject, html, message_id / messageId. The Message-ID is the
+// dedupe key: a provider retry of a message that already landed is answered
+// { accepted: false, reason: "duplicate" } instead of posting it twice.
 //
 // Auth (optional): set CRUMB_INBOUND_SECRET to require
 //   Authorization: Bearer <secret>
@@ -124,9 +127,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_token" }, { status: 403 });
   }
 
-  // The sender must be a known account_user on this account. We don't
-  // auto-create — that would let any spammer post into a thread by guessing
-  // the address. Submitter is the common case but any account teammate works.
+  const messageId = normalizeMessageId(payload.message_id ?? payload.messageId);
+  if (!messageId) {
+    log.warn("inbound reply has no Message-ID, so a provider retry would post it twice", { scope: "crumb/inbound", shortId: parsed.shortId });
+  }
+
+  // Only a known account_user on this account posts to the thread: the signed
+  // address proves which thread, not who is writing. Submitter is the common
+  // case but any account teammate works.
   const [author] = await db
     .select({ id: accountUsers.id, name: accountUsers.name })
     .from(accountUsers)
@@ -137,10 +145,24 @@ export async function POST(req: Request) {
     ))
     .limit(1);
 
+  // Anyone else (a colleague not on the account yet, a personal address, an
+  // auto-responder) waits in captures for a person to review, naming the
+  // thread it answered, instead of vanishing. Still a 200: a 5xx would retry.
   if (!author) {
-    // Don't 5xx — provider would retry. Log + accept-but-drop semantics.
-    log.warn("dropping inbound reply from unknown sender", { scope: "crumb/inbound", senderEmail, shortId: parsed.shortId });
-    return NextResponse.json({ ok: true, accepted: false, reason: "unknown_sender" });
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, row.itemWorkspaceId)).limit(1);
+    if (!ws) return NextResponse.json({ error: "item_not_found" }, { status: 404 });
+    const captureId = await createInboundCapture(ws, {
+      source: "email",
+      fromEmail: senderEmail,
+      fromName: extractSenderName(payload.from),
+      subject: payload.subject?.trim().slice(0, 300) || null,
+      body: `Emailed reply to ${parsed.shortId} (${row.itemTitle}) from an address that isn't on its account.\n\n${body}`.slice(0, LIMITS.reply),
+      externalId: messageId, // a retry is a no-op on the captures' unique index
+      rawMeta: { message_id: messageId, reply_to: parsed.shortId },
+    });
+    return NextResponse.json(captureId
+      ? { ok: true, accepted: false, reason: "unknown_sender", captureId }
+      : { ok: true, accepted: false, reason: "duplicate" });
   }
 
   const [created] = await db.insert(replies).values({
@@ -148,32 +170,34 @@ export async function POST(req: Request) {
     accountUserId: author.id,
     body,
     internal: false,
-  }).returning({ id: replies.id });
+    inboundMessageId: messageId,
+  })
+    .onConflictDoNothing({ target: [replies.itemId, replies.inboundMessageId] })
+    .returning({ id: replies.id });
+  // A retry of a message that already landed: nothing new to post or tell anyone.
+  if (!created) return NextResponse.json({ ok: true, accepted: false, reason: "duplicate" });
 
   await db.update(items).set({ updatedAt: new Date() }).where(eq(items.id, row.itemId));
 
   // Outbound webhook fan-out: a customer answered by email.
-  if (created) {
-    void emitEvent(row.itemWorkspaceId, {
-      type: "item.reply_created",
-      workspace: row.workspaceSlug,
-      item: { short_id: parsed.shortId, title: row.itemTitle, type: row.itemType },
-      reply: { id: created.id, internal: false, author: author.name, is_customer: true },
-      at: new Date().toISOString(),
-    });
-  }
+  void emitEvent(row.itemWorkspaceId, {
+    type: "item.reply_created",
+    workspace: row.workspaceSlug,
+    item: { short_id: parsed.shortId, title: row.itemTitle, type: row.itemType },
+    reply: { id: created.id, internal: false, author: author.name, is_customer: true },
+    at: new Date().toISOString(),
+  });
 
-  // Notify the vendor team — best-effort.
-  try {
-    await notifyVendorsOfCustomerReply({
-      itemId: row.itemId,
-      customerName: author.name,
-      replyBody: body,
-      dashboardOrigin: dashboardOriginFromHeaders(req),
-    });
-  } catch (err) {
+  // Notify the vendor team, best-effort and not awaited: the provider gets its
+  // 200 now, so a slow mail or Slack send can't time the webhook out into a retry.
+  void notifyVendorsOfCustomerReply({
+    itemId: row.itemId,
+    customerName: author.name,
+    replyBody: body,
+    dashboardOrigin: dashboardOriginFromHeaders(req),
+  }).catch((err) => {
     log.error("inbound-reply notify failed", { scope: "crumb/inbound-reply", err });
-  }
+  });
 
   return NextResponse.json({ ok: true, accepted: true, shortId: parsed.shortId });
 }

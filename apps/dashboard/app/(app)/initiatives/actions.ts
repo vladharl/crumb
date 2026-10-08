@@ -11,14 +11,16 @@ import { suggestInitiative, clusterConfigured, CLUSTER_MODEL } from "@/lib/ai/cl
 import { autoClusterItem } from "@/lib/ai/auto-cluster";
 import { aiCap, consumeAi } from "@/lib/usage";
 import { notifyRoadmapFollowers } from "@/lib/roadmap-notify";
-import { draftChangelogForInitiative } from "@/lib/changelog";
+import { announcementAudience, draftChangelogForInitiative, type Announce } from "@/lib/changelog";
 import { emitEvent } from "@/lib/webhooks";
 import { log } from "@/lib/log";
 
 const ROADMAP_COLUMNS = new Set(["now", "next", "later"]);
 const ROADMAP_COLUMN_LABEL: Record<string, string> = { now: "Now", next: "Next", later: "Later" };
 
-// updateInitiative's fields as initiative.updated names them in `changes`.
+// updateInitiative's fields as initiative.updated names them in `changes`. The
+// other edits name theirs inline: reorderInitiatives "roadmap_column" and
+// setInitiativePublic "is_public".
 const CHANGE_NAMES: Record<string, string> = {
   name: "name",
   description: "description",
@@ -142,7 +144,7 @@ export async function updateInitiative(
     ownerWorkspaceUserId?: string | null;
     trackedEventNames?: string[] | null;
   },
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; announce?: Announce } | { ok: false; error: string }> {
   if (!id || typeof id !== "string") return { ok: false, error: "no_id" };
 
   const { workspace, user } = await getActiveSession();
@@ -170,8 +172,8 @@ export async function updateInitiative(
     updates.internalNotes = notes;
   }
 
-  // Detect a transition INTO "shipped" so we can auto-draft a changelog entry
-  // once (not on every re-save while already shipped).
+  // Detect a transition INTO "shipped" so we can draft a changelog entry and
+  // prompt to announce it once (not on every re-save while already shipped).
   let shippedNow = false;
   if (patch.status !== undefined) {
     if (!ALLOWED_STATUSES.includes(patch.status as InitiativeStatus)) {
@@ -243,15 +245,22 @@ export async function updateInitiative(
     });
   }
 
-  // Just shipped → auto-draft an announce-shipped changelog entry (idempotent,
-  // fire-and-forget). A human reviews + publishes it from /changelog.
-  if (shippedNow) void draftChangelogForInitiative(workspace, id);
+  // Just shipped → draft the announcement (idempotent) and hand back what the
+  // ship prompt shows: the entry as customers will read it and who it would
+  // email. Nothing is sent until someone publishes it (here or in /changelog).
+  let announce: Announce | undefined;
+  if (shippedNow) {
+    const entry = await draftChangelogForInitiative(workspace, id);
+    if (entry && !entry.publishedAt) {
+      announce = { entryId: entry.id, title: entry.title, body: entry.body, audience: await announcementAudience(workspace.id, id) };
+    }
+  }
 
   revalidatePath("/initiatives");
   revalidatePath(`/initiatives/${id}`);
   revalidatePath("/inbox");
   revalidatePath("/changelog");
-  return { ok: true };
+  return announce ? { ok: true, announce } : { ok: true };
 }
 
 export async function archiveInitiative(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -294,7 +303,8 @@ export async function bulkSetInitiative(
 // The Initiatives board (Now/Next/Later + Unscheduled) is the primary view.
 // A drag persists the target column AND the new order for every card in that
 // column via a single reorder call. Followers of a public initiative are
-// notified when it lands in a new column.
+// notified when it lands in a new column, so the board holds that call behind
+// an Undo toast first (InitiativesBoard).
 export async function reorderInitiatives(
   column: string | null,
   orderedIds: string[],
@@ -358,12 +368,20 @@ export async function setInitiativePublic(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { workspace, user } = await getActiveSession();
   if (!canManage(user.role)) return { ok: false, error: "forbidden" };
-  const r = await db
+  const [row] = await db
     .update(initiatives)
     .set({ isPublic })
     .where(and(eq(initiatives.workspaceId, workspace.id), eq(initiatives.id, initiativeId)))
-    .returning({ id: initiatives.id });
-  if (r.length === 0) return { ok: false, error: "not_found" };
+    .returning({ shortId: initiatives.shortId, name: initiatives.name, status: initiatives.status, roadmapColumn: initiatives.roadmapColumn });
+  if (!row) return { ok: false, error: "not_found" };
+  // What customers see on the roadmap changed, so it's an update like any other.
+  void emitEvent(workspace.id, {
+    type: "initiative.updated",
+    workspace: workspace.slug,
+    initiative: { short_id: row.shortId, name: row.name, status: row.status, roadmap_column: row.roadmapColumn },
+    changes: ["is_public"],
+    at: new Date().toISOString(),
+  });
   revalidatePath("/initiatives");
   return { ok: true };
 }

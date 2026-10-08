@@ -4,6 +4,8 @@ import { db, workspaces, workspaceUsers } from "@crumb/db";
 import { stripeClient, STRIPE_WEBHOOK_SECRET, planIdFromLookupKey } from "@/lib/stripe";
 import { sendDunningNotification } from "@/lib/email";
 import { originFromHeaders } from "@/lib/origin";
+import { hasFeature } from "@/lib/entitlements";
+import { backfillEmbeddings } from "@/lib/ai/backfill-embeddings";
 import { log } from "@/lib/log";
 import type Stripe from "stripe";
 
@@ -136,6 +138,12 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
     ? new Date(item.current_period_end * 1000)
     : null;
 
+  // The plan before this write, to tell whether the change grants AI.
+  const before = await db
+    .select({ id: workspaces.id, planId: workspaces.planId, subscriptionStatus: workspaces.subscriptionStatus })
+    .from(workspaces)
+    .where(eq(workspaces.stripeCustomerId, customerId));
+
   await db
     .update(workspaces)
     .set({
@@ -145,4 +153,11 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
       planId,
     })
     .where(eq(workspaces.stripeCustomerId, customerId));
+
+  // Upgraded into AI: embed the items captured before it, in the background,
+  // so dedup and Similar items cover them now rather than at the next sweep.
+  // Never blocks or fails the webhook.
+  if (hasFeature({ planId, subscriptionStatus: sub.status }, "ai")) {
+    for (const ws of before) if (!hasFeature(ws, "ai")) void backfillEmbeddings(ws.id);
+  }
 }

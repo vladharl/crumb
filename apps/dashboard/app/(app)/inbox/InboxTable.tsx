@@ -9,7 +9,7 @@ import {
   REASON_REQUIRED, VENDOR_STATUS_OPTIONS,
 } from "@crumb/ui";
 import type { Status, TypeKind } from "@crumb/ui";
-import { loopTurn, waitingDays, waitingSince, type LoopTurn, type ReplySide } from "@/lib/loop";
+import { engDoneUntold, loopTurn, waitingDays, waitingSince, type LoopTurn, type ReplySide } from "@/lib/loop";
 import { priority, byPriorityDesc, formatArr, type Priority } from "@/lib/priority";
 import { gmailTime } from "@/lib/timefmt";
 import { splitTerms, matchesTerms } from "@/lib/fuzzy";
@@ -67,10 +67,17 @@ export type InboxRow = {
   submitterName: string;
   assigneeInitials: string | null;
   replyCount: number;
-  // Loop turn inputs: side of the last non-internal reply + when it landed.
+  // Loop turn inputs: who moved last (lib/loop-sql lastTurnSideSql: a reply, a
+  // delivered status email, Set aside) + when the latest non-internal reply landed.
   lastReplySide: ReplySide | null;
   lastExternalReplyAtIso: string | null;
   vendorReplied: boolean;
+  // "Eng done, not told" inputs (lib/loop engDoneUntold): the linked tracker
+  // ticket's state and last sync, and the newest notification the customer got.
+  externalProvider: string | null;
+  externalStatus: string | null;
+  externalSyncedAtIso: string | null;
+  lastNotifiedAtIso: string | null;
   initiativeId: string | null;
   initiativeName: string | null;
   initiativeColor: string | null;
@@ -119,10 +126,11 @@ function ageFrom(iso: string, now: number): string {
 }
 
 // The inbox is an obligation queue first: it lands on the loops that are
-// waiting on you, with the rest one tab away.
-type Tab = LoopTurn | "mine" | "all";
+// waiting on you, with the rest one tab away. "eng-done" is the saved view of
+// open loops whose ticket is done while the customer hasn't heard (any turn).
+type Tab = LoopTurn | "mine" | "all" | "eng-done";
 
-const TABS: ReadonlySet<string> = new Set(["yours", "waiting", "closed", "mine", "all"]);
+const TABS: ReadonlySet<string> = new Set(["yours", "waiting", "closed", "mine", "all", "eng-done"]);
 
 // Sort order is orthogonal to the loop-turn tabs: the tab picks *which* loops,
 // the sort picks *what order*. "newest" keeps the per-tab default (your-turn is
@@ -189,6 +197,7 @@ function InboxEmpty({
   const sub =
     tab === "waiting" ? "Nothing’s waiting on a customer right now."
     : tab === "closed" ? "No closed loops yet. They collect here once an item reaches an outcome."
+    : tab === "eng-done" ? "Nothing here right now. Open loops show up here when their linked Linear, Jira or GitHub ticket is done and the customer hasn’t been told since."
     : "Nothing here yet.";
   return (
     <div className="inbox-empty quiet" role="cell">
@@ -277,7 +286,16 @@ export function InboxTable({
   // effect below). A failed write clears its entry, snapping the row back.
   const [optStatus, setOptStatus] = useState<Map<string, string>>(new Map());
   const rowsView = useMemo(
-    () => (optStatus.size === 0 ? rows : rows.map(r => (optStatus.has(r.id) ? { ...r, status: optStatus.get(r.id)! } : r))),
+    () => (optStatus.size === 0 ? rows : rows.map(r => {
+      const status = optStatus.get(r.id);
+      if (status === undefined) return r;
+      // Setting an item aside is the vendor's move (lastTurnSideSql), so it
+      // leaves Your turn on this frame too. Re-saving the same status writes
+      // nothing, so that one keeps the server's side.
+      return status === "deferred" && r.status !== "deferred"
+        ? { ...r, status, lastReplySide: "vendor" as const }
+        : { ...r, status };
+    })),
     [rows, optStatus],
   );
   // Ids from a write that partly failed. Its result has counts, not ids, so the
@@ -410,13 +428,18 @@ export function InboxTable({
     return counts;
   }, [scopedRows]);
   const mineCount = useMemo(() => scopedRows.filter(r => r.assigneeId === meId).length, [scopedRows, meId]);
+  const engDoneCount = useMemo(() => scopedRows.filter(engDoneUntold).length, [scopedRows]);
   const mergedTotal = useMemo(() => rows.filter(r => r.mergedIntoId !== null).length, [rows]);
+  // The Eng done view only means something once a ticket is linked somewhere
+  // (or someone lands on it from a saved URL).
+  const showEngDone = useMemo(() => tab === "eng-done" || rows.some(r => r.externalProvider !== null), [rows, tab]);
 
   // Tab bucketing on top of the scoped set. Client-side so the UI is instant;
   // bulk ops below operate on the filtered visible set.
   const visibleRows = useMemo(() => {
     const filtered = scopedRows.filter(r => {
       if (tab === "mine") return r.assigneeId === meId;
+      if (tab === "eng-done") return engDoneUntold(r);
       if (tab === "yours" || tab === "waiting" || tab === "closed") return loopTurn(r) === tab;
       return true;
     });
@@ -622,7 +645,7 @@ export function InboxTable({
         clearSelection();
         router.refresh();
         toast.show({
-          message: name ? `${plural(ids.length, "item")} assigned to ${name}.` : `${plural(ids.length, "item")} unassigned.`,
+          message: name ? `${plural(res.affected, "item")} assigned to ${name}.` : `${plural(res.affected, "item")} unassigned.`,
           action: { label: "Undo", onClick: () => undoAssign(prev) },
         });
       } else {
@@ -641,7 +664,8 @@ export function InboxTable({
     startTransition(async () => {
       let err: string | null = null;
       for (const [a, ids] of byAssignee) {
-        const res = await bulkAssign(ids, a);
+        // Putting owners back tells nobody: they had these a moment ago.
+        const res = await bulkAssign(ids, a, { notify: false });
         if (!res.ok) err ??= res.error;
       }
       router.refresh();
@@ -754,13 +778,13 @@ export function InboxTable({
                 role="tab"
                 aria-selected={tab === "yours"}
                 onClick={() => setTab("yours")}
-                title="Open loops waiting on you: no reply yet, or the customer spoke last"
+                title="Open loops waiting on you: no answer yet, or the customer wrote after your last reply or update"
               >Your turn · {turnCounts.yours}</button>
               <button
                 role="tab"
                 aria-selected={tab === "waiting"}
                 onClick={() => setTab("waiting")}
-                title="You replied last, waiting on the customer or the fix to ship"
+                title="You moved last: a reply, a status email the customer got, or Set aside. Waiting on the customer or the fix to ship"
               >Waiting · {turnCounts.waiting}</button>
               <button
                 role="tab"
@@ -770,6 +794,14 @@ export function InboxTable({
               >Closed · {turnCounts.closed}</button>
               <button role="tab" aria-selected={tab === "mine"} onClick={() => setTab("mine")}>Mine · {mineCount}</button>
               <button role="tab" aria-selected={tab === "all"}  onClick={() => setTab("all")}>All · {scopedRows.length}</button>
+              {showEngDone && (
+                <button
+                  role="tab"
+                  aria-selected={tab === "eng-done"}
+                  onClick={() => setTab("eng-done")}
+                  title="Open loops whose linked Linear, Jira or GitHub ticket is done, and the customer hasn't been told since"
+                >Eng done, not told · {engDoneCount}</button>
+              )}
             </div>
             <div className="inbox-search">
               <Ic.search style={{ width: 13, height: 13, color: "var(--mute)" }} />

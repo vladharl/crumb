@@ -34,7 +34,9 @@ export function customerNotifyPlan(input: {
 }
 
 // Status changes worth an email: commitments and outcomes. Triage moves (open,
-// review) would be noise, and duplicates are left to the merge flow.
+// review) would be noise. A duplicate hears from the merge itself, once
+// (notifyMergedItem in lib/items/mutations), and then gets these same emails
+// when the item it was merged into moves, each under its own `status` plan.
 const STATUS_EMAILS: ReadonlySet<string> = new Set(["planned", "progress", "shipped", "declined", "deferred"]);
 
 export function statusEmailsCustomer(status: string): boolean {

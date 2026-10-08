@@ -2,9 +2,12 @@
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { db, changelogEntries } from "@crumb/db";
 import { getActiveSession } from "@/lib/server";
-import { publishChangelogEntry } from "@/lib/changelog";
+import { originFromHeaders } from "@/lib/origin";
+import { publishChangelogEntry, type PublishResult } from "@/lib/changelog";
+import type { VendorRole } from "@/lib/items/mutations";
 
 function canManage(role: string): boolean {
   return role === "admin" || role === "pm";
@@ -62,14 +65,25 @@ export async function updateChangelogEntry(
   return { ok: true };
 }
 
-// Publish + announce to everyone who asked. Idempotent (publishedAt guard).
-export async function publishEntry(id: string): Promise<ChangelogActionResult> {
+// Publish. An initiative's entry is also emailed to everyone who asked or
+// follows, and with markShipped its open requests move to Shipped. The result
+// says who was actually reached (lib/changelog). Publishes once.
+export async function publishEntry(id: string, opts: { markShipped?: boolean } = {}): Promise<PublishResult> {
   const { workspace, user } = await getActiveSession();
   if (!canManage(user.role)) return { ok: false, error: "forbidden" };
-  const r = await publishChangelogEntry(workspace, id);
+  const r = await publishChangelogEntry(workspace, id, {
+    origin: originFromHeaders(headers()),
+    markShipped: opts.markShipped
+      ? { workspaceId: workspace.id, actorWorkspaceUserId: user.id, role: user.role as VendorRole }
+      : undefined,
+  });
   if (!r.ok) return r;
   revalidatePath("/changelog");
-  return { ok: true };
+  if (r.announced && r.marked > 0) {
+    revalidatePath("/inbox");
+    revalidatePath("/initiatives");
+  }
+  return r;
 }
 
 export async function deleteChangelogEntry(id: string): Promise<ChangelogActionResult> {

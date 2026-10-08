@@ -3,7 +3,28 @@ import { eq } from "drizzle-orm";
 import { db, roadmapFollows, accountUsers, type Workspace } from "@crumb/db";
 import { sendRoadmapUpdateNotification } from "./email";
 import { notifyAccountChannels } from "./notify/account-channel";
+import { customerNotifyPlan, type NotifyPlan } from "./notify/customer-plan";
+import { WIDGET_SOURCE } from "./feedback/source";
 import { log } from "./log";
+
+// May this customer get roadmap email (an initiative they follow or asked for
+// moved or shipped)? The shared customer rule (lib/notify/customer-plan), with
+// roadmap updates as the per-kind switch. Followers follow from the widget's
+// roadmap, hence the widget source by default; an asker passes their item's.
+// Whether email is set up at all is the caller's to check.
+export function roadmapEmailPlan(
+  p: { email: string; unsubscribedAll: boolean; notifyRoadmap: boolean },
+  source: string | null = WIDGET_SOURCE,
+): NotifyPlan {
+  return customerNotifyPlan({
+    source,
+    submitterEmail: p.email,
+    unsubscribedAll: p.unsubscribedAll,
+    notifyReplies: p.notifyRoadmap,
+    notifyStatus: p.notifyRoadmap,
+    emailConfigured: true,
+  }).status;
+}
 
 // Email everyone following an initiative that it changed on the public
 // roadmap. Best-effort, fire-and-forget — never blocks the vendor's edit.
@@ -27,8 +48,8 @@ export async function notifyRoadmapFollowers(
       .from(roadmapFollows)
       .innerJoin(accountUsers, eq(accountUsers.id, roadmapFollows.accountUserId))
       .where(eq(roadmapFollows.initiativeId, initiativeId));
-    // Honor each follower's prefs (skip if muted or roadmap updates are off).
-    const recipients = followers.filter(f => !f.unsubscribedAll && f.notifyRoadmap);
+    // Honor each follower's prefs (muted, roadmap updates off, no real address).
+    const recipients = followers.filter(f => roadmapEmailPlan(f).willEmail);
     if (recipients.length === 0) return;
     await Promise.all(recipients.map(f => sendRoadmapUpdateNotification({
       to: f.email,

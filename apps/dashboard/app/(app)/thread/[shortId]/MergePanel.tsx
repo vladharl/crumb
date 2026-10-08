@@ -5,10 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Btn, Card, CardHead, Ic, Pill } from "@crumb/ui";
 import { useToast } from "@/components/toast";
-import { cancelWaitingMove } from "@/components/ReplyComposer";
+import { useConfirm } from "@/components/confirm";
+import { cancelWaitingMove, firstName, noEmailNote } from "@/components/ReplyComposer";
 import { errorMessage } from "@/lib/action-error";
 import {
   mergeItems,
+  mergeNotice,
   unmergeItem,
   dismissDuplicateSuggestion,
   listDuplicateCandidates,
@@ -47,20 +49,34 @@ export function MergePanel({
 }) {
   const router = useRouter();
   const toast = useToast();
+  const confirm = useConfirm();
   const [pending, startTransition] = useTransition();
+  const [searching, startSearch] = useTransition();
   const [candidates, setCandidates] = useState<DuplicateCandidateView[] | null>(null);
   const [searched, setSearched] = useState(false);
 
   const fail = (code: string) => toast.show({ message: errorMessage(code), tone: "error" });
 
   // Merging and unmerging change the item's status, so either wins over a
-  // status move still waiting out its undo window.
+  // status move still waiting out its undo window. A merge emails the merged
+  // item's submitter once, so the confirm says first who that is, or why
+  // nobody is emailed, from the plan the server sends by.
   function doMerge(sourceShortId: string, targetShortId: string) {
-    cancelWaitingMove(sourceShortId);
     startTransition(async () => {
+      const notice = await mergeNotice(sourceShortId);
+      if (!notice.ok) { fail(notice.error); return; }
+      const first = firstName(notice.name);
+      if (!(await confirm({
+        title: `Merge ${sourceShortId} into ${targetShortId}?`,
+        body: noEmailNote(notice.plan, "status", first, notice.source)
+          ?? `${first} at ${notice.accountName} will get one email that this was combined.`,
+        confirmLabel: "Merge",
+      }))) return;
+      cancelWaitingMove(sourceShortId);
       const r = await mergeItems(sourceShortId, targetShortId);
-      if (r.ok) router.refresh();
-      else fail(r.error);
+      if (!r.ok) { fail(r.error); return; }
+      router.refresh();
+      toast.show({ message: `Merged ${sourceShortId} into ${targetShortId}. ${first} ${r.emailed ? "was" : "wasn't"} emailed.` });
     });
   }
   function doUnmerge() {
@@ -79,7 +95,7 @@ export function MergePanel({
     });
   }
   function findSimilar() {
-    startTransition(async () => {
+    startSearch(async () => {
       const r = await listDuplicateCandidates(itemShortId);
       setSearched(true);
       if (r.ok) setCandidates(r.candidates);
@@ -147,8 +163,8 @@ export function MergePanel({
 
         {merge.dedupAvailable && canManage && (
           <>
-            <Btn sm icon={<Ic.search style={{ width: 11, height: 11 }} />} onClick={findSimilar} disabled={pending}>
-              {pending && !searched ? "Searching…" : "Find similar items"}
+            <Btn sm icon={<Ic.search style={{ width: 11, height: 11 }} />} onClick={findSimilar} disabled={pending || searching}>
+              {searching ? "Searching…" : "Find similar items"}
             </Btn>
             {searched && candidates && candidates.length === 0 && (
               <span className="text-xs muted">No similar items found.</span>

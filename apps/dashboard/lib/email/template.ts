@@ -593,6 +593,147 @@ ${truncate(v.replyBody, v.dashboardThreadUrl)}
 ${v.dashboardThreadUrl ? `Open in Crumb: ${v.dashboardThreadUrl}` : `Open the thread in your Crumb dashboard to reply.`}`;
 }
 
+// ─── Vendor shell (teammate alerts and the digest) ───────────
+// The workspace leads, like the customer-reply email, with a mono eyebrow
+// under it and one footer line saying why this arrived and how to change it.
+
+export const vendorFooter = (ws: string) => `You're on the team for ${ws}. Change what nudges you in Crumb's Notifications settings.`;
+
+function vendorShell(v: { workspaceName: string; eyebrow: string; rows: string; footer: string }): string {
+  return `<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"></head>
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%">
+          <tr><td style="padding:0 8px 20px">
+            <table role="presentation" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding-right:10px">${EMBER_MARK}</td>
+                <td>
+                  <div style="font-weight:600;font-size:17px;letter-spacing:-0.01em">${escapeHtml(v.workspaceName)}</div>
+                  <div style="font-size:11px;color:#6B5C50;font-family:ui-monospace,JetBrains Mono,Menlo,monospace">${escapeHtml(v.eyebrow)}</div>
+                </td>
+              </tr>
+            </table>
+          </td></tr>
+${v.rows}
+          <tr><td style="padding:32px 8px 0">
+            <p style="margin:0;padding-top:20px;border-top:1px solid rgba(28,24,21,0.08);font-size:11px;color:#8A7C70">${escapeHtml(v.footer)}</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+// ─── Vendor nudge (new submission, assignment, engineering done) ─────
+// One shape for the short teammate alerts: what happened as a sentence, the
+// item, the customer's words when there are some, and the way to the thread.
+
+export type VendorNudgeVars = {
+  workspaceName: string;
+  headline: string;
+  itemShortId: string;
+  itemTitle: string;
+  accountName?: string | null;
+  body?: string | null;
+  dashboardThreadUrl?: string | null;
+};
+
+const nudgeEyebrow = (v: VendorNudgeVars) => v.accountName ? `${v.itemShortId} · ${v.accountName}` : v.itemShortId;
+
+export function renderVendorNudgeHtml(v: VendorNudgeVars): string {
+  const body = v.body?.trim() ? truncate(v.body.trim(), v.dashboardThreadUrl) : "";
+  return vendorShell({
+    workspaceName: v.workspaceName,
+    eyebrow: nudgeEyebrow(v),
+    footer: vendorFooter(v.workspaceName),
+    rows: `
+          <tr><td style="padding:0 8px 16px">
+            <h1 style="margin:0 0 6px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(v.headline)}</h1>
+            <p style="margin:0;font-size:14px;color:#4A2E1F"><strong style="font-weight:500">${escapeHtml(v.itemTitle)}</strong></p>
+          </td></tr>${body ? cardHtml(body) : ""}
+          <tr><td style="padding:24px 8px 0">
+            ${v.dashboardThreadUrl ? buttonHtml(v.dashboardThreadUrl, "Open in Crumb") : noteHtml("Open the thread in Crumb to reply.")}
+          </td></tr>`,
+  });
+}
+
+export function renderVendorNudgeText(v: VendorNudgeVars): string {
+  const body = v.body?.trim() ? truncate(v.body.trim(), v.dashboardThreadUrl) : "";
+  return [
+    v.headline,
+    `${nudgeEyebrow(v)}\n${v.itemTitle}`,
+    body ? `---\n${body}\n---` : "",
+    v.dashboardThreadUrl ? `Open in Crumb: ${v.dashboardThreadUrl}` : "Open the thread in Crumb to reply.",
+    vendorFooter(v.workspaceName),
+  ].filter(Boolean).join("\n\n");
+}
+
+// ─── Digest (daily or weekly) ───────────────────────────────
+// A few short lists, each item linking to its thread. Sections arrive already
+// chosen and capped; `total` says how many there are in all.
+
+export type DigestLine = { shortId: string; title: string; detail?: string | null; url?: string | null };
+export type DigestSection = { heading: string; total: number; lines: DigestLine[] };
+export type DigestVars = {
+  workspaceName: string;
+  heading: string;
+  sections: DigestSection[];
+  /** The Inbox, for "and N more". */
+  inboxUrl?: string | null;
+  /** Why this arrives and how to change it. */
+  footer: string;
+  /** The line under the workspace name: "Digest" unless set (a bulk assignment's list). */
+  eyebrow?: string;
+};
+
+const moreText = (n: number) => `And ${n} more in the Inbox.`;
+
+export function renderDigestHtml(v: DigestVars): string {
+  const sections = v.sections.map(sec => {
+    const lines = sec.lines.map(l => {
+      const title = l.url
+        ? `<a href="${escapeHtml(l.url)}" style="color:#1C1815;text-decoration:underline">${escapeHtml(l.title)}</a>`
+        : escapeHtml(l.title);
+      const detail = l.detail ? `<span style="color:#6B5C50"> · ${escapeHtml(l.detail)}</span>` : "";
+      return `<p style="margin:0 0 6px;font-size:14px"><span style="font-size:12px;color:#6B5C50;font-family:ui-monospace,JetBrains Mono,Menlo,monospace">${escapeHtml(l.shortId)}</span> ${title}${detail}</p>`;
+    }).join("");
+    const more = sec.total - sec.lines.length;
+    const moreHtml = more <= 0 ? ""
+      : v.inboxUrl
+        ? `<p style="margin:0;font-size:12px;color:#6B5C50">And ${more} more in the <a href="${escapeHtml(v.inboxUrl)}" style="color:#6B5C50">Inbox</a>.</p>`
+        : `<p style="margin:0;font-size:12px;color:#6B5C50">${escapeHtml(moreText(more))}</p>`;
+    return `
+          <tr><td style="padding:20px 8px 0">
+            <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:#4A2E1F">${escapeHtml(`${sec.heading} (${sec.total})`)}</p>
+            ${lines}${moreHtml}
+          </td></tr>`;
+  }).join("");
+  return vendorShell({
+    workspaceName: v.workspaceName,
+    eyebrow: v.eyebrow ?? "Digest",
+    footer: v.footer,
+    rows: `
+          <tr><td style="padding:0 8px">
+            <h1 style="margin:0;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(v.heading)}</h1>
+          </td></tr>${sections}`,
+  });
+}
+
+export function renderDigestText(v: DigestVars): string {
+  const sections = v.sections.map(sec => {
+    const lines = sec.lines.map(l => `- ${l.shortId} ${l.title}${l.detail ? ` · ${l.detail}` : ""}${l.url ? `\n  ${l.url}` : ""}`);
+    const more = sec.total - sec.lines.length;
+    if (more > 0) lines.push(v.inboxUrl ? `And ${more} more in the Inbox: ${v.inboxUrl}` : moreText(more));
+    return `${sec.heading} (${sec.total})\n${lines.join("\n")}`;
+  });
+  return [`${v.heading} · ${v.workspaceName}`, ...sections, v.footer].join("\n\n");
+}
+
 // ─── Dunning (payment failed) ───────────────────────────────
 // Sent to workspace admins when Stripe reports a failed invoice. The CTA
 // points at the in-app billing page (which links onward to the Stripe

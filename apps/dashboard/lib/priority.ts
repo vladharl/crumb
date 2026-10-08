@@ -31,6 +31,7 @@ export type PriorityInput = {
   /** AI severity (low|medium|high|critical) or null when not triaged / self-host. */
   aiSeverity: string | null;
   status: string;
+  /** Who moved last (lastTurnSideSql): a status email or Set aside counts for the vendor. */
   lastReplySide: ReplySide | null;
   createdAtIso: string;
   lastExternalReplyAtIso: string | null;

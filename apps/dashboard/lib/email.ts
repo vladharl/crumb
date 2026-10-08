@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { statusLabel } from "@crumb/ui";
-import type { EmailProvider, SendResult } from "./email/provider";
+import type { EmailProvider, OutgoingEmail, SendResult } from "./email/provider";
 import { stdoutProvider } from "./email/stdout";
 import { makeResendProvider } from "./email/resend";
 import { makeSmtpProvider } from "./email/smtp";
@@ -18,6 +18,9 @@ import {
   renderShippedAnnouncementHtml, renderShippedAnnouncementText,
   renderSignupNotificationHtml, renderSignupNotificationText,
   renderSupportRequestHtml, renderSupportRequestText,
+  renderVendorNudgeHtml, renderVendorNudgeText,
+  renderDigestHtml, renderDigestText,
+  type DigestVars,
 } from "./email/template";
 import { isCloud } from "./tier";
 import { log } from "./log";
@@ -103,6 +106,23 @@ export function supportContactAddress(): string | null {
 // delivered AND a destination is configured. Never show a form we can't honor.
 export function supportContactEnabled(): boolean {
   return emailConfigured() && supportContactAddress() !== null;
+}
+
+// The one door every email leaves through. It refuses reserved-TLD
+// placeholders (RFC 2606 .invalid: Slack captures with no address get
+// x@slack.invalid, sample customers and the Install preview use them too), so
+// no path can send to one, and logs a provider failure.
+async function deliver(kind: string, m: OutgoingEmail): Promise<SendResult> {
+  const { provider } = selectProvider();
+  if (/\.invalid\.?$/i.test(senderAddress(m.to))) {
+    log.info("email not sent: placeholder address", { scope: "crumb/email", kind });
+    return { ok: false, error: "invalid_recipient" };
+  }
+  const result = await provider.send(m);
+  if (!result.ok) {
+    log.error(`${kind} send failed`, { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
+  }
+  return result;
 }
 
 // Derive a noreply variant of the configured From — same domain, fixed local
@@ -194,12 +214,11 @@ export type MagicLink = {
 };
 
 export async function sendMagicLink(m: MagicLink): Promise<void> {
-  const { provider } = selectProvider();
   const subject = m.workspaceName
     ? `Your Crumb sign-in link · ${m.workspaceName}`
     : "Your Crumb sign-in link";
 
-  const result = await provider.send({
+  await deliver("magic-link", {
     to: m.to,
     subject,
     html: renderMagicLinkHtml({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
@@ -207,10 +226,6 @@ export async function sendMagicLink(m: MagicLink): Promise<void> {
     previewLine: `expires in ${ttlText(m.ttlMinutes)}`,
     link: m.link,
   });
-
-  if (!result.ok) {
-    log.error("magic-link send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
 }
 
 // Team invite: its own email (not the bare sign-in one), carrying a regular
@@ -231,8 +246,7 @@ function ttlText(minutes: number): string {
 }
 
 export async function sendInvite(m: Invite): Promise<void> {
-  const { provider } = selectProvider();
-  const result = await provider.send({
+  await deliver("invite", {
     to: m.to,
     subject: `${m.inviterName} invited you to ${m.workspaceName} on Crumb`,
     html: renderInviteHtml(m),
@@ -240,10 +254,6 @@ export async function sendInvite(m: Invite): Promise<void> {
     previewLine: `invite to ${m.workspaceName}, expires in ${ttlText(m.ttlMinutes)}`,
     link: m.link,
   });
-
-  if (!result.ok) {
-    log.error("invite send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
 }
 
 // Self-serve signup confirmation. Mints the workspace only after the link is
@@ -259,8 +269,7 @@ export type SignupVerify = {
 // Returns whether the provider accepted the send, so signup can say it failed
 // instead of "Check your email".
 export async function sendSignupVerify(m: SignupVerify): Promise<boolean> {
-  const { provider } = selectProvider();
-  const result = await provider.send({
+  const result = await deliver("signup-verify", {
     to: m.to,
     subject: `Confirm your email · ${m.workspaceName}`,
     html: renderSignupVerifyHtml({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
@@ -268,10 +277,6 @@ export async function sendSignupVerify(m: SignupVerify): Promise<boolean> {
     previewLine: `confirm to create ${m.workspaceName}, expires in ${ttlText(m.ttlMinutes)}`,
     link: m.link,
   });
-
-  if (!result.ok) {
-    log.error("signup-verify send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
   return result.ok;
 }
 
@@ -298,12 +303,12 @@ export type ReplyNotification = {
 // delivery in the customer_notifications loop ledger. The stdout provider still
 // prints the email (dev) but never counts: nothing reached the customer.
 export async function sendReplyNotification(m: ReplyNotification): Promise<boolean> {
-  const { provider, from } = selectProvider();
+  const { from } = selectProvider();
   // With inbound wired, Reply-To is the signed reply address, so the customer's
   // answer lands back on the thread (and the email says they can reply).
   const vars = { ...m, threadUrl: buildThreadUrl(m.productUrl, m.itemShortId), replyByEmail: !!m.inboundReplyAddress };
 
-  const result = await provider.send({
+  const result = await deliver("reply-notification", {
     to: m.to,
     from: customerFrom(m.workspaceName, m.inboundReplyAddress ? from : noreplyFrom(from)),
     ...(m.inboundReplyAddress ? { replyTo: m.inboundReplyAddress } : {}),
@@ -314,10 +319,6 @@ export async function sendReplyNotification(m: ReplyNotification): Promise<boole
     previewLine: `${m.vendorName} on ${m.itemShortId}`,
     link: vars.threadUrl ?? m.viewUrl ?? undefined,
   });
-
-  if (!result.ok) {
-    log.error("reply-notification send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
   return result.ok && emailConfigured();
 }
 
@@ -342,10 +343,10 @@ export type StatusChangeNotification = {
 // Returns whether a real provider accepted the send; never true for stdout
 // (see sendReplyNotification). The subject leads with the outcome.
 export async function sendStatusChangeNotification(m: StatusChangeNotification): Promise<boolean> {
-  const { provider, from } = selectProvider();
+  const { from } = selectProvider();
   const vars = { ...m, threadUrl: buildThreadUrl(m.productUrl, m.itemShortId), replyByEmail: !!m.inboundReplyAddress };
 
-  const result = await provider.send({
+  const result = await deliver("status-change", {
     to: m.to,
     from: customerFrom(m.workspaceName, m.inboundReplyAddress ? from : noreplyFrom(from)),
     ...(m.inboundReplyAddress ? { replyTo: m.inboundReplyAddress } : {}),
@@ -356,17 +357,13 @@ export async function sendStatusChangeNotification(m: StatusChangeNotification):
     previewLine: `${m.fromStatus ?? "—"} → ${m.toStatus}`,
     link: vars.threadUrl ?? m.viewUrl ?? undefined,
   });
-
-  if (!result.ok) {
-    log.error("status-change send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
   return result.ok && emailConfigured();
 }
 
 // ─── Customer-reply notification (to vendor) ─────────────────
 // Fires when a customer replies via the widget or via inbound email.
-// Goes to the assignee (or all admins if unassigned). Per-recipient
-// caller resolves preferences + filters out who shouldn't be notified.
+// Goes to the assignee, or the admins when it's unassigned or the assignee
+// won't get it (lib/vendor-notify.ts picks who, and Slack or email).
 
 export type CustomerReplyNotification = {
   to: string;                   // single vendor email
@@ -381,11 +378,11 @@ export type CustomerReplyNotification = {
 };
 
 export async function sendCustomerReplyNotification(m: CustomerReplyNotification): Promise<void> {
-  const { provider, from } = selectProvider();
+  const { from } = selectProvider();
   const subject = `${m.customerName} (${m.accountName}) replied · ${m.itemShortId} ${m.itemTitle}`;
   // Vendor-facing notifications keep the friendly From (not noreply) since
   // we DO want the vendor's mail client to thread these as conversation.
-  const result = await provider.send({
+  await deliver("customer-reply", {
     to: m.to,
     from,
     subject,
@@ -410,10 +407,6 @@ export async function sendCustomerReplyNotification(m: CustomerReplyNotification
     previewLine: `${m.customerName} on ${m.itemShortId}`,
     link: m.dashboardThreadUrl ?? undefined,
   });
-
-  if (!result.ok) {
-    log.error("customer-reply send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
 }
 
 // ─── Mention notification (to a tagged teammate) ─────────────
@@ -428,8 +421,8 @@ export type MentionNotification = {
 };
 
 export async function sendMentionNotification(m: MentionNotification): Promise<void> {
-  const { provider, from } = selectProvider();
-  const result = await provider.send({
+  const { from } = selectProvider();
+  await deliver("mention", {
     to: m.to,
     from, // vendor-facing — friendly From so it threads as conversation
     subject: `${m.byName} mentioned you · ${m.itemShortId} ${m.itemTitle}`,
@@ -438,9 +431,57 @@ export async function sendMentionNotification(m: MentionNotification): Promise<v
     previewLine: `${m.byName} mentioned you on ${m.itemShortId}`,
     link: m.dashboardThreadUrl ?? undefined,
   });
-  if (!result.ok) {
-    log.error("mention send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
+}
+
+// ─── Vendor nudges: new submission, assignment, engineering done ─────
+// To a teammate, from the friendly From like the mention email. The headline
+// is the same sentence the Slack DM carries (lib/vendor-notify.ts). True only
+// when a real provider accepted it; the stdout provider prints it and says no.
+export type VendorNudge = {
+  to: string;
+  workspaceName: string;
+  subject: string;
+  /** What happened, as a sentence: "Linear marked FB-12 done. Tell the customer." */
+  headline: string;
+  itemShortId: string;
+  itemTitle: string;
+  accountName?: string | null;
+  /** The customer's own words, quoted under the headline (new submissions). */
+  body?: string | null;
+  dashboardThreadUrl?: string | null;
+};
+
+export async function sendVendorNudge(m: VendorNudge): Promise<boolean> {
+  const { from } = selectProvider();
+  const result = await deliver("vendor-nudge", {
+    to: m.to,
+    from,
+    subject: m.subject,
+    html: renderVendorNudgeHtml(m),
+    text: renderVendorNudgeText(m),
+    previewLine: m.headline,
+    link: m.dashboardThreadUrl ?? undefined,
+  });
+  return result.ok && emailConfigured();
+}
+
+// ─── Digest (daily or weekly, to one teammate) ───────────────
+// Sent by the digest cron (app/api/v1/internal/digest). True only when a real
+// provider accepted it, which is when the member's digest watermark moves.
+export type Digest = DigestVars & { to: string; subject: string };
+
+export async function sendDigest(m: Digest): Promise<boolean> {
+  const { from } = selectProvider();
+  const result = await deliver("digest", {
+    to: m.to,
+    from,
+    subject: m.subject,
+    html: renderDigestHtml(m),
+    text: renderDigestText(m),
+    previewLine: m.subject,
+    link: m.inboxUrl ?? undefined,
+  });
+  return result.ok && emailConfigured();
 }
 
 // ─── Dunning (payment failed) ────────────────────────────────
@@ -468,8 +509,8 @@ export type SignupNotification = {
 };
 
 export async function sendSignupNotification(m: SignupNotification): Promise<void> {
-  const { provider, from } = selectProvider();
-  const result = await provider.send({
+  const { from } = selectProvider();
+  await deliver("signup-notification", {
     to: m.to,
     from: noreplyFrom(from),
     subject: `New signup · ${m.workspaceName}`,
@@ -478,9 +519,6 @@ export async function sendSignupNotification(m: SignupNotification): Promise<voi
     previewLine: `${m.adminName} <${m.adminEmail}> created ${m.workspaceName}`,
     link: m.dashboardUrl ?? undefined,
   });
-  if (!result.ok) {
-    log.error("signup-notification send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
 }
 
 // ─── In-app support request (to the operator) ────────────────
@@ -497,8 +535,8 @@ export type SupportRequest = {
 };
 
 export async function sendSupportRequest(m: SupportRequest): Promise<SendResult> {
-  const { provider, from } = selectProvider();
-  const result = await provider.send({
+  const { from } = selectProvider();
+  return deliver("support-request", {
     to: m.to,
     from: noreplyFrom(from),
     replyTo: m.fromUserEmail,
@@ -507,15 +545,11 @@ export async function sendSupportRequest(m: SupportRequest): Promise<SendResult>
     text: renderSupportRequestText(m),
     previewLine: `${m.fromUserName} <${m.fromUserEmail}>: ${m.subject}`,
   });
-  if (!result.ok) {
-    log.error("support-request send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
-  return result;
 }
 
 export async function sendDunningNotification(m: DunningNotification): Promise<void> {
-  const { provider, from } = selectProvider();
-  const result = await provider.send({
+  const { from } = selectProvider();
+  await deliver("dunning", {
     to: m.to,
     from: noreplyFrom(from),
     subject: `Payment failed · ${m.workspaceName}`,
@@ -524,9 +558,6 @@ export async function sendDunningNotification(m: DunningNotification): Promise<v
     previewLine: "Update your payment method to keep paid features",
     link: m.billingUrl ?? undefined,
   });
-  if (!result.ok) {
-    log.error("dunning send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
 }
 
 // ─── Integration disconnected (to workspace admins) ──────────
@@ -548,7 +579,7 @@ export type IntegrationDisconnected = {
 const escHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 export async function sendIntegrationDisconnected(m: IntegrationDisconnected): Promise<void> {
-  const { provider, from } = selectProvider();
+  const { from } = selectProvider();
   const lead = `Crumb lost access to ${m.provider} for ${m.workspaceName}, so it disconnected the integration. ${m.impact}`;
   const howTo = "Open Crumb and go to Settings, then Integrations, to reconnect.";
   const ws = escHtml(m.workspaceName);
@@ -588,7 +619,7 @@ ${lead}
 
 ${m.reconnectUrl ? `Reconnect ${m.provider}: ${m.reconnectUrl}` : howTo}`;
 
-  const result = await provider.send({
+  await deliver("integration-disconnected", {
     to: m.to,
     from: noreplyFrom(from),
     subject: `${m.provider} disconnected from ${m.workspaceName}`,
@@ -597,9 +628,6 @@ ${m.reconnectUrl ? `Reconnect ${m.provider}: ${m.reconnectUrl}` : howTo}`;
     previewLine: `${m.provider} disconnected; reconnect in Settings, Integrations`,
     link: m.reconnectUrl ?? undefined,
   });
-  if (!result.ok) {
-    log.error("integration-disconnected send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
 }
 
 // ─── Roadmap update (to a following customer) ────────────────
@@ -616,8 +644,8 @@ export type RoadmapUpdateNotification = {
 
 // The subject leads with the move ("Moved to Now: Dark mode").
 export async function sendRoadmapUpdateNotification(m: RoadmapUpdateNotification): Promise<void> {
-  const { provider, from } = selectProvider();
-  const result = await provider.send({
+  const { from } = selectProvider();
+  await deliver("roadmap-update", {
     to: m.to,
     from: customerFrom(m.workspaceName, noreplyFrom(from)),
     subject: `${m.change.charAt(0).toUpperCase()}${m.change.slice(1)}: ${m.initiativeName}`,
@@ -627,9 +655,6 @@ export async function sendRoadmapUpdateNotification(m: RoadmapUpdateNotification
     previewLine: m.change,
     link: m.productUrl ?? undefined,
   });
-  if (!result.ok) {
-    log.error("roadmap-update send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
 }
 
 // ─── Shipped announcement (published changelog entry) ────────
@@ -649,9 +674,11 @@ export type ShippedAnnouncement = {
   accent?: string | null;
 };
 
-export async function sendShippedAnnouncement(m: ShippedAnnouncement): Promise<void> {
-  const { provider, from } = selectProvider();
-  const result = await provider.send({
+// True only when a real provider accepted it (never stdout), like the other
+// customer emails.
+export async function sendShippedAnnouncement(m: ShippedAnnouncement): Promise<boolean> {
+  const { from } = selectProvider();
+  const result = await deliver("shipped-announcement", {
     to: m.to,
     from: customerFrom(m.workspaceName, noreplyFrom(from)),
     subject: `Shipped: ${m.title}`,
@@ -661,7 +688,5 @@ export async function sendShippedAnnouncement(m: ShippedAnnouncement): Promise<v
     previewLine: `${m.workspaceName} shipped ${m.title}`,
     link: m.productUrl ?? undefined,
   });
-  if (!result.ok) {
-    log.error("shipped-announcement send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
-  }
+  return result.ok && emailConfigured();
 }

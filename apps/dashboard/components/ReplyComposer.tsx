@@ -37,6 +37,7 @@ function humanBytes(b: number): string {
 const SOURCE_LABELS: Record<string, string> = {
   widget: "the widget", email: "email", slack: "Slack", extension: "the browser extension",
   gong: "Gong", zendesk: "Zendesk", intercom: "Intercom", freshdesk: "Freshdesk", freshchat: "Freshchat",
+  mcp: "an AI assistant (MCP)",
 };
 
 export function sourceLabel(source: string): string {
@@ -52,7 +53,8 @@ export function firstName(name: string): string {
 export function noEmailNote(plan: NotifyPlan, kind: "reply" | "status", first: string, source: string | null): string | null {
   if (plan.willEmail) return null;
   switch (plan.reason) {
-    case "source":         return `This came in through ${source ? sourceLabel(source) : "another tool"}, so ${first} won't be emailed. Follow up there too.`;
+    // An AI assistant logged it for the team: there's no conversation to follow up in.
+    case "source":         return `This came in through ${source ? sourceLabel(source) : "another tool"}, so ${first} won't be emailed.${source === "mcp" ? "" : " Follow up there too."}`;
     case "no_email":       return `There's no email address for ${first}, so nothing gets emailed.`;
     case "unsubscribed":   return `${first} unsubscribed from email, so nothing gets emailed.`;
     case "muted":          return `${first} turned off ${kind} emails, so nothing gets emailed.`;
@@ -71,16 +73,40 @@ export function replySentMessage(emailed: boolean, first: string, closedAs?: str
     : `Reply posted${closedAs ? ` and marked ${statusLabel(closedAs)}` : ""}. ${first} wasn't emailed.`;
 }
 
-// Will moving the item from `current` to `status` email the customer? The
-// server's own rule (statusEmailsCustomer), gated by the submitter's plan.
-export function statusWillEmail(status: string, current: string, plan: NotifyPlan): boolean {
-  return status !== current && statusEmailsCustomer(status) && plan.willEmail;
+// Will moving the item from `current` to `status` email anyone? The server's
+// own rule (statusEmailsCustomer), gated by the submitter's plan, or reaching
+// the customers whose requests were merged into this one (`others`, from
+// mergedReach: the outcome email goes to them too, reason included).
+export function statusWillEmail(status: string, current: string, plan: NotifyPlan, others = 0): boolean {
+  return status !== current && statusEmailsCustomer(status) && (plan.willEmail || others > 0);
 }
 
-export function statusMovedMessage(status: string, first: string, emailed: boolean): string {
+const othersWhoAsked = (n: number) => (n === 1 ? "1 other who asked" : `${n} others who asked`);
+
+// Who a status email reaches: "Maya", "Maya and 2 others who asked", or just
+// "2 others who asked" when Maya's own plan doesn't email her.
+export function statusEmailees(first: string, submitter: boolean, others: number): string {
+  if (others === 0) return first;
+  return submitter ? `${first} and ${othersWhoAsked(others)}` : othersWhoAsked(others);
+}
+
+// Under a reason box: the reason goes to this item's customer only; people
+// whose requests were merged in get the status without it.
+export function reasonNote(first: string, submitter: boolean, others: number): string | null {
+  if (others === 0) return null;
+  const verb = others === 1 ? "gets" : "get";
+  return submitter
+    ? `Your reason is emailed to ${first} only. ${othersWhoAsked(others)} ${verb} the status without it.`
+    : `${othersWhoAsked(others)} ${verb} the status email without your reason.`;
+}
+
+export function statusMovedMessage(status: string, first: string, emailed: boolean, othersEmailed = 0): string {
   const done = `Marked ${statusLabel(status)}.`;
   if (!statusEmailsCustomer(status)) return done;
-  return `${done} ${first} ${emailed ? "was" : "wasn't"} emailed.`;
+  if (othersEmailed === 0) return `${done} ${first} ${emailed ? "was" : "wasn't"} emailed.`;
+  return emailed
+    ? `${done} ${statusEmailees(first, true, othersEmailed)} were emailed.`
+    : `${done} ${othersWhoAsked(othersEmailed)} ${othersEmailed === 1 ? "was" : "were"} emailed. ${first} wasn't.`;
 }
 
 // ── Actions: errors, and a beat to undo status emails ────────
@@ -148,19 +174,20 @@ export function cancelWaitingMove(itemShortId: string): void {
 
 /**
  * Status moves for one item, shared by the thread's Status card and the inbox
- * drawer. A move that will email the customer shows at once but waits
- * STATUS_EMAIL_DELAY_MS behind an Undo toast before anything is sent, and
- * Shipped asks first. Other moves apply right away. A failed write rolls the
- * shown status back and says why. A waiting move sends at once when the page
- * is hidden or this component unmounts, and never once another status change
- * for the item has started.
+ * drawer. A move that will email anyone (the submitter, or the customers whose
+ * requests were merged into it) shows at once but waits STATUS_EMAIL_DELAY_MS
+ * behind an Undo toast before anything is sent, and Shipped asks first. Other
+ * moves apply right away. A failed write rolls the shown status back and says
+ * why. A waiting move sends at once when the page is hidden or this component
+ * unmounts, and never once another status change for the item has started.
  */
-export function useStatusMove({ itemShortId, status, first, source, plan, onMoved }: {
+export function useStatusMove({ itemShortId, status, first, source, plan, mergedReach = 0, onMoved }: {
   itemShortId: string;
   status: string;          // the server's status
   first: string;           // the submitter's first name
   source: string | null;
   plan: NotifyPlan;        // the submitter's status-email plan
+  mergedReach?: number;    // merged requesters an outcome email also reaches (mergedReach)
   onMoved?: (status: VendorStatus) => void;
 }) {
   const router = useRouter();
@@ -195,22 +222,27 @@ export function useStatusMove({ itemShortId, status, first, source, plan, onMove
     setSaving(false);
     if (!res) { setOptimistic(null); return; }
     router.refresh();
-    toast.show({ message: statusMovedMessage(next, first, res.emailed) });
+    toast.show({ message: statusMovedMessage(next, first, res.emailed, res.mergedEmailed) });
     movedRef.current?.(next);
   }
+
+  const who = statusEmailees(first, plan.willEmail, mergedReach);
+  const undone = `Undone. ${mergedReach > 0 ? "Nobody was" : `${first} wasn't`} emailed.`;
 
   async function move(next: VendorStatus, reason?: string) {
     if (next === (optimistic ?? status)) return;
     // Back to where the server already is: that's an undo, nothing to write.
     if (next === status) {
-      if (dropWaiting()) toast.show({ message: `Undone. ${first} wasn't emailed.` });
+      if (dropWaiting()) toast.show({ message: undone });
       setOptimistic(null);
       return;
     }
-    const emails = statusWillEmail(next, status, plan);
+    const emails = statusWillEmail(next, status, plan, mergedReach);
     if (next === "shipped" && !(await confirm({
       title: "Mark this Shipped?",
-      body: emails ? `${first} will get an email saying it shipped.` : noEmailNote(plan, "status", first, source),
+      // Why the submitter isn't emailed (if they aren't), then who is.
+      body: [noEmailNote(plan, "status", first, source), emails && `${who} will get an email saying it shipped.`]
+        .filter(Boolean).join(" "),
       confirmLabel: "Mark Shipped",
     }))) return;
     // The latest choice wins: an earlier move still waiting, from here or
@@ -228,14 +260,14 @@ export function useStatusMove({ itemShortId, status, first, source, plan, onMove
       void commit(next, reason);
     }, STATUS_EMAIL_DELAY_MS);
     const toastId = toast.show({
-      message: `Marked ${statusLabel(next)}. Emailing ${first} in ${STATUS_EMAIL_DELAY_MS / 1000} seconds.`,
+      message: `Marked ${statusLabel(next)}. Emailing ${who} in ${STATUS_EMAIL_DELAY_MS / 1000} seconds.`,
       duration: STATUS_EMAIL_DELAY_MS,
       action: {
         label: "Undo",
         onClick: () => {
           if (waiting.current?.toastId !== toastId || !dropWaiting()) return;
           setOptimistic(null);
-          toast.show({ message: `Undone. ${first} wasn't emailed.` });
+          toast.show({ message: undone });
         },
       },
     });

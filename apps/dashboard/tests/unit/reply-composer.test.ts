@@ -24,7 +24,7 @@ vi.mock("@/app/(app)/thread/[shortId]/actions", () => ({ updateStatus: h.updateS
 
 import {
   STATUS_EMAIL_DELAY_MS, cancelWaitingMove, firstName, modeForTabChange, noEmailNote, replyNote, replySentMessage,
-  sendAfterDelay, statusMovedMessage, statusWillEmail, useStatusMove,
+  sendAfterDelay, statusEmailees, statusMovedMessage, statusWillEmail, useStatusMove,
 } from "@/components/ReplyComposer";
 
 const emails: NotifyPlan = { willEmail: true };
@@ -55,6 +55,9 @@ describe("composer copy: what the customer actually gets", () => {
       .toBe("Email delivery isn't set up yet, so Maya won't be emailed.");
     expect(noEmailNote(skip("muted"), "reply", "Maya", null)).toContain("turned off reply emails");
     expect(noEmailNote(skip("muted"), "status", "Maya", null)).toContain("turned off status emails");
+    // An AI assistant logged it: named in words, with nowhere to follow up.
+    expect(noEmailNote(skip("source"), "status", "Ann", "mcp"))
+      .toBe("This came in through an AI assistant (MCP), so Ann won't be emailed.");
   });
 
   it("toasts the emailed flag, never a blanket 'notified'", () => {
@@ -66,6 +69,15 @@ describe("composer copy: what the customer actually gets", () => {
     expect(statusMovedMessage("shipped", "Maya", false)).toBe("Marked Shipped. Maya wasn't emailed.");
     // Triage moves never email, so their toast doesn't mention it.
     expect(statusMovedMessage("review", "Maya", false)).toBe("Marked In review.");
+    // The customers whose requests were merged in get the outcome too.
+    expect(statusMovedMessage("shipped", "Maya", true, 2)).toBe("Marked Shipped. Maya and 2 others who asked were emailed.");
+    expect(statusMovedMessage("shipped", "Maya", false, 1)).toBe("Marked Shipped. 1 other who asked was emailed. Maya wasn't.");
+  });
+
+  it("names everyone a status email reaches", () => {
+    expect(statusEmailees("Maya", true, 0)).toBe("Maya");
+    expect(statusEmailees("Maya", true, 2)).toBe("Maya and 2 others who asked");
+    expect(statusEmailees("Maya", false, 1)).toBe("1 other who asked");
   });
 
   it("never uses an em or en dash", () => {
@@ -74,6 +86,8 @@ describe("composer copy: what the customer actually gets", () => {
       replyNote(emails, "Maya", "Acme", null),
       replySentMessage(true, "Maya", "declined"), replySentMessage(false, "Maya"),
       ...VENDOR_STATUSES.flatMap(s => [statusMovedMessage(s, "Maya", true), statusMovedMessage(s, "Maya", false)]),
+      statusMovedMessage("shipped", "Maya", true, 3), statusMovedMessage("shipped", "Maya", false, 1),
+      noEmailNote(skip("source"), "status", "Maya", "mcp"),
     ];
     for (const s of copy) expect(s).not.toMatch(/[—–]/);
   });
@@ -88,6 +102,11 @@ describe("statusWillEmail (which status rows say they email)", () => {
   it("is false for the current status and whenever the plan won't email", () => {
     expect(statusWillEmail("shipped", "shipped", emails)).toBe(false);
     for (const r of REASONS) expect(statusWillEmail("shipped", "open", skip(r))).toBe(false);
+  });
+
+  it("is true when only merged requesters get the email, for outcomes only", () => {
+    expect(statusWillEmail("declined", "open", skip("source"), 2)).toBe(true);
+    expect(statusWillEmail("review", "open", skip("source"), 2)).toBe(false);
   });
 });
 
@@ -231,6 +250,17 @@ describe("useStatusMove (an emailing move waits behind Undo)", () => {
     expect(h.toast.dismiss).toHaveBeenCalledWith(7);
     vi.advanceTimersByTime(60_000);
     expect(h.updateStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits behind Undo when only the merged requesters will be emailed", async () => {
+    const { move } = useStatusMove({
+      itemShortId: "FB-2", status: "open", first: "Maya", source: "zendesk", plan: skip("source"), mergedReach: 2,
+    });
+    await move("declined", "Not this year.");
+    expect(h.updateStatus).not.toHaveBeenCalled();
+    expect(h.toast.show.mock.calls[0]![0].message).toBe("Marked Won’t ship. Emailing 2 others who asked in 6 seconds.");
+    vi.advanceTimersByTime(STATUS_EMAIL_DELAY_MS);
+    expect(h.updateStatus).toHaveBeenCalledWith({ itemShortId: "FB-2", status: "declined", reason: "Not this year." });
   });
 
   it("never commits once another status change for the item has started", async () => {
