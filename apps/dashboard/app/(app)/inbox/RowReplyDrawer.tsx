@@ -6,17 +6,12 @@ import { useRouter } from "next/navigation";
 import { Avatar, Btn, Ic, Pill, REASON_PLACEHOLDER, StatusDot, StatusPill, TrailDots, trailProgress, statusLabel } from "@crumb/ui";
 import type { Status } from "@crumb/ui";
 import { LOOP_CLOSED_STATUSES } from "@/lib/loop";
+import { formatArr } from "@/lib/priority";
 import { useToast } from "@/components/toast";
 import { ReplyComposer, useStatusMove, runAction, firstName, statusEmailees, reasonNote } from "@/components/ReplyComposer";
 import { translateItem } from "@/app/(app)/thread/[shortId]/actions";
 import { getReplyContext, type ReplyContext, type ReplyDrawerMessage } from "./reply-actions";
 import type { InboxRow } from "./InboxTable";
-
-function formatArr(cents: number): string {
-  if (cents <= 0) return "—";
-  if (cents >= 100_000_000) return `$${(cents / 100_000_000).toFixed(1)}M ARR`;
-  return `$${Math.round(cents / 100_000)}k ARR`;
-}
 
 function relAge(iso: string): string {
   const d = Date.now() - new Date(iso).getTime();
@@ -176,7 +171,7 @@ export function RowReplyDrawer({
           <span className="text-xs muted truncate" style={{ maxWidth: 160 }}>{row.submitterName}</span>
           {/* ARR seeds instantly from the row — the revenue unit is visible the
               moment the drawer opens, before the conversation streams in. */}
-          {row.arrAtStakeCents > 0 && <Pill ring>{formatArr(row.arrAtStakeCents)}</Pill>}
+          {row.arrAtStakeCents > 0 && <Pill ring>{formatArr(row.arrAtStakeCents, " ARR at stake")}</Pill>}
           <StatusPill status={shown as Status} />
           <TrailDots progress={progress} size={13} />
         </div>
@@ -193,7 +188,7 @@ export function RowReplyDrawer({
       {foreign && (
         <div className="rd-translate">
           <Ic.globe style={{ width: 13, height: 13, color: "var(--mute)", flexShrink: 0 }} />
-          <span className="text-xs">This feedback is in <strong style={{ fontWeight: 600 }}>{ctx!.detectedLang!.toUpperCase()}</strong>.</span>
+          <span className="text-xs">This request is in <strong style={{ fontWeight: 600 }}>{ctx!.detectedLang!.toUpperCase()}</strong>.</span>
           {ctx!.titleTranslated ? (
             <button type="button" className="rd-link" onClick={() => setShowTranslation(s => !s)}>
               {showTranslation ? "Hide translation" : "Show translation"}

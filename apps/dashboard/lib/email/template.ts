@@ -816,7 +816,7 @@ export function renderRoadmapUpdateHtml(v: RoadmapUpdateVars): string {
     unsubscribeUrl: v.unsubscribeUrl,
     rows: `
           <tr><td style="padding:0 8px">
-            <h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">A roadmap item you follow was updated</h1>
+            <h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">Something you follow on the roadmap was updated</h1>
             <p style="margin:0;font-size:14px;color:#4A2E1F"><strong style="font-weight:600">${escapeHtml(v.initiativeName)}</strong>: ${escapeHtml(v.change)}.</p>
           </td></tr>
           <tr><td style="padding:24px 8px 0">
@@ -827,7 +827,7 @@ export function renderRoadmapUpdateHtml(v: RoadmapUpdateVars): string {
 
 export function renderRoadmapUpdateText(v: RoadmapUpdateVars): string {
   return [
-    "A roadmap item you follow was updated",
+    "Something you follow on the roadmap was updated",
     `${v.initiativeName}: ${v.change}.`,
     v.productUrl ? `View the roadmap: ${v.productUrl}` : `Open ${v.workspaceName}'s Feedback tab to see the roadmap.`,
     customerFooterText(roadmapReason(v.workspaceName), v.unsubscribeUrl),
@@ -949,7 +949,7 @@ const publicUpdateCta = (v: PublicFollowUpdateVars) => (v.kind === "roadmap_move
 
 export function renderPublicFollowUpdateHtml(v: PublicFollowUpdateVars): string {
   const lead = v.kind === "roadmap_move"
-    ? `<h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">A roadmap item you follow was updated</h1>
+    ? `<h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">Something you follow on the roadmap was updated</h1>
             <p style="margin:0;font-size:14px;color:#4A2E1F"><strong style="font-weight:600">${escapeHtml(v.title)}</strong>: ${escapeHtml(v.summary)}.</p>`
     : `<h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(v.title)}</h1>
             ${v.summary.trim() ? paragraphsToHtml(v.summary.trim()) : ""}`;
@@ -971,7 +971,7 @@ export function renderPublicFollowUpdateHtml(v: PublicFollowUpdateVars): string 
 export function renderPublicFollowUpdateText(v: PublicFollowUpdateVars): string {
   const move = v.kind === "roadmap_move";
   return [
-    move ? "A roadmap item you follow was updated" : v.title,
+    move ? "Something you follow on the roadmap was updated" : v.title,
     move ? `${v.title}: ${v.summary}.` : v.summary.trim(),
     v.url ? `${publicUpdateCta(v)}: ${v.url}` : "",
     customerFooterText(publicUpdateReason(v), v.unsubscribeUrl),
@@ -1110,6 +1110,5 @@ Workspace: ${v.workspaceName}
 
 ${v.message}
 
-—
 Sent from the in-app Help → Contact form. Reply directly to reach ${v.fromUserName}.`;
 }

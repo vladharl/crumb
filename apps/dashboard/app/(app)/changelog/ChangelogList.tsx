@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import type { Audience } from "@/lib/changelog";
+import { formatDate } from "@/lib/timefmt";
 import { runAction } from "@/components/ReplyComposer";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm";
@@ -121,7 +122,7 @@ function EntryCard({ entry, canManage }: { entry: ChangelogRow; canManage: boole
         <div className="row between center" style={{ flexWrap: "wrap", gap: 8 }}>
           <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
             <span className="text-sm fw-med">{entry.title}</span>
-            <span className="text-xs muted">{isPublished ? new Date(entry.publishedAt!).toLocaleDateString() : "Draft"}</span>
+            <span className="text-xs muted">{isPublished ? formatDate(entry.publishedAt!) : "Draft"}</span>
             {!entry.isPublic && <span className="text-xs muted">· internal</span>}
           </div>
           {canManage && (

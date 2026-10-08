@@ -279,7 +279,7 @@ export async function notifyAssignedMany(input: {
       .orderBy(desc(items.seq));
     if (rows.length === 0) return;
     const actor = await memberName(input.workspaceId, input.actorWorkspaceUserId);
-    const n = `${rows.length} items`;
+    const n = `${rows.length} requests`;
     const lines = rows.slice(0, DIGEST_LINES).map(r => ({ shortId: r.shortId, title: r.title, detail: r.accountName, url: threadUrl(r.shortId) }));
     const more = rows.length - lines.length;
     const origin = originFromHeaders(new Headers());
@@ -441,7 +441,7 @@ async function loadDigestData(workspaceId: string, since: Date, now: number) {
       const days = Math.floor(waitingDays(waitingSince(input), now));
       const detail = [
         r.accountName,
-        input.arrAtStakeCents > 0 ? `${formatArr(input.arrAtStakeCents)} ARR` : null,
+        input.arrAtStakeCents > 0 ? formatArr(input.arrAtStakeCents, " ARR at stake") : null,
         days >= 1 ? `waiting ${days} ${days === 1 ? "day" : "days"}` : null,
       ].filter(Boolean).join(" · ");
       return { ...r, ...priority(input, now), createdAtIso: input.createdAtIso, yours: loopTurn(input) === "yours", detail };

@@ -165,7 +165,9 @@ describe("customer emails", () => {
 describe("team invite email", () => {
   it("says who invited you to what, with one sign-in button and the expiry", async () => {
     const link = "https://crumb.acme.test/login/verify?token=t0k";
-    await sendInvite({ to: "dev@acme.co", link, ttlMinutes: 7 * 24 * 60, workspaceName: "Acme", inviterName: "Dana" });
+    // Printed by the stdout provider, it wasn't emailed, so the invite form
+    // mustn't say it was.
+    expect(await sendInvite({ to: "dev@acme.co", link, ttlMinutes: 7 * 24 * 60, workspaceName: "Acme", inviterName: "Dana" })).toBe(false);
     const m = last();
     expect(m.subject).toBe("Dana invited you to Acme on Crumb");
     expect(m.text).toContain("Crumb is where Acme keeps customer feedback");

@@ -38,7 +38,7 @@ export default async function AccountMappingPage() {
       />
       <div className="card-body col gap-4">
         <p className="text-sm muted" style={{ margin: 0, maxWidth: "62ch" }}>
-          Each account collects one or many users. Accounts arrive automatically through the widget; here you can add, rename, merge users across accounts, and bulk import/export via CSV (<span className="mono">account_name,email,name</span>).
+          Each account groups the people from one company. Accounts arrive on their own through the widget. Here you can add, rename or delete accounts, move people between them, and import or export a CSV (<span className="mono">account_name,email,name</span>). ARR comes from your CRM (connect one in Integrations) or is set on each account&apos;s page.
         </p>
         <AccountMappingPanel initial={initial} isManager={user.role === "admin" || user.role === "pm"} />
       </div>

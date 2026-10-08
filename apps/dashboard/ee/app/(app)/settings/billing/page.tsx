@@ -7,6 +7,8 @@ import {
 } from "@/lib/stripe";
 import { PLAN_FEATURES, planDisplayName, workspacePlan, type Plan } from "@/lib/entitlements";
 import { getUsageSummary, type UsageMetric } from "@/lib/usage";
+import { formatDate } from "@/lib/timefmt";
+import { log } from "@/lib/log";
 import { PlanPicker, ManageButton, CheckoutReturn, FeatureList, type FeatureLine, type PlanCard } from "./BillingActions";
 
 const USAGE_LABEL: Record<UsageMetric, string> = {
@@ -22,6 +24,7 @@ const UPGRADES: { id: PaidPlan; over: Plan }[] = [
 ];
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Billing · Settings" };
 
 // A plan's customer-facing lines from PLAN_FEATURES. With `over`, only what the
 // plan adds on top of that one: new features, or a bigger allowance.
@@ -38,10 +41,6 @@ function formatBytes(n: number): string {
   if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
   if (n >= 1024) return `${Math.round(n / 1024)} KB`;
   return `${n} B`;
-}
-
-function formatDate(d: Date): string {
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 // Whole days from now until `d` (negative if past). Used for the trial
@@ -111,6 +110,14 @@ export default async function BillingPage({ searchParams }: {
   const plan = workspacePlan(workspace);
   const configured = stripeConfigured();
   const misconfigured = stripeKeyMisconfigured();
+  // Members can't fix either one, so the env var detail is the operator's, in
+  // the server log; the page says it in plain words.
+  if (!configured) {
+    log.warn("billing isn't configured: set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET, and create prices with lookup keys team_monthly, team_annual, growth_monthly and growth_annual", { scope: "crumb/billing" });
+  }
+  if (misconfigured) {
+    log.error("Stripe is in test mode on Cloud: checkouts complete but never charge. Set a live STRIPE_SECRET_KEY (sk_live_...)", { scope: "crumb/billing" });
+  }
   const usage = active ? await getUsageSummary(workspace) : [];
 
   // Back from Stripe Checkout. Until the webhook activates the plan, keep the
@@ -173,15 +180,14 @@ export default async function BillingPage({ searchParams }: {
 
         {!configured && (
           <div className="text-sm" style={ERR_NOTICE}>
-            Stripe isn't configured on this deployment. Set <span className="mono">STRIPE_SECRET_KEY</span> and <span className="mono">STRIPE_WEBHOOK_SECRET</span>, and create prices with lookup keys <span className="mono">team_monthly/annual</span> and <span className="mono">growth_monthly/annual</span>.
+            Billing isn&apos;t available right now. Contact support.
           </div>
         )}
 
         {misconfigured && (
           <div className="text-sm" style={ERR_NOTICE}>
-            <strong style={{ fontWeight: 600 }}>Stripe is in test mode on a live deployment.</strong> Checkouts
-            will complete but <strong style={{ fontWeight: 600 }}>never actually charge</strong>, so workspaces look
-            subscribed while no payment is taken. Set a live <span className="mono">STRIPE_SECRET_KEY</span> (<span className="mono">sk_live_…</span>).
+            <strong style={{ fontWeight: 600 }}>Payments are in test mode right now.</strong> A checkout
+            completes but <strong style={{ fontWeight: 600 }}>never charges a card</strong>. Contact support before you upgrade.
           </div>
         )}
 

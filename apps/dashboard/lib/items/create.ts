@@ -202,7 +202,7 @@ async function autoTriage(ws: WsForAi, itemId: string, title: string, body: stri
     });
     if (!res.ok) {
       if (res.error === "ai_cap_reached") {
-        log.warn("ai cap reached — skipping autoTriage", { scope: "crumb/ai", workspaceId: ws.id });
+        log.warn("ai cap reached, skipping autoTriage", { scope: "crumb/ai", workspaceId: ws.id });
       }
       return;
     }

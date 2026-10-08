@@ -6,13 +6,13 @@ import {
   useContext,
   useEffect,
   useId,
-  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 import { Ic } from "@crumb/ui";
+import { Dialog } from "@/components/Dialog";
 import { matchesTerms, splitTerms } from "@/lib/fuzzy";
 
 export type CommandItem = {
@@ -107,22 +107,16 @@ export function CommandProvider({ groups, children }: { groups: CommandGroup[]; 
   const [active, setActive] = useState(0);
   const [role, setRole] = useState<string | null>(null);
   const [fetched, setFetched] = useState<Fetched | null>(null);
-  // Whatever had focus when the palette opened; it gets focus back on close.
-  const returnFocus = useRef<HTMLElement | null>(null);
   const id = useId();
 
   const openPalette = useCallback(() => {
-    returnFocus.current = document.activeElement as HTMLElement | null;
     setQ("");
     setActive(0);
     setOpen(true);
   }, []);
 
-  const close = useCallback(() => {
-    setOpen(false);
-    returnFocus.current?.focus();
-    returnFocus.current = null;
-  }, []);
+  // Dialog puts focus back on whatever had it when the palette opened.
+  const close = useCallback(() => setOpen(false), []);
 
   // ⌘/Ctrl-K toggles, even from a text field: a modifier chord can't be typed
   // by accident. With Shift or Alt it's some other shortcut, so it's left alone.
@@ -207,62 +201,60 @@ export function CommandProvider({ groups, children }: { groups: CommandGroup[]; 
     <Ctx.Provider value={{ open: openPalette }}>
       {children}
       {open && (
-        <div className="cmdk-scrim" onClick={close}>
-          <div className="cmdk" role="dialog" aria-modal="true" aria-label="Command palette" onClick={e => e.stopPropagation()}>
-            <div className="cmdk-input-row">
-              <Ic.search aria-hidden="true" style={{ width: 15, height: 15, color: "var(--mute-2)", flexShrink: 0 }} />
-              <input
-                autoFocus
-                className="cmdk-input"
-                role="combobox"
-                aria-expanded="true"
-                aria-controls={`${id}-list`}
-                aria-activedescendant={current >= 0 ? optionId(current) : undefined}
-                aria-autocomplete="list"
-                aria-label="Search feedback, accounts and initiatives, or jump to a page"
-                placeholder="Search or jump to…"
-                autoComplete="off"
-                spellCheck={false}
-                value={q}
-                onChange={e => { setQ(e.target.value); setActive(0); }}
-                onKeyDown={onKeyDown}
-              />
-              <span className="cmdk-esc" aria-hidden="true">esc</span>
-            </div>
-            <div className="cmdk-list" id={`${id}-list`} role="listbox" aria-label="Results">
-              {sections.map((s, gi) => (
-                <div key={s.label} role="presentation">
-                  <div id={`${id}-g${gi}`} role="presentation" className="eyebrow" style={{ padding: "8px 10px 4px" }}>
-                    {s.label}
-                  </div>
-                  <div role="group" aria-labelledby={`${id}-g${gi}`}>
-                    {s.items.map(it => {
-                      const i = ++n;
-                      return (
-                        <div
-                          key={it.href}
-                          id={optionId(i)}
-                          role="option"
-                          aria-selected={i === current}
-                          className={`cmdk-opt ${i === current ? "active" : ""}`}
-                          style={i === current ? ACTIVE : undefined}
-                          onMouseMove={() => { if (i !== current) setActive(i); }}
-                          onMouseDown={e => e.preventDefault()}
-                          onClick={() => run(it)}
-                        >
-                          <span className="cmdk-opt-label">{it.label}</span>
-                          {it.hint && <span className="cmdk-opt-hint">{it.hint}</span>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-              {notice && <div className="cmdk-empty" role="presentation">{notice}</div>}
-            </div>
-            <div role="status" style={SR_ONLY}>{announcement}</div>
+        <Dialog label="Command palette" onClose={close} scrimClassName="cmdk-scrim" className="cmdk">
+          <div className="cmdk-input-row">
+            <Ic.search aria-hidden="true" style={{ width: 15, height: 15, color: "var(--mute-2)", flexShrink: 0 }} />
+            <input
+              autoFocus
+              className="cmdk-input"
+              role="combobox"
+              aria-expanded="true"
+              aria-controls={`${id}-list`}
+              aria-activedescendant={current >= 0 ? optionId(current) : undefined}
+              aria-autocomplete="list"
+              aria-label="Search feedback, accounts and initiatives, or jump to a page"
+              placeholder="Search or jump to…"
+              autoComplete="off"
+              spellCheck={false}
+              value={q}
+              onChange={e => { setQ(e.target.value); setActive(0); }}
+              onKeyDown={onKeyDown}
+            />
+            <span className="cmdk-esc" aria-hidden="true">esc</span>
           </div>
-        </div>
+          <div className="cmdk-list" id={`${id}-list`} role="listbox" aria-label="Results">
+            {sections.map((s, gi) => (
+              <div key={s.label} role="presentation">
+                <div id={`${id}-g${gi}`} role="presentation" className="eyebrow" style={{ padding: "8px 10px 4px" }}>
+                  {s.label}
+                </div>
+                <div role="group" aria-labelledby={`${id}-g${gi}`}>
+                  {s.items.map(it => {
+                    const i = ++n;
+                    return (
+                      <div
+                        key={it.href}
+                        id={optionId(i)}
+                        role="option"
+                        aria-selected={i === current}
+                        className={`cmdk-opt ${i === current ? "active" : ""}`}
+                        style={i === current ? ACTIVE : undefined}
+                        onMouseMove={() => { if (i !== current) setActive(i); }}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => run(it)}
+                      >
+                        <span className="cmdk-opt-label">{it.label}</span>
+                        {it.hint && <span className="cmdk-opt-hint">{it.hint}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {notice && <div className="cmdk-empty" role="presentation">{notice}</div>}
+          </div>
+          <div role="status" style={SR_ONLY}>{announcement}</div>
+        </Dialog>
       )}
     </Ctx.Provider>
   );

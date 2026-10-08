@@ -3,6 +3,7 @@
 import { useId, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Card, Dropdown, Ic, Pill } from "@crumb/ui";
+import { errorMessage } from "@/lib/action-error";
 import { createItemFromCapture, dismissCapture } from "./actions";
 
 export type AccountOption = { id: string; name: string };
@@ -74,7 +75,7 @@ function CaptureCard({ capture, accounts, canWrite }: { capture: CaptureRow; acc
     startTransition(async () => {
       const r = await createItemFromCapture({ captureId: capture.id, accountName, submitterEmail, submitterName, type, title, body });
       if (r.ok) router.refresh();
-      else setError(r.error);
+      else setError(errorMessage(r.error));
     });
   }
   function dismiss() {
@@ -82,7 +83,7 @@ function CaptureCard({ capture, accounts, canWrite }: { capture: CaptureRow; acc
     startTransition(async () => {
       const r = await dismissCapture(capture.id);
       if (r.ok) router.refresh();
-      else setError(r.error);
+      else setError(errorMessage(r.error));
     });
   }
 
@@ -140,7 +141,7 @@ function CaptureCard({ capture, accounts, canWrite }: { capture: CaptureRow; acc
             {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
             <div className="row gap-2">
               <Btn sm variant="primary" icon={<Ic.plus style={{ width: 12, height: 12 }} />} onClick={create} disabled={pending || !accountName.trim() || !title.trim()}>
-                {pending ? "Creating…" : "Create item"}
+                {pending ? "Creating…" : "Create request"}
               </Btn>
               <Btn sm onClick={dismiss} disabled={pending}>Dismiss</Btn>
             </div>

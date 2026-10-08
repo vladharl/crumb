@@ -15,7 +15,7 @@ CRUMB_E2E_SESSION=… CRUMB_E2E_API_KEY=… pnpm test:e2e:hosted
 | Spec | Integration(s) | Safe assertions |
 |---|---|---|
 | `health.spec.ts` | platform | `/api/health` + `/api/health/ready` → 200 |
-| `oauth-init.spec.ts` | Slack, Linear, Jira, GitHub, HubSpot, Salesforce | Connect → correct authorize URL (host, `redirect_uri = CRUMB_APP_URL + /api/integrations/<p>/callback`, `client_id`, scopes, signed `state`) **without completing the flow**; or the `Set <ENV>` not-configured pill |
+| `oauth-init.spec.ts` | Slack, Linear, Jira, GitHub, HubSpot, Salesforce | Connect → correct authorize URL (host, `redirect_uri = CRUMB_APP_URL + /api/integrations/<p>/callback`, `client_id`, scopes, signed `state`) **without completing the flow**; or the "Not set up" card whose self-host setup details name the env vars |
 | `integration-callbacks.spec.ts` | the 6 above + customer webhooks | OAuth callbacks with no params → `?<p>=error_*` redirect; Linear/Jira/GitHub webhooks → 400 on bad signature; customer integrations webhook → 401 on malformed bearer |
 | `settings-pages.spec.ts` | all UI cards | integrations / api-keys / webhooks pages render; session-record shows the Cloud-gating copy on self-host |
 | `mcp.spec.ts` | MCP server + API keys | no bearer → 401; `initialize`; `tools/list` registry; **read-only** tool calls |

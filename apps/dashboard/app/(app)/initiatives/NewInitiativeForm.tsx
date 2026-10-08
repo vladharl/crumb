@@ -84,13 +84,12 @@ export function NewInitiativeForm({ disabled }: { disabled?: boolean }) {
         <label className="eyebrow" htmlFor="ini-name">Name</label>
         <input
           id="ini-name"
-          className="text-md"
+          className="input"
           value={name}
           onChange={e => setName(e.target.value)}
           placeholder="e.g. User Management"
           autoFocus
           maxLength={120}
-          style={inputStyle}
         />
       </div>
 
@@ -98,12 +97,12 @@ export function NewInitiativeForm({ disabled }: { disabled?: boolean }) {
         <label className="eyebrow" htmlFor="ini-desc">Description</label>
         <textarea
           id="ini-desc"
+          className="input"
           value={description}
           onChange={e => setDescription(e.target.value)}
           placeholder="What this initiative covers."
           rows={3}
           aria-describedby="ini-desc-help"
-          style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
         />
         <span id="ini-desc-help" className="text-2xs muted">
           Customers see this on the public roadmap when the initiative is public. It also starts the changelog draft when it ships.
@@ -120,8 +119,8 @@ export function NewInitiativeForm({ disabled }: { disabled?: boolean }) {
               aria-label={`Pick ${c}`}
               onClick={() => setColor(c)}
               style={{
-                width: 22,
-                height: 22,
+                width: 24,
+                height: 24,
                 borderRadius: "50%",
                 background: c,
                 border: color === c ? "2px solid var(--ink)" : "1px solid var(--line)",
@@ -144,16 +143,6 @@ export function NewInitiativeForm({ disabled }: { disabled?: boolean }) {
     </div>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  background: "var(--paper)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-sm)",
-  padding: "8px 10px",
-  font: "inherit",
-  color: "var(--ink)",
-  width: "100%",
-};
 
 function humanError(code: string): string {
   switch (code) {

@@ -1,6 +1,7 @@
 import "server-only";
 import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
+import { statusLabel } from "@crumb/ui";
 import { open } from "@/lib/crypto-at-rest";
 import { assertSafeWebhookUrl } from "./url-guard";
 import { log } from "@/lib/log";
@@ -28,7 +29,8 @@ function headline(e: ChatEvent): string {
     case "new_submission": return `New ${e.type}: ${e.title}`;
     case "vendor_reply":   return `Reply on ${e.shortId}`;
     case "customer_reply": return `${e.customerName} replied on ${e.shortId}`;
-    case "status_change":  return `${e.shortId} → ${e.toStatus}`;
+    // The status name people see in the app ("Won't ship"), never the code.
+    case "status_change":  return `${e.shortId} moved to ${statusLabel(e.toStatus)}`;
     case "roadmap_update": return `Roadmap update: ${e.initiativeName}`;
   }
 }

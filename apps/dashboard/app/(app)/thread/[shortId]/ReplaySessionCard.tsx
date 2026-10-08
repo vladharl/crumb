@@ -136,7 +136,7 @@ export function ReplaySessionCard({ replay }: { replay: ReplayCardData }) {
                   onClick={summarize}
                   disabled={pending}
                   className="text-2xs muted"
-                  style={{ alignSelf: "flex-start", background: "none", border: 0, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                  style={{ alignSelf: "flex-start", background: "none", border: 0, cursor: "pointer", padding: "5px 0", margin: "-5px 0", textDecoration: "underline" }}
                 >
                   {pending ? "Regenerating…" : "Regenerate"}
                 </button>

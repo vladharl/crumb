@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Btn } from "@crumb/ui";
+import { Dialog } from "@/components/Dialog";
 
 type ChunkMeta = {
   sequence: number;
@@ -43,11 +44,12 @@ type NetEvent = {
   error?: string;
 };
 
+// Text-safe tones: the status code is 10px text, so each clears 4.5:1.
 function statusColor(s: number): string {
-  if (s === 0 || s >= 500) return "var(--rust)";
-  if (s >= 400) return "var(--amber)";
-  if (s >= 300) return "var(--mute-2)";
-  return "var(--green)";
+  if (s === 0 || s >= 500) return "var(--rust-deep)";
+  if (s >= 400) return "var(--amber-deep)";
+  if (s >= 300) return "var(--mute)";
+  return "var(--green-deep)";
 }
 
 // Session context shown in the player header (and a compact line on the card).
@@ -306,154 +308,152 @@ export function ReplaySessionPlayer({ replayId, chunks, durationMs, viewportW, v
     setCurrentMs(clamped);
   }
 
+  // Modal (Dialog): Escape, the scrim or Close ends it, and focus goes back
+  // to Watch replay.
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-      style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)",
+    <Dialog
+      labelledBy="replay-title"
+      onClose={onClose}
+      scrimClassName=""
+      scrimStyle={{
+        position: "fixed", inset: 0, background: "var(--scrim)",
         zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center",
       }}
+      style={{
+        background: "var(--bg)", borderRadius: "var(--r-md)",
+        width: netEvents.length ? "min(1320px, 94vw)" : "min(1100px, 92vw)", maxHeight: "92vh",
+        display: "flex", flexDirection: "column", overflow: "hidden",
+        border: "var(--border)",
+      }}
     >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: "var(--bg)", borderRadius: "var(--r-md)",
-          width: netEvents.length ? "min(1320px, 94vw)" : "min(1100px, 92vw)", maxHeight: "92vh",
-          display: "flex", flexDirection: "column", overflow: "hidden",
-          border: "var(--border)",
-        }}
-      >
-        <div className="row gap-2 center" style={{ padding: "10px 14px", borderBottom: "var(--border)" }}>
-          <h3 style={{ margin: 0, fontFamily: "var(--font-serif)", fontSize: "var(--fs-md)" }}>Session replay</h3>
-          <span className="text-xs muted">{detailsSummary(details, viewportW, viewportH)}</span>
-          <div style={{ flex: 1 }} />
-          <Btn variant="ghost" sm onClick={onClose} aria-label="Close">×</Btn>
-        </div>
+      <div className="row gap-2 center" style={{ padding: "10px 14px", borderBottom: "var(--border)" }}>
+        <h3 id="replay-title" style={{ margin: 0, fontFamily: "var(--font-serif)", fontSize: "var(--fs-md)" }}>Session replay</h3>
+        <span className="text-xs muted">{detailsSummary(details, viewportW, viewportH)}</span>
+        <div style={{ flex: 1 }} />
+        <Btn variant="ghost" sm onClick={onClose} aria-label="Close">×</Btn>
+      </div>
 
-        <div style={{ flex: 1, display: "flex", minHeight: 360, overflow: "hidden" }}>
-          <div
-            ref={stageAreaRef}
-            style={{ flex: 1, overflow: "hidden", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center" }}
-          >
-            <div ref={mountRef} style={{ position: "relative", overflow: "hidden" }} />
-          </div>
-          {netEvents.length > 0 && (
-            <div style={{ width: 340, borderLeft: "var(--border)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-              <div className="row gap-2 center" style={{ padding: "8px 12px", borderBottom: "var(--border)" }}>
-                <span className="text-xs" style={{ fontWeight: 600 }}>Network</span>
-                <span className="text-2xs muted">{netEvents.length} request{netEvents.length === 1 ? "" : "s"}</span>
-              </div>
-              <div style={{ flex: 1, overflow: "auto" }}>
-                {netEvents.map((n, i) => (
-                  <div key={i} style={{ borderBottom: "var(--border)", padding: "6px 12px" }}>
-                    <div
-                      className="row gap-2 center"
-                      style={{ cursor: "pointer" }}
-                      onClick={() => { setOpenRow(openRow === i ? null : i); seekTo(n.t); }}
-                      title={`Jump to ${fmtClock(n.t)}`}
-                    >
-                      <span className="mono text-2xs" style={{ color: statusColor(n.status), minWidth: 26, fontWeight: 600 }}>{n.status || "ERR"}</span>
-                      <span className="mono text-2xs muted" style={{ minWidth: 30 }}>{n.method}</span>
-                      <span className="text-2xs truncate" style={{ flex: 1 }} title={n.url}>{shortUrl(n.url)}</span>
-                      <span className="text-2xs muted mono">{Math.round(n.durationMs)}ms</span>
-                    </div>
-                    {openRow === i && (
-                      <div className="col gap-1" style={{ marginTop: 6 }}>
-                        <span className="text-2xs muted mono" style={{ wordBreak: "break-all" }}>{n.url}</span>
-                        {n.error && <span className="text-2xs" style={{ color: "var(--danger)" }}>{n.error}</span>}
-                        {n.reqBody && <NetBody label="Request" body={n.reqBody} />}
-                        {n.respBody && <NetBody label="Response" body={n.respBody} />}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+      <div style={{ flex: 1, display: "flex", minHeight: 360, overflow: "hidden" }}>
+        <div
+          ref={stageAreaRef}
+          style={{ flex: 1, overflow: "hidden", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center" }}
+        >
+          <div ref={mountRef} style={{ position: "relative", overflow: "hidden" }} />
+        </div>
+        {netEvents.length > 0 && (
+          <div style={{ width: 340, borderLeft: "var(--border)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div className="row gap-2 center" style={{ padding: "8px 12px", borderBottom: "var(--border)" }}>
+              <span className="text-xs" style={{ fontWeight: 600 }}>Network</span>
+              <span className="text-2xs muted">{netEvents.length} request{netEvents.length === 1 ? "" : "s"}</span>
             </div>
-          )}
-        </div>
-
-        {loading && (
-          <div className="row center" style={{ padding: 14, color: "var(--mute-2)" }}>
-            Loading replay…
-          </div>
-        )}
-        {loadErr && (
-          <div className="row center" style={{ padding: 14, color: "var(--danger)" }}>
-            {loadErr}
-          </div>
-        )}
-
-        <div className="col gap-2" style={{ padding: "10px 14px", borderTop: "var(--border)" }}>
-          {/* Best-effort caveat — captured fonts/CSS from third-party CDNs
-              without CORS can't be inlined by rrweb, so replays sometimes
-              render with fallback styles. Cheaper to disclose than to fix. */}
-          <span className="text-2xs muted">
-            Replay is best-effort. Fonts or styles served from third-party CDNs without CORS may differ.
-          </span>
-          <div className="row gap-2 center">
-            <Btn variant="ghost" sm onClick={togglePlay} disabled={loading || !!loadErr}>
-              {playing ? "Pause" : "Play"}
-            </Btn>
-            {/* Scrubber with a thin strip above it shading the idle spans that
-                get auto-skipped when "Skip idle" is on. */}
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-              <div style={{ position: "relative", height: 3 }}>
-                {durationMs > 0 && idleRanges.map((rg, i) => (
+            <div style={{ flex: 1, overflow: "auto" }}>
+              {netEvents.map((n, i) => (
+                <div key={i} style={{ borderBottom: "var(--border)", padding: "6px 12px" }}>
                   <div
-                    key={i}
-                    title="Inactive, auto-skipped"
-                    style={{
-                      position: "absolute", top: 0, height: 3, borderRadius: 2,
-                      left: `${(rg.start / durationMs) * 100}%`,
-                      width: `${Math.max(0.4, ((rg.end - rg.start) / durationMs) * 100)}%`,
-                      background: "var(--warn, #d4a24c)", opacity: 0.6,
-                    }}
-                  />
-                ))}
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={durationMs}
-                step={100}
-                value={currentMs}
-                onChange={e => seekTo(Number(e.target.value))}
-                style={{ width: "100%" }}
-                disabled={loading || !!loadErr}
-                aria-label="Replay scrubber"
-              />
-            </div>
-            <span className="text-xs muted mono" style={{ minWidth: 80, textAlign: "right" }}>
-              {fmtClock(currentMs)} / {fmtClock(durationMs)}
-            </span>
-            <Btn
-              variant={skipIdle ? "primary" : "ghost"}
-              sm
-              onClick={() => setSkipIdle(v => !v)}
-              disabled={loading || !!loadErr}
-              title="Fast-forward gaps with no activity"
-            >
-              Skip idle
-            </Btn>
-            <div className="row gap-1">
-              {SPEEDS.map(s => (
-                <Btn
-                  key={s}
-                  variant={speed === s ? "primary" : "ghost"}
-                  sm
-                  onClick={() => setPlaybackSpeed(s)}
-                  disabled={loading || !!loadErr}
-                >
-                  {s}×
-                </Btn>
+                    className="row gap-2 center"
+                    style={{ cursor: "pointer" }}
+                    onClick={() => { setOpenRow(openRow === i ? null : i); seekTo(n.t); }}
+                    title={`Jump to ${fmtClock(n.t)}`}
+                  >
+                    <span className="mono text-2xs" style={{ color: statusColor(n.status), minWidth: 26, fontWeight: 600 }}>{n.status || "ERR"}</span>
+                    <span className="mono text-2xs muted" style={{ minWidth: 30 }}>{n.method}</span>
+                    <span className="text-2xs truncate" style={{ flex: 1 }} title={n.url}>{shortUrl(n.url)}</span>
+                    <span className="text-2xs muted mono">{Math.round(n.durationMs)}ms</span>
+                  </div>
+                  {openRow === i && (
+                    <div className="col gap-1" style={{ marginTop: 6 }}>
+                      <span className="text-2xs muted mono" style={{ wordBreak: "break-all" }}>{n.url}</span>
+                      {n.error && <span className="text-2xs" style={{ color: "var(--err-text)" }}>{n.error}</span>}
+                      {n.reqBody && <NetBody label="Request" body={n.reqBody} />}
+                      {n.respBody && <NetBody label="Response" body={n.respBody} />}
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           </div>
+        )}
+      </div>
+
+      {loading && (
+        <div className="row center" style={{ padding: 14, color: "var(--mute)" }}>
+          Loading replay…
+        </div>
+      )}
+      {loadErr && (
+        <div className="row center" style={{ padding: 14, color: "var(--err-text)" }}>
+          {loadErr}
+        </div>
+      )}
+
+      <div className="col gap-2" style={{ padding: "10px 14px", borderTop: "var(--border)" }}>
+        {/* Best-effort caveat — captured fonts/CSS from third-party CDNs
+            without CORS can't be inlined by rrweb, so replays sometimes
+            render with fallback styles. Cheaper to disclose than to fix. */}
+        <span className="text-2xs muted">
+          Replay is best-effort. Fonts or styles served from third-party CDNs without CORS may differ.
+        </span>
+        <div className="row gap-2 center">
+          <Btn variant="ghost" sm onClick={togglePlay} disabled={loading || !!loadErr}>
+            {playing ? "Pause" : "Play"}
+          </Btn>
+          {/* Scrubber with a thin strip above it shading the idle spans that
+              get auto-skipped when "Skip idle" is on. */}
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+            <div style={{ position: "relative", height: 3 }}>
+              {durationMs > 0 && idleRanges.map((rg, i) => (
+                <div
+                  key={i}
+                  title="Inactive, auto-skipped"
+                  style={{
+                    position: "absolute", top: 0, height: 3, borderRadius: 2,
+                    left: `${(rg.start / durationMs) * 100}%`,
+                    width: `${Math.max(0.4, ((rg.end - rg.start) / durationMs) * 100)}%`,
+                    background: "var(--amber)", opacity: 0.6,
+                  }}
+                />
+              ))}
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={durationMs}
+              step={100}
+              value={currentMs}
+              onChange={e => seekTo(Number(e.target.value))}
+              style={{ width: "100%" }}
+              disabled={loading || !!loadErr}
+              aria-label="Replay scrubber"
+            />
+          </div>
+          <span className="text-xs muted mono" style={{ minWidth: 80, textAlign: "right" }}>
+            {fmtClock(currentMs)} / {fmtClock(durationMs)}
+          </span>
+          <Btn
+            variant={skipIdle ? "primary" : "ghost"}
+            sm
+            onClick={() => setSkipIdle(v => !v)}
+            disabled={loading || !!loadErr}
+            title="Fast-forward gaps with no activity"
+          >
+            Skip idle
+          </Btn>
+          <div className="row gap-1">
+            {SPEEDS.map(s => (
+              <Btn
+                key={s}
+                variant={speed === s ? "primary" : "ghost"}
+                sm
+                onClick={() => setPlaybackSpeed(s)}
+                disabled={loading || !!loadErr}
+              >
+                {s}×
+              </Btn>
+            ))}
+          </div>
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 }
 

@@ -14,6 +14,11 @@ describe("chat card builders", () => {
     expect(JSON.stringify(m.blocks)).toContain("https://x.test/t");
   });
 
+  it("names the status the way the app does, never the raw code", () => {
+    expect(slackBlocksFor(ev).text).toMatch(/^FB-1 moved to Shipped\n/);
+    expect(JSON.stringify(teamsCardFor({ ...ev, toStatus: "declined" }))).toContain("FB-1 moved to Won’t ship");
+  });
+
   it("teams card is an Adaptive Card v1.4", () => {
     const c = teamsCardFor(ev) as { type: string; version: string };
     expect(c.type).toBe("AdaptiveCard");

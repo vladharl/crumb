@@ -98,7 +98,7 @@ describe("ticket drafts", () => {
 
   it("states who is asking, their ARR and the way back", () => {
     expect(ticketImpactFooter(impact)).toBe(
-      "Customer impact: Acme Co, $250k ARR. 4 requesters across 3 accounts, $410k ARR combined.\n\nThread in Crumb: https://app.test/thread/FB-12",
+      "Customer impact: Acme Co, $250k ARR. 4 requesters across 3 accounts, $410k ARR at stake.\n\nThread in Crumb: https://app.test/thread/FB-12",
     );
     expect(ticketImpactFooter({ ...impact, arrCents: 0, accounts: 1, requesters: 1, threadUrl: null }))
       .toBe("Customer impact: Acme Co, ARR not set. 1 requester.");

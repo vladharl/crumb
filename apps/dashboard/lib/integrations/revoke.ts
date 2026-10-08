@@ -4,6 +4,7 @@ import { db, workspaces, workspaceUsers, type Workspace } from "@crumb/db";
 import { sendIntegrationDisconnected } from "@/lib/email";
 import { originFromHeaders } from "@/lib/origin";
 import { log } from "@/lib/log";
+import { formatDate } from "@/lib/timefmt";
 import type { Provider } from "./state";
 
 // Managed-OAuth revocation handling. When a provider tells us our stored
@@ -129,7 +130,7 @@ export function disconnectNotice(
   const alert = ws.integrationAlerts?.[provider];
   if (!alert || ws[CONNECTED_BY[provider]]) return null;
   const at = new Date(alert.at);
-  const on = Number.isNaN(at.getTime()) ? "" : ` on ${at.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+  const on = Number.isNaN(at.getTime()) ? "" : ` on ${formatDate(at)}`;
   return {
     at,
     text: `${PROVIDER_NAMES[provider]} was disconnected${on} because it stopped accepting Crumb's access. ${IMPACT[provider]} Reconnect to turn it back on.`,

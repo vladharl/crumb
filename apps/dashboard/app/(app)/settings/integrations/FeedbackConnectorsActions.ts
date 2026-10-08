@@ -131,7 +131,7 @@ export async function disconnectFeedbackSource(provider: string): Promise<Connec
 function syncMessage(o: IngestOutcome, more: boolean): string {
   const parts = ([
     [o.promoted, "added"],
-    [o.attached, "merged into existing items"],
+    [o.attached, "merged into existing requests"],
     [o.held, "waiting in the Inbox"],
     [o.dropped, "not product feedback"],
   ] as const).filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`);

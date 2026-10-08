@@ -126,7 +126,7 @@ async function processAppMention(teamId: string | undefined, event: SlackMention
     if (!gated.ok) {
       await post(
         gated.error === "ai_cap_reached"
-          ? "This workspace has hit its monthly Crumb AI limit — sizing is paused until it resets."
+          ? "This workspace has hit its monthly Crumb AI limit, so sizing is paused until it resets."
           : "Request sizing needs Crumb AI (available on the Cloud plan).",
       );
       return;
@@ -134,7 +134,7 @@ async function processAppMention(teamId: string | undefined, event: SlackMention
 
     const analysis = gated.value;
     if (!analysis.sizing) {
-      await post("Couldn’t size this request right now — try mentioning me again.");
+      await post("Couldn’t size this request right now. Try mentioning me again.");
       return;
     }
 
@@ -281,23 +281,23 @@ function buildSizingBlocks(a: Analysis): { text: string; blocks: SlackBlock[] } 
   const s = a.sizing as SizeRequestResult;
 
   const requesterLine = a.account
-    ? `*Requester:* ${escapeSlackText(a.account.name)} — ${formatArr(a.account.arrCents)} ARR`
+    ? `*Requester:* ${escapeSlackText(a.account.name)} (${formatArr(a.account.arrCents, " ARR")})`
     : "*Requester:* no matching account";
 
   const shown = a.similar.items.slice(0, 3);
   const extra = a.similar.items.length - shown.length;
   const similarLine = a.similar.items.length
-    ? `*Similar open requests:* ${shown.map(i => `${i.shortId} “${escapeSlackText(i.title)}”`).join(", ")}${extra > 0 ? ` +${extra} more` : ""} — ${a.similar.accountCount} ${a.similar.accountCount === 1 ? "account" : "accounts"}, ${formatArr(a.similar.combinedArrCents)} ARR at stake`
+    ? `*Similar open requests:* ${shown.map(i => `${i.shortId} “${escapeSlackText(i.title)}”`).join(", ")}${extra > 0 ? ` +${extra} more` : ""} (${a.similar.accountCount} ${a.similar.accountCount === 1 ? "account" : "accounts"}, ${formatArr(a.similar.combinedArrCents, " ARR at stake")})`
     : "*Similar open requests:* none found";
 
-  const scopeLine = `*Scope:* ${s.size} — ${escapeSlackText(s.rationale)}`;
+  const scopeLine = `*Scope:* ${s.size}. ${escapeSlackText(s.rationale)}`;
 
-  const caveats = [a.repoConnected ? "sized from repo context" : "no repo connected — sized from description"];
+  const caveats = [a.repoConnected ? "sized from repo context" : "no repo connected, sized from description"];
   if (a.similar.items.length) {
     caveats.push(`${a.similar.items.length} similar request${a.similar.items.length === 1 ? "" : "s"}`);
   }
 
-  const text = `Sized: ${s.restatement} — ${s.size} (${s.confidence} confidence)`;
+  const text = `Sized: ${s.restatement} (${s.size}, ${s.confidence} confidence)`;
   const blocks: SlackBlock[] = [
     { type: "section", text: { type: "mrkdwn", text: `*${escapeSlackText(s.restatement)}*` } },
     { type: "section", text: { type: "mrkdwn", text: `${requesterLine}\n${similarLine}\n${scopeLine}` } },

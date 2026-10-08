@@ -10,13 +10,14 @@ import { PUBLIC_HINT, PublicSwitch, type BoardCol } from "../InitiativesBoard";
 import { PRESET_COLORS } from "../presetColors";
 import { useColumnMove } from "../useColumnMove";
 
-// "Parked" is just a status — selecting it here is the same as the old "Park"
-// button (which only set status='parked'), so there's no separate control.
+// "Set aside" (stored as 'parked') is just a status: selecting it here is the
+// same as the old "Park" button, so there's no separate control. It reads like
+// a request's Set aside, so one word means one thing.
 const STATUSES = [
   { value: "open",        label: "Open" },
   { value: "in_progress", label: "In progress" },
   { value: "shipped",     label: "Shipped" },
-  { value: "parked",      label: "Parked" },
+  { value: "parked",      label: "Set aside" },
 ];
 
 type Patch = {
@@ -218,7 +219,7 @@ export function EditPanel({
           onBlur={commitName}
           onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
           maxLength={120}
-          style={inputStyle}
+          className="input"
         />
       </div>
       <div className="col gap-1">
@@ -230,7 +231,7 @@ export function EditPanel({
           onBlur={commitDescription}
           rows={3}
           aria-describedby="ed-desc-help"
-          style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
+          className="input"
         />
         <span id="ed-desc-help" className="text-2xs muted">
           Customers see this on the public roadmap when the initiative is public. It also starts the changelog draft when it ships.
@@ -245,13 +246,13 @@ export function EditPanel({
           onBlur={commitNotes}
           rows={3}
           aria-describedby="ed-notes-help"
-          style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
+          className="input"
         />
         <span id="ed-notes-help" className="text-2xs muted">Team only. Never shown to customers.</span>
       </div>
       <div className="col gap-1">
         <label className="eyebrow" htmlFor="ed-status">Status</label>
-        <select id="ed-status" value={status} onChange={e => pickStatus(e.target.value)} style={inputStyle}>
+        <select id="ed-status" value={status} onChange={e => pickStatus(e.target.value)} className="input">
           {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
       </div>
@@ -264,7 +265,7 @@ export function EditPanel({
           onChange={e => (e.target.value === "shipped" ? pickStatus("shipped") : pickColumn(e.target.value))}
           disabled={shipped}
           aria-describedby={shipped || emailsOnMove ? "ed-column-help" : undefined}
-          style={inputStyle}
+          className="input"
         >
           <option value="">Unscheduled</option>
           <option value="now">Now</option>
@@ -297,7 +298,7 @@ export function EditPanel({
       </div>
       <div className="col gap-1">
         <label className="eyebrow" htmlFor="ed-owner">Owner</label>
-        <select id="ed-owner" value={ownerId} onChange={e => pickOwner(e.target.value)} style={inputStyle}>
+        <select id="ed-owner" value={ownerId} onChange={e => pickOwner(e.target.value)} className="input">
           <option value="">Unassigned</option>
           {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
@@ -313,7 +314,7 @@ export function EditPanel({
               aria-pressed={color === c}
               onClick={() => pickColor(c)}
               style={{
-                width: 22, height: 22, borderRadius: "50%", background: c,
+                width: 24, height: 24, borderRadius: "50%", background: c,
                 border: color === c ? "2px solid var(--ink)" : "1px solid var(--line)",
                 cursor: "pointer", padding: 0,
               }}
@@ -342,7 +343,8 @@ export function EditPanel({
                   type="button"
                   aria-label={`Remove ${name}`}
                   onClick={() => saveEvents(tracked.filter(n => n !== name))}
-                  style={{ background: "none", border: 0, padding: 2, cursor: "pointer", color: "var(--mute)", display: "inline-flex" }}
+                  // A 25px hit area around the 11px icon; the margin keeps the chip's size.
+                  style={{ background: "none", border: 0, padding: 7, margin: -5, cursor: "pointer", color: "var(--mute)", display: "inline-flex" }}
                 >
                   <Ic.x style={{ width: 11, height: 11 }} />
                 </button>
@@ -375,7 +377,7 @@ export function EditPanel({
           }}
           placeholder={tracked.length >= EVENT_LIST_MAX ? "Max 20 events" : tracked.length ? "Add another…" : "export.csv"}
           disabled={tracked.length >= EVENT_LIST_MAX}
-          style={inputStyle}
+          className="input"
         />
         <datalist id="ed-tracked-options">
           {eventOptions.filter(o => !tracked.includes(o.name)).map(o => (
@@ -397,13 +399,3 @@ export function EditPanel({
     </div>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  background: "var(--paper)",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--r-sm)",
-  padding: "8px 10px",
-  font: "inherit",
-  color: "var(--ink)",
-  width: "100%",
-};

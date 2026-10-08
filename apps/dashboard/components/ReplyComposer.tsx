@@ -711,7 +711,8 @@ export function ReplyComposer({
               <span className="text-2xs muted mono">{humanBytes(a.sizeBytes)}</span>
               <button
                 onClick={() => removePendingAttachment(a.id)}
-                style={{ background: "none", border: 0, cursor: "pointer", padding: 2, color: "var(--mute-2)" }}
+                // A 25px hit area around the 11px icon; the margin keeps the chip's size.
+                style={{ background: "none", border: 0, cursor: "pointer", padding: 7, margin: -5, lineHeight: 0, color: "var(--mute-2)" }}
                 aria-label={`Remove ${a.filename}`}
               >
                 <Ic.x style={{ width: 11, height: 11 }} />

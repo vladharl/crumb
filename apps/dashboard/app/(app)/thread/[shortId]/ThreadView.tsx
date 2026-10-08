@@ -14,18 +14,13 @@ import {
   ReplyComposer, useStatusMove, runAction, firstName, sourceLabel, noEmailNote, statusWillEmail, statusEmailees, reasonNote, type ItemNotifyPlan,
 } from "@/components/ReplyComposer";
 import { useDeleteItems } from "@/components/useDeleteItems";
+import { formatArr } from "@/lib/priority";
 import { InitiativePanel, type ThreadInitiativeOption } from "./InitiativePanel";
 import { ThreadSuggestionCard, type ThreadSuggestion } from "./ThreadSuggestionCard";
 import { ExternalTicketTile } from "./ExternalTicketTile";
 import { ReplaySessionCard, type ReplayCardData } from "./ReplaySessionCard";
 import { UsageBreadcrumbCard, type UsageBreadcrumbEntry } from "./UsageBreadcrumbCard";
 import { MergePanel, type ThreadMergeData } from "./MergePanel";
-
-function formatArr(cents: number): string {
-  if (cents === 0) return "—";
-  if (cents >= 100_000_000) return `$${(cents / 100_000_000).toFixed(1)}M ARR`;
-  return `$${Math.round(cents / 100_000)}k ARR`;
-}
 
 const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -352,8 +347,8 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
             </span>
             <StatusPill status={shown as Status} />
             {item.externalTicketUrl && (
-              <a href={item.externalTicketUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
-                <Btn icon={<Ic.link style={{ width: 12, height: 12 }} />}>{item.externalTicketId}</Btn>
+              <a href={item.externalTicketUrl} target="_blank" rel="noreferrer" className="btn" style={{ textDecoration: "none" }}>
+                <Ic.link style={{ width: 12, height: 12 }} />{item.externalTicketId}
               </a>
             )}
             {isAdmin && (
@@ -390,9 +385,9 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
       )}
 
       <div className="seg" style={{ alignSelf: "flex-start" }}>
-        <button aria-selected={tab === "customer"} onClick={() => setTab("customer")}>Customer · {customerMsgs.length}</button>
-        <button aria-selected={tab === "internal"} onClick={() => setTab("internal")}>Internal · {internalMsgs.length}</button>
-        <button aria-selected={tab === "trail"}    onClick={() => setTab("trail")}>Trail · {trail.length}</button>
+        <button aria-pressed={tab === "customer"} onClick={() => setTab("customer")}>Customer · {customerMsgs.length}</button>
+        <button aria-pressed={tab === "internal"} onClick={() => setTab("internal")}>Internal · {internalMsgs.length}</button>
+        <button aria-pressed={tab === "trail"} onClick={() => setTab("trail")}>Trail · {trail.length}</button>
       </div>
 
       {item.detectedLang && item.detectedLang !== "en" && (
@@ -401,7 +396,7 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
           background: "var(--surface-2)", flexWrap: "wrap",
         }}>
           <Ic.globe style={{ width: 14, height: 14, color: "var(--mute)", flexShrink: 0 }} />
-          <span className="text-sm">This feedback is in <strong style={{ fontWeight: 500 }}>{item.detectedLang.toUpperCase()}</strong>.</span>
+          <span className="text-sm">This request is in <strong style={{ fontWeight: 500 }}>{item.detectedLang.toUpperCase()}</strong>.</span>
           {item.titleTranslated ? (
             <Btn sm variant="ghost" onClick={() => setShowTranslation(s => !s)}>
               {showTranslation ? "Hide translation" : "Show translation"}
@@ -596,8 +591,8 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
                 style={{ textDecoration: "none", color: "inherit" }}>
                 <Avatar kind="ink">{account.name[0]}</Avatar>
                 <div className="col grow">
-                  <span className="serif text-md">{account.name}</span>
-                  <span className="text-xs muted">{formatArr(account.arrCents)}</span>
+                  <span className="fw-med text-md">{account.name}</span>
+                  <span className="text-xs muted">{formatArr(account.arrCents, " ARR")}</span>
                 </div>
                 <Ic.chevR style={{ width: 12, height: 12, color: "var(--mute-2)" }} />
               </Link>
@@ -672,7 +667,7 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
                 // "resolved" is customer-only — it isn't one of the settable
                 // rows below, so surface the current state explicitly. The vendor
                 // can still pick another status to reopen the loop.
-                <span className="row gap-2 center text-xs" style={{ marginBottom: 6, color: "var(--green)" }}>
+                <span className="row gap-2 center text-xs" style={{ marginBottom: 6, color: "var(--green-deep)" }}>
                   <StatusDot status="resolved" />
                   The customer closed this request.
                 </span>
@@ -701,7 +696,7 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
                       onClick={() => pickStatus(s, "card")}
                       disabled={statusMove.saving || isCurrent || !canWrite}
                       className="nav-item"
-                      aria-selected={isCurrent}
+                      aria-current={isCurrent || undefined}
                       style={{ justifyContent: "flex-start", gap: 12, width: "100%" }}
                     >
                       <StatusDot status={s} />
@@ -736,6 +731,7 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
             itemTitle={item.title}
             itemBody={item.body}
             aiAvailable={aiTicketAvailable}
+            isAdmin={isAdmin}
             workspace={workspaceIntegrations}
             item={{
               externalProvider:  item.externalProvider,

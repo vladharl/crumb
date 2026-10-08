@@ -1,10 +1,13 @@
-import { SkeletonCard } from "@crumb/ui";
+import { SkeletonCard, SkeletonPill } from "@crumb/ui";
 
+// The page's first cards as themselves (page.tsx order): title, state pill,
+// the description and the Connect row.
 export default function Loading() {
   return (
     <>
-      <SkeletonCard title="Engineering sync" lines={4} />
-      <SkeletonCard title="Vendor-side Slack" lines={3} />
+      {["Linear", "Jira", "GitHub"].map(title => (
+        <SkeletonCard key={title} title={title} after={<SkeletonPill width={92} />} lines={3} />
+      ))}
     </>
   );
 }

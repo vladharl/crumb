@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { StatusPill, type Status } from "@crumb/ui";
 import { loadHostedThread } from "@/lib/hosted-thread";
+import { formatDate } from "@/lib/timefmt";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export const metadata: Metadata = {
   referrer: "no-referrer",
 };
 
-const day = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+const day = (d: Date) => formatDate(d, { utc: true });
 const TEXT = { margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap" } as const;
 
 // The read-only thread a customer email links to when the workspace has no

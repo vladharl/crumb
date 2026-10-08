@@ -1,24 +1,30 @@
 import { Card, CardHead, Ic, Pill } from "@crumb/ui";
 import { activeEmailProvider, emailConfigured } from "@/lib/email";
+import { log } from "@/lib/log";
 import { isCloud } from "@/lib/tier";
 
 /**
  * Email delivery status + operator guidance. Lives on the settings Overview
  * (it's setup state, not an audit record — it used to hide on the Audit page
  * where the name gave no hint it existed). Detail is admin-only; the checklist
- * row above it carries the everyone-visible status.
+ * row above it carries the everyone-visible status. Env var names show only to
+ * self-host admins, who run the server. A Cloud workspace can't set them, so
+ * on Cloud they go to the server log instead.
  */
 export function EmailDeliveryCard({ isAdmin }: { isAdmin: boolean }) {
   const email = activeEmailProvider();
   const configured = emailConfigured();
   const cloud = isCloud();
+  if (cloud && !configured) {
+    log.warn("email delivery isn't configured on Cloud: set CRUMB_EMAIL_PROVIDER=resend, RESEND_API_KEY and CRUMB_EMAIL_FROM", { scope: "crumb/email" });
+  }
 
   return (
     <Card>
       <CardHead title="Email delivery" after={
         configured
           ? <Pill ring ringFill>{email.name}</Pill>
-          : <Pill>stdout (dev)</Pill>
+          : <Pill>Not set up</Pill>
       } />
       <div className="card-body col gap-3">
         {!isAdmin ? (
@@ -34,15 +40,15 @@ export function EmailDeliveryCard({ isAdmin }: { isAdmin: boolean }) {
           </div>
         ) : cloud ? (
           <p className="text-sm muted note">
-            You're on Crumb Cloud, but no email provider is configured. Set <span className="mono">CRUMB_EMAIL_PROVIDER=resend</span>, <span className="mono">RESEND_API_KEY</span>, and <span className="mono">CRUMB_EMAIL_FROM</span> to enable delivery.
+            Email isn't set up on Crumb Cloud right now. Contact support.
           </p>
         ) : (
           <>
             <p className="text-sm note">
-              Magic-link and notification emails are being printed to the dashboard's stdout. Bring your own relay with <span className="mono">CRUMB_EMAIL_PROVIDER=smtp</span> plus <span className="mono">SMTP_HOST</span>, <span className="mono">SMTP_PORT</span>, <span className="mono">SMTP_USER</span>, <span className="mono">SMTP_PASS</span>, and <span className="mono">CRUMB_EMAIL_FROM</span>.
+              Sign-in and notification emails aren't being sent: Crumb writes them to the dashboard's logs instead. Bring your own relay with <span className="mono">CRUMB_EMAIL_PROVIDER=smtp</span> plus <span className="mono">SMTP_HOST</span>, <span className="mono">SMTP_PORT</span>, <span className="mono">SMTP_USER</span>, <span className="mono">SMTP_PASS</span>, and <span className="mono">CRUMB_EMAIL_FROM</span>.
             </p>
             <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-              Until then, read magic links from <span className="mono">docker compose logs dashboard</span>. Prefer managed delivery? <a href="https://crumb.localhostlabs.net" style={{ color: "var(--ink)" }}>Crumb Cloud</a> includes it.
+              Until then, read sign-in links from <span className="mono">docker compose logs dashboard</span>. Prefer managed delivery? <a href="https://crumb.localhostlabs.net" style={{ color: "var(--ink)" }}>Crumb Cloud</a> includes it.
             </p>
           </>
         )}

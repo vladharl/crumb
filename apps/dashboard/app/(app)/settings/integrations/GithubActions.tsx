@@ -49,7 +49,7 @@ export function DisconnectGithubButton({ account }: { account: string | null }) 
         onClick={async () => {
           if (!(await confirm({
             title: `Disconnect ${account ?? "GitHub"}?`,
-            body: "Existing ticket links stay on items; status sync stops. You can also uninstall the app from GitHub to revoke its permissions.",
+            body: "Existing ticket links stay on requests; status sync stops. You can also uninstall the app from GitHub to revoke its permissions.",
             confirmLabel: "Disconnect",
             destructive: true,
           }))) return;

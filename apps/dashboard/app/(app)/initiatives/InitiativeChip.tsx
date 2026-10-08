@@ -40,7 +40,7 @@ const INIT_STATUS: Record<string, { label: string; variant: string; dot: Status 
   open:        { label: "Open",        variant: "ghost",  dot: "open" },
   in_progress: { label: "In progress", variant: "accent", dot: "progress" },
   shipped:     { label: "Shipped",     variant: "green",  dot: "shipped" },
-  parked:      { label: "Parked",      variant: "amber",  dot: "deferred" },
+  parked:      { label: "Set aside",   variant: "amber",  dot: "deferred" },
 };
 
 export function InitiativeStatusPill({ status }: { status: string }) {

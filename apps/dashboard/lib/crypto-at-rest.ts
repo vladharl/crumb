@@ -85,7 +85,7 @@ export function seal(plaintext: string): string {
       warnedMissingKey = true;
       // eslint-disable-next-line no-console
       console.warn(
-        "[crumb/crypto] CRUMB_ENCRYPTION_KEY not set — storing integration secrets in plaintext. " +
+        "[crumb/crypto] CRUMB_ENCRYPTION_KEY not set, so integration secrets are stored in plaintext. " +
           "Set a 32-byte key (64 hex chars) to encrypt secrets at rest.",
       );
     }

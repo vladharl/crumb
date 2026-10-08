@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Btn, Card, CardHead, StatusDot } from "@crumb/ui";
+import { Card, CardHead, StatusDot } from "@crumb/ui";
 import { db, notificationPreferences, type WorkspaceUser } from "@crumb/db";
 import { eq } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
@@ -72,8 +72,8 @@ export async function NotificationsSidebarTile() {
               ))}
             </div>
           )}
-          <Link href="/inbox" style={{ alignSelf: "flex-start" }}>
-            <Btn sm>Open inbox →</Btn>
+          <Link href="/inbox" className="btn sm" style={{ alignSelf: "flex-start", textDecoration: "none" }}>
+            Open inbox →
           </Link>
         </div>
       </Card>

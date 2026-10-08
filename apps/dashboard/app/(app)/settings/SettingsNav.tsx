@@ -70,7 +70,7 @@ export function SettingsNav() {
               const Icon = n.icon;
               const active = pathname === n.href;
               return (
-                <Link key={n.href} href={n.href} className="nav-item" aria-selected={active}>
+                <Link key={n.href} href={n.href} className="nav-item" aria-current={active ? "page" : undefined}>
                   <Icon className="ic" />
                   <span>{n.label}</span>
                 </Link>

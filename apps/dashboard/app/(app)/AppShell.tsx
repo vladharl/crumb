@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark, Ic } from "@crumb/ui";
 import { ConfirmProvider } from "@/components/confirm";
+import { inert } from "@/components/Dialog";
 import { ToastProvider } from "@/components/toast";
 import { TourProvider, TourLauncher, useTour } from "@/components/tour";
 import { CommandProvider, CommandButton, type CommandGroup, type CommandItem } from "@/components/CommandPalette";
@@ -94,6 +95,7 @@ function greetTheConsole() {
 export function AppShell({ user, showAsk = false, tourDone = true, supportEnabled = false, children }: { user: ShellUser; showAsk?: boolean; tourDone?: boolean; supportEnabled?: boolean; children: ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const burgerRef = useRef<HTMLButtonElement>(null);
 
   // Greet anyone who opens the console — once, on first mount.
   useEffect(() => { greetTheConsole(); }, []);
@@ -110,6 +112,9 @@ export function AppShell({ user, showAsk = false, tourDone = true, supportEnable
   const tabs = showAsk ? [...PRIMARY, ASK_LINK] : PRIMARY;
   const active = tabs.find(n => (n.match ?? (p => p === n.href))(pathname));
   const label = active?.label ?? "";
+  // The current section's link says so (aria-current); globals.css styles
+  // the active link on it.
+  const current = (on: boolean) => ({ "aria-current": on ? ("page" as const) : undefined });
 
   const paletteGroups: CommandGroup[] = [
     { label: "Actions", items: ACTIONS },
@@ -123,8 +128,17 @@ export function AppShell({ user, showAsk = false, tourDone = true, supportEnable
     <CommandProvider groups={paletteGroups}>
     <HelpProvider supportEnabled={supportEnabled} userEmail={user.email}>
     <div className="app">
+      <SkipLink />
       <header className="topbar">
-        <button className="topbar-burger" onClick={() => setOpen(o => !o)} aria-label="Menu">
+        <button
+          ref={burgerRef}
+          type="button"
+          className="topbar-burger"
+          onClick={() => setOpen(o => !o)}
+          aria-label="Menu"
+          aria-expanded={open}
+          aria-controls="mobile-nav"
+        >
           <Ic.menu style={{ width: 16, height: 16 }} />
         </button>
 
@@ -141,7 +155,7 @@ export function AppShell({ user, showAsk = false, tourDone = true, supportEnable
               href={n.href}
               data-tour={n.id}
               className="topnav-item"
-              aria-selected={(n.match ?? (p => p === n.href))(pathname)}
+              {...current(n === active)}
             >
               {n.label}
             </Link>
@@ -156,9 +170,10 @@ export function AppShell({ user, showAsk = false, tourDone = true, supportEnable
         </div>
       </header>
 
-      {/* Mobile nav sheet */}
+      {/* Mobile nav sheet. Closed, it waits off-canvas: inert, so Tab and
+          screen readers skip it. */}
       <div className={`scrim ${open ? "show" : ""}`} onClick={() => setOpen(false)} />
-      <nav className={`mobile-nav ${open ? "open" : ""}`} aria-label="Sections">
+      <nav id="mobile-nav" className={`mobile-nav ${open ? "open" : ""}`} aria-label="Sections" {...inert(!open)}>
         {tabs.map(n => {
           const Icon = n.icon;
           return (
@@ -166,7 +181,7 @@ export function AppShell({ user, showAsk = false, tourDone = true, supportEnable
               key={n.id}
               href={n.href}
               className="nav-item"
-              aria-selected={(n.match ?? (p => p === n.href))(pathname)}
+              {...current(n === active)}
               onClick={() => setOpen(false)}
             >
               <Icon className="ic" />
@@ -174,18 +189,21 @@ export function AppShell({ user, showAsk = false, tourDone = true, supportEnable
             </Link>
           );
         })}
-        <Link href="/settings" className="nav-item" aria-selected={pathname.startsWith("/settings")} onClick={() => setOpen(false)}>
+        <Link href="/settings" className="nav-item" {...current(pathname.startsWith("/settings"))} onClick={() => setOpen(false)}>
           <Ic.settings className="ic" />
           <span>Settings</span>
         </Link>
-        <MobileHelpButton onSelect={() => setOpen(false)} />
+        {/* Focus goes to the burger first: Help returns focus to what had it
+            when it opened, and this item is about to go inert. */}
+        <MobileHelpButton onSelect={() => { setOpen(false); burgerRef.current?.focus(); }} />
         <div className="row between" style={{ padding: "8px 6px", marginTop: 8, borderTop: "var(--border)" }}>
           <TourLauncher />
           <a className="link-back" href="/logout">Sign out →</a>
         </div>
       </nav>
 
-      <main className="content" data-screen-label={label}>
+      {/* No ring: main is only focused as the skip link's landing (globals.css). */}
+      <main id="main" className="content" data-screen-label={label}>
         {children}
       </main>
     </div>
@@ -209,12 +227,45 @@ function MobileHelpButton({ onSelect }: { onSelect: () => void }) {
   );
 }
 
+const SKIP_HIDDEN: CSSProperties = {
+  position: "absolute", width: 1, height: 1, margin: -1, padding: 0, border: 0,
+  overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap",
+};
+const SKIP_SHOWN: CSSProperties = { position: "fixed", top: 10, left: 10, zIndex: 100, textDecoration: "none" };
+
+// The page's first Tab stop: out of sight until a keyboard lands on it, then
+// it moves focus past the top bar to the page's own content.
+function SkipLink() {
+  const [shown, setShown] = useState(false);
+  return (
+    <a
+      href="#main"
+      className={shown ? "btn primary" : undefined}
+      style={shown ? SKIP_SHOWN : SKIP_HIDDEN}
+      onFocus={() => setShown(true)}
+      onBlur={() => setShown(false)}
+      onClick={e => {
+        const main = document.getElementById("main");
+        if (!main) return;
+        e.preventDefault();
+        // Focusable only for this landing, so clicks in the page never focus it.
+        main.tabIndex = -1;
+        main.focus();
+        main.addEventListener("blur", () => main.removeAttribute("tabindex"), { once: true });
+      }}
+    >
+      Skip to main content
+    </a>
+  );
+}
+
 // Avatar dropdown: identity + Getting started (relaunch tour) + Help + Settings + Sign out.
 function UserMenu({ user }: { user: ShellUser }) {
   const { start } = useTour();
   const { open: openHelp } = useHelp();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -228,6 +279,7 @@ function UserMenu({ user }: { user: ShellUser }) {
   return (
     <div className="usermenu" ref={ref}>
       <button
+        ref={triggerRef}
         type="button"
         className="topbar-icon-btn"
         data-tour="settings"
@@ -247,7 +299,9 @@ function UserMenu({ user }: { user: ShellUser }) {
           <button type="button" className="usermenu-item" role="menuitem" onClick={() => { setOpen(false); start(); }}>
             Getting started
           </button>
-          <button type="button" className="usermenu-item" role="menuitem" onClick={() => { setOpen(false); openHelp(); }}>
+          {/* Focus goes back to the trigger first, so Help returns it there
+              on close (this item unmounts with the menu). */}
+          <button type="button" className="usermenu-item" role="menuitem" onClick={() => { setOpen(false); triggerRef.current?.focus(); openHelp(); }}>
             Help &amp; support
           </button>
           <Link href="/settings" className="usermenu-item" role="menuitem" onClick={() => setOpen(false)}>

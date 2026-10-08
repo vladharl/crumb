@@ -1,10 +1,12 @@
 import type { Provider } from "@/lib/integrations/state";
+import { SLACK_BOT_SCOPES } from "@/lib/slack/install";
 
 // Self-host BYO-OAuth setup helper. Shows the exact values an operator must
 // paste into the provider's app config — callback/redirect URL, webhook URL,
 // scopes/permissions, and the env vars to set. Removes the #1 source of
 // failed self-host installs (wrong redirect URL / missing scope). Rendered
-// only on self-host when the provider's creds aren't configured yet.
+// only on self-host, only to admins (the people who run the server), when the
+// provider's creds aren't configured yet: env var names mean nothing to anyone else.
 
 type Row = { label: string; value: string; mono?: boolean };
 
@@ -16,11 +18,12 @@ function setupFor(provider: Provider, origin: string): { rows: Row[]; env: strin
       return {
         rows: [
           { label: "Redirect URL", value: cb("slack"), mono: true },
-          { label: "Bot scopes", value: "chat:write, im:write, users:read, users:read.email, commands", mono: true },
+          { label: "Bot scopes", value: SLACK_BOT_SCOPES.join(", "), mono: true },
           { label: "Slash command (/crumb) Request URL", value: `${origin}/api/integrations/slack/commands`, mono: true },
           { label: "Interactivity Request URL", value: `${origin}/api/integrations/slack/interactivity`, mono: true },
+          { label: "Event Subscriptions Request URL (bot event: app_mention)", value: `${origin}/api/integrations/slack/events`, mono: true },
         ],
-        env: ["SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET", "SLACK_SIGNING_SECRET (for the slash command)"],
+        env: ["SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET", "SLACK_SIGNING_SECRET (for /crumb and @mentions)"],
         docs: "https://api.slack.com/apps",
       };
     case "linear":
@@ -95,7 +98,7 @@ export function SelfHostSetup({ provider, origin }: { provider: Provider; origin
           </div>
         ))}
         <div className="col gap-1">
-          <span className="eyebrow">Then set + restart</span>
+          <span className="eyebrow">Then set these on the server and restart</span>
           <div className="code" style={{ wordBreak: "break-all" }}>{env.join("  ·  ")}</div>
         </div>
         <a href={docs} target="_blank" rel="noreferrer" className="text-xs" style={{ color: "var(--ink)" }}>

@@ -24,7 +24,7 @@ test("foreign-language feedback can be translated", async ({ page, request }) =>
   // Triage stamps detected_lang = es (fire-and-forget) → the banner appears.
   await expect(async () => {
     await page.goto(`/thread/${shortId}`);
-    await expect(page.getByText(/This feedback is in/i)).toBeVisible({ timeout: 3000 });
+    await expect(page.getByText(/This request is in/i)).toBeVisible({ timeout: 3000 });
   }).toPass({ timeout: 45_000 });
 
   await page.getByRole("button", { name: /Translate to English/i }).click();

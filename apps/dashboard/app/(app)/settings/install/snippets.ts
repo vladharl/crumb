@@ -58,7 +58,7 @@ crumb.shutdown();
 
 // which build they're on (or data-app-version="4.2.1" on the tag)
 crumb.setContext({ app_version: "4.2.1" });`,
-    intercom: `// hide Intercom's launcher and add a "Give feedback" item that opens crumb
+    intercom: `// hide Intercom's launcher and add a "Give feedback" link that opens crumb
 Intercom("update", { hide_default_launcher: true });
 document.querySelector("#your-feedback-link")
   .addEventListener("click", function () { crumb.open(); });`,

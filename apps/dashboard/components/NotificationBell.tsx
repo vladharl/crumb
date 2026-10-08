@@ -106,7 +106,7 @@ export function NotificationBell({ initialUnread = 0 }: { initialUnread?: number
               className="link-back"
               onClick={onMarkAll}
               disabled={unread === 0}
-              style={{ background: "none", border: 0, padding: 0, cursor: unread === 0 ? "default" : "pointer", fontSize: "var(--fs-xs)", opacity: unread === 0 ? 0.5 : 1 }}
+              style={{ background: "none", border: 0, padding: "4px 0", margin: "-4px 0", cursor: unread === 0 ? "default" : "pointer", fontSize: "var(--fs-xs)", opacity: unread === 0 ? 0.5 : 1 }}
             >
               Mark all read
             </button>
@@ -122,7 +122,7 @@ export function NotificationBell({ initialUnread = 0 }: { initialUnread?: number
                 <span className="text-sm truncate" style={{ display: "block" }}>
                   <span className={e.unread ? "fw-med" : "muted"}>{e.who}</span>
                   {e.whoSub && <span className="muted"> · {e.whoSub}</span>}
-                  <span className={e.mentioned ? "" : "muted"} style={e.mentioned ? { color: "var(--accent)", fontWeight: 500 } : undefined}> {e.what} </span>
+                  <span className={e.mentioned ? "" : "muted"} style={e.mentioned ? { color: "var(--accent-deep)", fontWeight: 500 } : undefined}> {e.what} </span>
                   <span className={e.unread ? "" : "muted"}>{e.item}</span>
                   {e.internal && <Pill style={{ marginLeft: 6 }}><Ic.lock style={{ width: 9, height: 9 }} />Internal</Pill>}
                 </span>

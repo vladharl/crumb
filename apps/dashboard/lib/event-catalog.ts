@@ -21,11 +21,11 @@ export const EVENT_TYPES = [
 export type EventType = (typeof EVENT_TYPES)[number];
 
 export const EVENT_LABELS: Record<EventType, string> = {
-  "item.created": "Item created",
+  "item.created": "Request created",
   "item.status_changed": "Status changed",
   "item.reply_created": "Reply added",
-  "item.assigned": "Item assigned",
-  "item.merged": "Item merged",
+  "item.assigned": "Request assigned",
+  "item.merged": "Request merged",
   "item.external_status_changed": "Tracker status changed",
   "ticket.linked": "Ticket linked",
   "ticket.unlinked": "Ticket unlinked",

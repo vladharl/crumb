@@ -13,6 +13,7 @@ import {
 } from "react";
 import Link from "next/link";
 import { Btn, Field, Ic } from "@crumb/ui";
+import { inert, useModal } from "@/components/Dialog";
 import { useToast } from "@/components/toast";
 import { HELP_GROUPS, DOCS_URL } from "@/lib/help-content";
 import { submitSupportRequest } from "@/app/(app)/help-actions";
@@ -46,19 +47,18 @@ export function HelpProvider({
   const [view, setView] = useState<View>("faq");
   const [q, setQ] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
 
   const openPanel = useCallback(() => { setView("faq"); setQ(""); setOpen(true); }, []);
   const close = useCallback(() => setOpen(false), []);
 
-  // Escape closes from anywhere while open.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  // Open, the panel is modal: the page behind goes inert, focus starts in the
+  // search and Tab stays in the panel, Escape closes it, and focus goes back
+  // to what opened it.
+  const onPanelKey = useModal(open, rootRef, panelRef, close, searchRef);
 
-  // Focus the search field when the FAQ view appears.
+  // Focus the search field when the FAQ view comes back from Contact.
   useEffect(() => {
     if (open && view === "faq") searchRef.current?.focus();
   }, [open, view]);
@@ -75,83 +75,92 @@ export function HelpProvider({
   return (
     <Ctx.Provider value={{ open: openPanel }}>
       {children}
-      <div className={`help-scrim ${open ? "show" : ""}`} onClick={close} aria-hidden={!open} />
-      <aside
-        className={`help-panel ${open ? "open" : ""}`}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Help and support"
-        aria-hidden={!open}
-      >
-        <div className="help-head">
-          <span className="help-title">{view === "contact" ? "Contact support" : "Help"}</span>
-          <button type="button" className="help-close" aria-label="Close help" onClick={close}>
-            <Ic.x style={{ width: 15, height: 15 }} />
-          </button>
-        </div>
-
-        {view === "faq" ? (
-          <div className="help-body">
-            <div className="help-search">
-              <Ic.search style={{ width: 15, height: 15, color: "var(--mute-2)", flexShrink: 0 }} />
-              <input
-                ref={searchRef}
-                className="help-search-input"
-                placeholder="Search help…"
-                value={q}
-                onChange={e => setQ(e.target.value)}
-              />
-            </div>
-
-            {filtered.length === 0 && (
-              <p className="help-empty">No help articles match “{q.trim()}”. Try different words, or contact us below.</p>
-            )}
-
-            {filtered.map(g => (
-              <div key={g.group} className="help-group">
-                <span className="eyebrow help-group-label">{g.group}</span>
-                {g.items.map(it =>
-                  searching ? (
-                    <div key={it.q} className="help-faq-item open">
-                      <div className="help-q-static">{it.q}</div>
-                      <Answer item={it} onNavigate={close} />
-                    </div>
-                  ) : (
-                    <details key={it.q} className="help-faq-item">
-                      <summary className="help-q">
-                        <Ic.chevR className="help-chev" style={{ width: 13, height: 13 }} />
-                        <span>{it.q}</span>
-                      </summary>
-                      <Answer item={it} onNavigate={close} />
-                    </details>
-                  ),
-                )}
-              </div>
-            ))}
-
-            <div className="help-foot">
-              <span className="help-foot-title">Still need help?</span>
-              <div className="row gap-2" style={{ flexWrap: "wrap" }}>
-                {supportEnabled && (
-                  <Btn variant="primary" sm onClick={() => setView("contact")}>
-                    Contact support
-                  </Btn>
-                )}
-                <a className="help-docs-link" href={DOCS_URL} target="_blank" rel="noopener noreferrer">
-                  <Ic.doc style={{ width: 13, height: 13 }} />
-                  Documentation ↗
-                </a>
-              </div>
-            </div>
+      <div ref={rootRef}>
+        <div className={`help-scrim ${open ? "show" : ""}`} onClick={close} aria-hidden={!open} />
+        {/* Closed, it stays mounted for the slide: hidden and inert, so neither
+            Tab nor a screen reader lands in it off-canvas. */}
+        <aside
+          ref={panelRef}
+          className={`help-panel ${open ? "open" : ""}`}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Help and support"
+          aria-hidden={!open}
+          {...inert(!open)}
+          tabIndex={-1}
+          onKeyDown={onPanelKey}
+        >
+          <div className="help-head">
+            <span className="help-title">{view === "contact" ? "Contact support" : "Help"}</span>
+            <button type="button" className="help-close" aria-label="Close help" onClick={close}>
+              <Ic.x style={{ width: 15, height: 15 }} />
+            </button>
           </div>
-        ) : (
-          <ContactForm
-            userEmail={userEmail}
-            onDone={() => { setView("faq"); }}
-            onBack={() => setView("faq")}
-          />
-        )}
-      </aside>
+
+          {view === "faq" ? (
+            <div className="help-body">
+              <div className="help-search">
+                <Ic.search style={{ width: 15, height: 15, color: "var(--mute-2)", flexShrink: 0 }} />
+                <input
+                  ref={searchRef}
+                  className="help-search-input"
+                  aria-label="Search help"
+                  placeholder="Search help…"
+                  value={q}
+                  onChange={e => setQ(e.target.value)}
+                />
+              </div>
+
+              {filtered.length === 0 && (
+                <p className="help-empty">No help articles match “{q.trim()}”. Try different words, or contact us below.</p>
+              )}
+
+              {filtered.map(g => (
+                <div key={g.group} className="help-group">
+                  <span className="eyebrow help-group-label">{g.group}</span>
+                  {g.items.map(it =>
+                    searching ? (
+                      <div key={it.q} className="help-faq-item open">
+                        <div className="help-q-static">{it.q}</div>
+                        <Answer item={it} onNavigate={close} />
+                      </div>
+                    ) : (
+                      <details key={it.q} className="help-faq-item">
+                        <summary className="help-q">
+                          <Ic.chevR className="help-chev" style={{ width: 13, height: 13 }} />
+                          <span>{it.q}</span>
+                        </summary>
+                        <Answer item={it} onNavigate={close} />
+                      </details>
+                    ),
+                  )}
+                </div>
+              ))}
+
+              <div className="help-foot">
+                <span className="help-foot-title">Still need help?</span>
+                <div className="row gap-2" style={{ flexWrap: "wrap" }}>
+                  {supportEnabled && (
+                    <Btn variant="primary" sm onClick={() => setView("contact")}>
+                      Contact support
+                    </Btn>
+                  )}
+                  <a className="help-docs-link" href={DOCS_URL} target="_blank" rel="noopener noreferrer">
+                    <Ic.doc style={{ width: 13, height: 13 }} />
+                    Documentation ↗
+                  </a>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <ContactForm
+              userEmail={userEmail}
+              onDone={() => { setView("faq"); }}
+              onBack={() => setView("faq")}
+            />
+          )}
+        </aside>
+      </div>
     </Ctx.Provider>
   );
 }
@@ -197,7 +206,7 @@ function ContactForm({
         show({ message: res.error, tone: "error" });
         return;
       }
-      show({ message: "Message sent — we'll reply by email." });
+      show({ message: "Message sent. We'll reply by email." });
       setSubject("");
       setMessage("");
       onDone();

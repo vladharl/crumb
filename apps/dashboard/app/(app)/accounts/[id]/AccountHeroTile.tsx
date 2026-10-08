@@ -6,6 +6,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
 import { notMergedSql } from "@/lib/loop-sql";
 import { statusMix } from "@/lib/insights/status-mix";
+import { formatMonth } from "@/lib/timefmt";
 import { AccountArrEdit } from "./AccountArrEdit";
 
 async function loadHero(workspaceId: string, accountId: string) {
@@ -37,9 +38,7 @@ export async function AccountHeroTile({ accountId }: { accountId: string }) {
   if (!data) notFound();
   const { account, stats, requesterCount } = data;
   const canEdit = user.role === "admin" || user.role === "pm";
-  const sinceLabel = account.since
-    ? new Date(account.since).toLocaleDateString("en-US", { month: "short", year: "2-digit" })
-    : "—";
+  const sinceLabel = account.since ? formatMonth(account.since) : "—";
 
   return (
     <>

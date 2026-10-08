@@ -125,7 +125,7 @@ function getRedis(): Promise<RedisLike | null> | null {
       // eslint-disable-next-line no-console
       console.error(JSON.stringify({
         time: new Date().toISOString(), level: "error", scope: "crumb/rate-limit",
-        msg: "CRUMB_REDIS_URL set but ioredis unavailable — falling back to in-memory limiter",
+        msg: "CRUMB_REDIS_URL set but ioredis unavailable, falling back to in-memory limiter",
         err: err instanceof Error ? err.message : String(err),
       }));
       return null;

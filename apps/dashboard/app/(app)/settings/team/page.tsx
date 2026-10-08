@@ -2,6 +2,7 @@ import { Avatar, Card, CardHead, Ic, Pill } from "@crumb/ui";
 import { db, workspaceUsers, magicTokens, sessions, apiKeys } from "@crumb/db";
 import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
+import { formatDate } from "@/lib/timefmt";
 import { InvitePanel, RemoveButton, ResendButton, RoleSelect } from "./InvitePanel";
 
 export const dynamic = "force-dynamic";
@@ -73,13 +74,15 @@ export default async function SettingsTeamPage() {
           const isPending = !hasEverSignedIn && pendingCount > 0;
           const isMe = m.id === me.id;
           return (
-            <div key={m.id} className="list-row" style={{ gridTemplateColumns: "1.4fr 1fr 130px 120px 1.2fr" }}>
+            // Not a link, so not dressed as one: no pointer, no hover wash
+            // (.list-row's defaults are for clickable rows; inline beats :hover).
+            <div key={m.id} className="list-row" style={{ gridTemplateColumns: "1.4fr 1fr 130px 120px 1.2fr", cursor: "default", background: "transparent" }}>
               <div className="row gap-3 center">
                 <Avatar>{m.initials}</Avatar>
                 <div className="col">
                   <span className="fw-med">{m.name}{isMe ? <span className="text-xs muted" style={{ marginLeft: 6 }}>you</span> : null}</span>
                   <span className="text-xs muted">
-                    {new Date(m.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit" })}
+                    {formatDate(m.createdAt)}
                   </span>
                 </div>
               </div>

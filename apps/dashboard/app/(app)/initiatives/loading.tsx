@@ -7,7 +7,8 @@ export default function Loading() {
       <PageHead
         crumb="Initiatives"
         title="Initiatives"
-        lede="Group inbound feedback into themed buckets: User Management, Reporting, Mobile, anything that helps you triage at a glance."
+        // Word for word from initiatives/page.tsx, so the head doesn't reflow.
+        lede="Group feedback into themed buckets, then move them across Now, Next and Later, and into Shipped, to shape the roadmap. Public ones show in the widget once they're scheduled or shipped."
         actions={<SkeletonPill width={110} />}
       />
       <InitiativesTableSkeleton />

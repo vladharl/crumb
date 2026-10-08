@@ -154,7 +154,7 @@ function BrandingPreview({
             { k: "news", label: "News" },
             { k: "peek", label: "Peek" },
           ] as const).map(({ k, label }) => (
-            <button key={k} aria-selected={state === k} onClick={() => setState(k)}>{label}</button>
+            <button key={k} aria-pressed={state === k} onClick={() => setState(k)}>{label}</button>
           ))}
         </div>
       </div>
@@ -182,13 +182,13 @@ function BrandingPreview({
           aria-label="Site to preview"
           style={{
             flex: 1, minWidth: 0,
-            background: "transparent", border: 0, outline: "none",
+            background: "transparent", border: 0,
             color: "var(--ink)", letterSpacing: "0.03em",
             padding: 0,
           }}
         />
         {siteState === "loading" && <span className="text-2xs" style={{ color: "var(--mute)", flexShrink: 0 }}>Fetching…</span>}
-        {siteState === "error" && <span className="text-2xs" style={{ color: "var(--rust)", flexShrink: 0 }}>{siteError}</span>}
+        {siteState === "error" && <span className="text-2xs" style={{ color: "var(--err-text)", flexShrink: 0 }}>{siteError}</span>}
         {siteState === "loaded" && siteThin && (
           <span className="text-2xs" style={{ color: "var(--mute)", flexShrink: 0 }}>
             JS apps may stay blank without sign-in; try a public page
@@ -308,7 +308,7 @@ function BrandingPreview({
   );
 }
 
-function ColorPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function ColorPicker({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <div className="row gap-2 center">
       <label style={{
@@ -318,6 +318,7 @@ function ColorPicker({ value, onChange }: { value: string; onChange: (v: string)
       }}>
         <input
           type="color"
+          aria-label={label}
           value={value}
           onChange={e => onChange(e.target.value)}
           style={{
@@ -328,6 +329,7 @@ function ColorPicker({ value, onChange }: { value: string; onChange: (v: string)
       </label>
       <input
         className="input mono"
+        aria-label={`${label} (hex)`}
         value={value.toUpperCase()}
         onChange={e => onChange(e.target.value)}
       />
@@ -414,11 +416,11 @@ export function BrandingCard({
           </Field>
 
           <Field label="Launcher color" help="The tab the loop mark sits inside. Defaults to a deep ink.">
-            <ColorPicker value={launcherBg} onChange={setLauncherBg} />
+            <ColorPicker label="Launcher color" value={launcherBg} onChange={setLauncherBg} />
           </Field>
 
           <Field label="Dot color" help="The five-dot loop mark and the loop-news dot, both in the widget and on the dashboard.">
-            <ColorPicker value={accent} onChange={setAccent} />
+            <ColorPicker label="Dot color" value={accent} onChange={setAccent} />
           </Field>
 
           <Field label="Edge" help="Which side of your product the whisper tab docks to.">
@@ -429,7 +431,7 @@ export function BrandingCard({
               ] as const).map(({ k, label }) => (
                 <button
                   key={k}
-                  aria-selected={edge === k}
+                  aria-pressed={edge === k}
                   onClick={() => setEdge(k)}
                   style={{ flex: 1 }}
                 >{label}</button>
@@ -448,7 +450,7 @@ export function BrandingCard({
               ] as const).map(({ k, label }) => (
                 <button
                   key={k}
-                  aria-selected={visibility === k}
+                  aria-pressed={visibility === k}
                   onClick={() => setVisibility(k)}
                   style={{ flex: 1 }}
                 >{label}</button>

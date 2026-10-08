@@ -213,12 +213,12 @@ export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; i
         <div className="col gap-2">
           <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
             <input
-              className="minw-relax"
+              className="input minw-relax"
               value={url}
               onChange={e => setUrl(e.target.value)}
               placeholder="https://your-app.example.com/crumb/webhook"
               aria-label="Endpoint URL"
-              style={{ flex: 1, minWidth: 260, background: "var(--surface)", border: "var(--border)", borderRadius: "var(--r-sm)", padding: "8px 10px", font: "inherit", color: "var(--ink)" }}
+              style={{ flex: 1, minWidth: 260 }}
             />
             <Btn variant="primary" onClick={add} disabled={pending || !url.trim()}>{pending ? "Adding…" : "Add endpoint"}</Btn>
           </div>
@@ -240,7 +240,7 @@ export function WebhooksPanel({ initial, isAdmin }: { initial: EndpointView[]; i
                   <span className="mono text-xs" style={{ wordBreak: "break-all", flex: 1 }}>{ep.url}</span>
                   <div className="row gap-2 center">
                     <Pill ring ringFill={ep.active}>{ep.active ? "Active" : "Paused"}</Pill>
-                    {isAdmin && <Switch on={ep.active} onClick={() => toggle(ep.id, !ep.active)} />}
+                    {isAdmin && <Switch on={ep.active} label={`Send events to ${ep.url}`} onClick={() => toggle(ep.id, !ep.active)} />}
                   </div>
                 </div>
                 {note && <span className="text-xs" style={{ color: "var(--err-text)" }}>{note}</span>}

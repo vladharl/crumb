@@ -65,7 +65,7 @@ function chatContent(prompt) {
     });
   }
   // Ask your feedback (lib/ai/ask.ts) — echo a context FB-id so a citation lands
-  if (p.includes("answering a question using ONLY the customer feedback items")) {
+  if (p.includes("answering a question using ONLY the customer feedback requests")) {
     const fb = p.match(/\[(FB-\d+)\]/);
     return `Based on the feedback, customers want faster exports. [${fb ? fb[1] : "FB-1"}]`;
   }

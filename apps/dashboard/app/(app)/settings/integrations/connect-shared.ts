@@ -6,16 +6,22 @@
 // The buttons must let the redirect propagate but show real errors instead of
 // silently no-oping.
 
+// Only admins reach these. On self-host they run the server, so they get the
+// setting to fix; a Cloud admin can't change Crumb's own configuration.
+const CLOUD = process.env.NEXT_PUBLIC_CRUMB_EDITION === "cloud";
+
 const ERROR_COPY: Record<string, string> = {
   forbidden: "Only workspace admins can connect integrations.",
   plan_required: "Connecting integrations needs the Team plan. Upgrade from Settings → Billing.",
-  cannot_resolve_host: "Couldn't resolve the callback URL. Set CRUMB_APP_URL to this dashboard's origin.",
-  slack_not_configured: "Slack isn't configured on this deployment yet.",
-  linear_not_configured: "Linear isn't configured on this deployment yet.",
-  jira_not_configured: "Jira isn't configured on this deployment yet.",
-  github_not_configured: "GitHub isn't configured on this deployment yet.",
-  hubspot_not_configured: "HubSpot isn't configured on this deployment yet.",
-  salesforce_not_configured: "Salesforce isn't configured on this deployment yet.",
+  cannot_resolve_host: CLOUD
+    ? "Couldn't start the connection. Please try again in a few minutes."
+    : "Couldn't work out this dashboard's public address. Set CRUMB_APP_URL on the server, then restart Crumb.",
+  slack_not_configured: "Slack isn't set up on this server yet.",
+  linear_not_configured: "Linear isn't set up on this server yet.",
+  jira_not_configured: "Jira isn't set up on this server yet.",
+  github_not_configured: "GitHub isn't set up on this server yet.",
+  hubspot_not_configured: "HubSpot isn't set up on this server yet.",
+  salesforce_not_configured: "Salesforce isn't set up on this server yet.",
 };
 
 // A server-action redirect surfaces client-side as an error whose `digest`

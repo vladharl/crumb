@@ -361,6 +361,8 @@ export function friendlyError(code: string, status = 0): string {
     case "network":        return t.errOffline;
     case "not_your_item":  return t.errNotYours;
     case "item_not_found": return t.errNotFound;
+    // Closing a request the team closed meanwhile (the close endpoint's 409).
+    case "already_closed": return t.errClosed;
     case "missing_title":  return t.errNoTitle;
     case "missing_body":   return t.errNoBody;
     case "empty_file":     return t.errEmptyFile;

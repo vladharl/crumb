@@ -89,7 +89,6 @@ export function PlanPicker({ plans, initialPlan, initialInterval, canBuy, upgrad
               key={i}
               type="button"
               aria-pressed={interval === i}
-              aria-selected={interval === i}
               disabled={pending}
               onClick={() => pickInterval(i)}
             >

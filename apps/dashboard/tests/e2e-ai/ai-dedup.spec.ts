@@ -34,6 +34,6 @@ test("near-duplicate items merge and combine ARR", async ({ page, request }) => 
   // The canonical (A) now shows the merged rollup.
   await expect(async () => {
     await page.goto(`/thread/${a}`);
-    await expect(page.getByText(/merged/i)).toBeVisible({ timeout: 3000 });
+    await expect(page.getByText(/^\d+ merged$/)).toBeVisible({ timeout: 3000 });
   }).toPass({ timeout: 20_000 });
 });

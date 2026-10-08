@@ -82,7 +82,7 @@ async function postEmbeddings(input: string | string[]): Promise<number[][] | nu
 function normalizeToDim(v: number[] | undefined): number[] | null {
   if (!v || v.length < EMBEDDINGS_DIM) {
     if (v && v.length) {
-      log.error("embedding too short — dropped", {
+      log.error("embedding too short, dropped", {
         scope: "crumb/ai", got: v.length, want: EMBEDDINGS_DIM, model: EMBEDDINGS_MODEL,
       });
     }

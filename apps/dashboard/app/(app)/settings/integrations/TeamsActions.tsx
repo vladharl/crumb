@@ -7,10 +7,13 @@ import { useConfirm } from "@/components/confirm";
 import { setTeamsWebhook, disconnectTeams, testTeamsWebhook } from "./actions";
 
 function errText(e: string): string {
+  // The channel answered the test card with an error status (http_404, …).
+  if (/^http_\d+$/.test(e)) return "Teams didn't accept the card. Check that the workflow is still on and the URL is right.";
   switch (e) {
     case "teams_invalid_url": return "That isn't a valid https webhook URL (or the host isn't allowed).";
     case "forbidden":         return "Only workspace admins can change this.";
     case "not_connected":     return "Connect a webhook first.";
+    case "decrypt_failed":    return "Crumb can't read the saved webhook anymore. Disconnect, then paste the URL again.";
     default:                  return "Something went wrong. Try again.";
   }
 }
@@ -24,6 +27,7 @@ export function ConnectTeamsForm() {
     <div className="col gap-2">
       <input
         className="input"
+        aria-label="Teams webhook URL"
         placeholder="https://…webhook.office.com/… or …logic.azure.com/…"
         value={url}
         onChange={(e) => setUrl(e.target.value)}

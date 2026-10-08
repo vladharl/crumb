@@ -21,7 +21,7 @@ export const triageItems: TriageItem[] = [
   { id: "FB-242", title: "Webhook for status change",              type: "idea", acct: "Vora",     who: "Sam",   age: "2d", status: "open",     assignee: null, count: 1 },
   { id: "FB-241", title: "Custom embedded domain",                 type: "idea",        acct: "Acme",     who: "Admin", age: "3d", status: "planned",  assignee: "LR", count: 4 },
   { id: "FB-240", title: "Datepicker doesn't respect locale",      type: "bug",         acct: "Pinedrop", who: "Tao",   age: "4d", status: "review",   assignee: "JK", count: 1 },
-  { id: "FB-239", title: "SSO via Okta — more groups",             type: "idea", acct: "Stratus",  who: "Lin",   age: "5d", status: "progress", assignee: "LR", count: 8 },
+  { id: "FB-239", title: "SSO via Okta: more groups",              type: "idea", acct: "Stratus",  who: "Lin",   age: "5d", status: "progress", assignee: "LR", count: 8 },
   { id: "FB-238", title: "Export funnel data as XLSX",             type: "idea",        acct: "Lumen",    who: "Anika", age: "1w", status: "open",     assignee: null, count: 2 },
 ];
 

@@ -17,7 +17,7 @@ async function composeItem(page: Page, title: string): Promise<string> {
   await panel.getByPlaceholder("Acme Co").fill("Triage Test Co");
   await panel.getByPlaceholder("maya@acme.co").fill(`triage+${Date.now()}@example.com`);
   await panel.getByPlaceholder("One line: what's the gist?").fill(title);
-  await panel.getByRole("button", { name: "Create item" }).click();
+  await panel.getByRole("button", { name: "Create request" }).click();
   await page.waitForURL(/\/thread\/FB-\d+$/, { timeout: 30_000 });
   return page.url().split("/thread/")[1]!;
 }
@@ -53,6 +53,16 @@ test("the inbox answers to j, ?, Escape and Enter, and arrows still scroll from 
   await expect(sheet).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(sheet).toBeHidden();
+
+  // Focus can fall out of a dialog (a button disabling itself drops it to
+  // <body>); Escape still closes it, and the page isn't left inert.
+  await page.keyboard.press("?");
+  await expect(sheet).toBeVisible();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  expect(await page.evaluate(() => !!document.querySelector("main")?.closest("[inert]"))).toBe(false);
 
   await page.keyboard.press("Enter");
   await page.waitForURL(/\/thread\/FB-\d+$/, { timeout: 30_000 });

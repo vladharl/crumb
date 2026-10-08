@@ -88,7 +88,7 @@ export function InitiativePanel({
                 {canManage && (
                   <button
                     className="link-back"
-                    style={{ background: "none", border: 0, padding: 0, cursor: "pointer" }}
+                    style={{ background: "none", border: 0, padding: "4px 0", margin: "-4px 0", cursor: "pointer" }}
                     onClick={() => setEditing(true)}
                   >
                     Change
@@ -101,7 +101,7 @@ export function InitiativePanel({
                 {canManage && (
                   <button
                     className="link-back"
-                    style={{ background: "none", border: 0, padding: 0, cursor: "pointer" }}
+                    style={{ background: "none", border: 0, padding: "4px 0", margin: "-4px 0", cursor: "pointer" }}
                     onClick={() => setEditing(true)}
                   >
                     Set one
@@ -142,6 +142,7 @@ export function InitiativePanel({
           <div className="col gap-2">
             <input
               className="input"
+              aria-label="New initiative name"
               placeholder="e.g. User Management"
               value={newName}
               onChange={e => setNewName(e.target.value)}

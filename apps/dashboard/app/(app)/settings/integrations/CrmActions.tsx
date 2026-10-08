@@ -27,7 +27,7 @@ function syncErrorText(code: string, name: string): string {
     case "partial":        return `${name} stopped responding partway, so only some accounts updated. Try Sync now again in a few minutes.`;
     case "failed":         return `Couldn't reach ${name}, so nothing updated. Try Sync now again in a few minutes.`;
     case "disconnected":   return `${name} stopped accepting Crumb's access, so it was disconnected. Reconnect it to keep syncing.`;
-    case "not_configured": return `${name} isn't configured on this deployment.`;
+    case "not_configured": return `${name} isn't set up on this server anymore, so it can't sync.`;
     default:               return errorMessage(code);
   }
 }

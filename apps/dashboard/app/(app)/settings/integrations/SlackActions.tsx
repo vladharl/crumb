@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Ic } from "@crumb/ui";
 import { useConfirm } from "@/components/confirm";
+import { errorMessage } from "@/lib/action-error";
 import { startSlackInstall, disconnectSlack } from "./actions";
 import { isRedirectError, connectErrorMessage } from "./connect-shared";
 
@@ -50,7 +51,7 @@ export function DisconnectSlackButton({ teamName }: { teamName: string | null })
         onClick={async () => {
           if (!(await confirm({
             title: `Disconnect Crumb from ${teamName ?? "Slack"}?`,
-            body: "Vendor notifications will revert to email.",
+            body: "Teammates' Slack alerts go back to email, and /crumb and @mentions of Crumb stop working.",
             confirmLabel: "Disconnect",
             destructive: true,
           }))) return;
@@ -58,7 +59,7 @@ export function DisconnectSlackButton({ teamName }: { teamName: string | null })
             setError(null);
             const r = await disconnectSlack();
             if (r.ok) router.refresh();
-            else setError(r.error);
+            else setError(errorMessage(r.error));
           });
         }}
       >
