@@ -1,10 +1,12 @@
 import "server-only";
 import { db, items, accounts, accountUsers, workspaceUsers, replies, replyMentions } from "@crumb/db";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 
 // Shared notifications feed loader. Lifted out of NotificationsFeedTile so both
 // the in-app feed surfaces (the top-bar bell popover and the settings digest)
 // read from one source of truth. Plain Drizzle — safe in both editions.
+// The viewer's own actions (their replies and notes, items they created) are
+// left out, so they never show up or count as unread.
 
 export type FeedFilter = "all" | "unread" | "mentions";
 
@@ -37,7 +39,14 @@ export async function loadFeed(workspaceId: string, userId: string, lastReadAt: 
     .from(items)
     .innerJoin(accounts, eq(accounts.id, items.accountId))
     .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
-    .where(eq(items.workspaceId, workspaceId))
+    .where(and(
+      eq(items.workspaceId, workspaceId),
+      // Created by the viewer: they're the opening status event's actor.
+      sql`NOT EXISTS (
+        SELECT 1 FROM status_events se
+        WHERE se.item_id = items.id AND se.from_status IS NULL AND se.by_workspace_user_id = ${userId}
+      )`,
+    ))
     .orderBy(desc(items.createdAt))
     .limit(40);
 
@@ -59,7 +68,10 @@ export async function loadFeed(workspaceId: string, userId: string, lastReadAt: 
     .innerJoin(accounts, eq(accounts.id, items.accountId))
     .leftJoin(workspaceUsers, eq(workspaceUsers.id, replies.workspaceUserId))
     .leftJoin(accountUsers, eq(accountUsers.id, replies.accountUserId))
-    .where(eq(items.workspaceId, workspaceId))
+    .where(and(
+      eq(items.workspaceId, workspaceId),
+      or(isNull(replies.workspaceUserId), ne(replies.workspaceUserId, userId)),
+    ))
     .orderBy(desc(replies.createdAt))
     .limit(40);
 

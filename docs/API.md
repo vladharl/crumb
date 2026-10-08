@@ -259,8 +259,8 @@ Response `200`:
 ```
 
 - `reply_count` counts visible messages, including the customer's own (their original text is the first message).
-- `last_reply_side`: `"vendor"`, `"customer"`, or `null` with no messages.
-- `turn` is from your team's side: `"yours"` (your team owes the next move), `"waiting"` (your team answered last) or `"closed"`.
+- `last_reply_side`: who moved last. `"vendor"` when your team's latest touch is newer than the customer's latest message (a reply, a status email that was delivered, or setting the request aside), `"customer"` when the customer wrote last, or `null` when neither has happened.
+- `turn` is from your team's side: `"yours"` (your team owes the next move), `"waiting"` (your team moved last, per `last_reply_side`) or `"closed"`.
 - `last_event` is the latest visible change: `{ "kind": "reply", "at", "author_name" }`, `{ "kind": "status", "at", "status" }`, or `null`.
 - `vendor_reply_count` and `last_vendor_reply_at` count only your team's replies, for an unread badge.
 
@@ -948,7 +948,7 @@ app.post("/crumb-webhook", express.raw({ type: "application/json" }), (req, res)
 
 | Type | Sent when |
 | --- | --- |
-| [`item.created`](#itemcreated) | An item was created from the dashboard, Slack, MCP, an accepted capture or an Autopilot connector. Not sent yet for widget submissions. |
+| [`item.created`](#itemcreated) | An item was created from the widget, the dashboard, Slack, MCP, an accepted capture or an Autopilot connector. |
 | [`item.status_changed`](#itemstatus_changed) | An item moved to a new status, including when the customer closes it. |
 | [`item.reply_created`](#itemreply_created) | Your team or the customer replied on an item. |
 | [`item.assigned`](#itemassigned) | An item was assigned or unassigned. |
@@ -957,7 +957,7 @@ app.post("/crumb-webhook", express.raw({ type: "application/json" }), (req, res)
 | [`ticket.linked`](#ticketlinked) | An item was linked to a tracker ticket. |
 | [`ticket.unlinked`](#ticketunlinked) | An item's tracker ticket was unlinked. |
 | [`customer.notified`](#customernotified) | The customer was emailed about an item. |
-| [`initiative.updated`](#initiativeupdated) | An initiative was edited or moved on the roadmap. |
+| [`initiative.updated`](#initiativeupdated) | An initiative was edited, moved on the roadmap, or made public or private. |
 | [`capture.created`](#capturecreated) | Feedback was captured from email, Slack, the extension or a connector, ready for triage. |
 
 Many payloads share an item reference, `"item": { "short_id": "FB-42", "title": "…", "type": "bug" }`, and a ticket reference, `"ticket": { "provider": "linear", "id": "ENG-128", "url": "https://…" }` (`provider` is `linear`, `jira` or `github`; `url` can be `null`). The samples below leave out `id`, `workspace` and `at`.
@@ -968,7 +968,7 @@ Many payloads share an item reference, `"item": { "short_id": "FB-42", "title": 
 { "type": "item.created", "item": { "short_id": "FB-42", "title": "CSV export times out on large accounts", "type": "bug" }, "account": "Globex" }
 ```
 
-`account` is the customer account's name. Widget submissions don't send this event yet, and neither does feedback an Autopilot connector folds into an existing item as a duplicate (that item isn't new).
+`account` is the customer account's name. Feedback an Autopilot connector folds into an existing item as a duplicate doesn't send this event (that item isn't new).
 
 #### `item.status_changed`
 
@@ -1038,7 +1038,7 @@ The statuses are the tracker's own names. Either can be `null`.
 { "type": "initiative.updated", "initiative": { "short_id": "IN-7", "name": "Faster exports", "status": "in_progress", "roadmap_column": "now" }, "changes": ["roadmap_column"] }
 ```
 
-`initiative` is the state after the edit. `changes` names the fields it touched: `name`, `description`, `internal_notes`, `status`, `color`, `owner`, `tracked_events` or `roadmap_column`. `roadmap_column` is `now`, `next`, `later` or `null`.
+`initiative` is the state after the edit. `changes` names the fields it touched: `name`, `description`, `internal_notes`, `status`, `color`, `owner`, `tracked_events`, `roadmap_column` or `is_public` (shown on, or taken off, the public roadmap). `roadmap_column` is `now`, `next`, `later` or `null`.
 
 #### `capture.created`
 
@@ -1089,6 +1089,7 @@ X-Crumb-Sweep-Secret: <CRUMB_INTERNAL_SWEEP_SECRET>
 | `replay-sweep` | Prunes unlinked replay sessions, unattached uploads and aged usage events, and renews Jira status webhooks on Cloud. Optional body `{ "graceMs": 86400000, "limit": 500 }`. | Hourly |
 | `crm-sync` | Refreshes accounts and ARR from connected HubSpot or Salesforce. | Every 6 hours |
 | `feedback-sync` | Pulls new conversations from connected feedback sources (Autopilot). | Every 15 to 60 minutes |
+| `digest` | Emails each teammate's daily or weekly digest (at most one per period), then embeds items AI-entitled workspaces still lack on Cloud. | Daily |
 
 They answer `503 sweep_secret_unset` until the secret is set and `401 unauthorized` for a wrong one.
 

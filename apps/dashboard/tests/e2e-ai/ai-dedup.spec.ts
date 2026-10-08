@@ -25,6 +25,11 @@ test("near-duplicate items merge and combine ARR", async ({ page, request }) => 
   }).toPass({ timeout: 45_000 });
 
   await page.getByRole("button", { name: new RegExp(`Merge into ${a}`, "i") }).click();
+  // The confirm says who gets the one "combined" email before anything moves.
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText(`Merge ${b} into ${a}?`);
+  await expect(dialog).toContainText(/Bo at Lumen Health will get one email|won't be emailed/);
+  await dialog.getByRole("button", { name: "Merge", exact: true }).click();
 
   // The canonical (A) now shows the merged rollup.
   await expect(async () => {

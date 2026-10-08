@@ -1,16 +1,17 @@
 import "server-only";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import {
   db, items, replies, replyMentions, attachments, statusEvents,
-  accountUsers, workspaceUsers, workspaces, customerNotifications,
+  accounts, accountUsers, workspaceUsers, workspaces, customerNotifications, type Workspace,
 } from "@crumb/db";
-import { statusLabel, REASON_REQUIRED, VENDOR_STATUSES, type Status } from "@crumb/ui";
+import { statusLabel, CLOSED_STATUSES, REASON_REQUIRED, VENDOR_STATUSES, type Status } from "@crumb/ui";
 import { emitEvent } from "@/lib/webhooks";
 import { notifyWorkspaceChannel } from "@/lib/notify/chat";
 import { notifyAccountChannels } from "@/lib/notify/account-channel";
 import { customerNotifyPlan, statusEmailsCustomer, type NotifyPlan } from "@/lib/notify/customer-plan";
 import { emailConfigured, sendReplyNotification, sendStatusChangeNotification } from "@/lib/email";
 import { notifyMentioned, parseMentionIds } from "@/lib/mention-notify";
+import { notifyAssigned } from "@/lib/vendor-notify";
 import { buildReplyAddress } from "@/lib/reply-token";
 import { hostedThreadPath } from "@/lib/hosted-thread";
 import { log } from "@/lib/log";
@@ -73,17 +74,22 @@ async function loadActor(actor: VendorActor) {
   return { workspace: workspace ?? null, user: user ?? null };
 }
 
-// The item plus its submitter's address + email prefs, scoped to the workspace.
-async function loadItem(workspaceId: string, itemShortId: string) {
-  const [row] = await db
+// Items plus their account name and their submitter's address + email prefs.
+// A fresh query each call; the caller adds the WHERE.
+function selectItemsWithSubmitter() {
+  return db
     .select({
       id: items.id,
+      shortId: items.shortId,
       title: items.title,
       type: items.type,
       status: items.status,
+      mergedIntoId: items.mergedIntoId,
       accountId: items.accountId,
+      accountName: accounts.name,
       source: items.source,
       submitterId: accountUsers.id,
+      submitterName: accountUsers.name,
       submitterEmail: accountUsers.email,
       submitterNotifyReplies: accountUsers.notifyReplies,
       submitterNotifyStatus: accountUsers.notifyStatus,
@@ -92,13 +98,21 @@ async function loadItem(workspaceId: string, itemShortId: string) {
     })
     .from(items)
     .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
+    .innerJoin(accounts, eq(accounts.id, items.accountId));
+}
+
+// One item, scoped to the workspace.
+async function loadItem(workspaceId: string, itemShortId: string) {
+  const [row] = await selectItemsWithSubmitter()
     .where(and(eq(items.workspaceId, workspaceId), eq(items.shortId, itemShortId)))
     .limit(1);
   return row ?? null;
 }
 
+type ItemRow = NonNullable<Awaited<ReturnType<typeof loadItem>>>;
+
 // The same plan the thread renders its "will be emailed" copy from.
-function notifyPlanFor(row: NonNullable<Awaited<ReturnType<typeof loadItem>>>) {
+function notifyPlanFor(row: ItemRow) {
   return customerNotifyPlan({
     source: row.source,
     submitterEmail: row.submitterEmail,
@@ -116,17 +130,91 @@ function shouldSend(plan: NotifyPlan): boolean {
   return plan.willEmail || plan.reason === "not_configured";
 }
 
+// One status email about `row` itself: its title, short id, links and its
+// submitter's unsubscribe link. True only when a real provider accepted it,
+// which is when the loop ledger gets its row and customer.notified fires.
+// Never throws, so a flaky provider can't undo the write that led here.
+async function emailStatus(
+  workspace: Workspace,
+  vendorName: string,
+  row: ItemRow,
+  m: { fromStatus: string | null; toStatus: string; reason: string | null; origin: string | null },
+): Promise<boolean> {
+  let delivered = false;
+  try {
+    delivered = await sendStatusChangeNotification({
+      to: row.submitterEmail,
+      workspaceName: workspace.name,
+      vendorName,
+      itemShortId: row.shortId,
+      itemTitle: row.title,
+      fromStatus: m.fromStatus,
+      toStatus: m.toStatus,
+      reason: m.reason,
+      productUrl: workspace.productUrl,
+      viewUrl: m.origin ? m.origin + hostedThreadPath(row.shortId, workspace.signingSecret) : null,
+      accent: workspace.accent,
+      inboundReplyAddress: inboundReplyAddressFor(row.shortId, workspace.signingSecret),
+      unsubscribeUrl: m.origin ? `${m.origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=status` : null,
+    });
+    // Loop ledger: a status notification for a terminal status is the loop
+    // actually closing — the customer heard the outcome (see Insights).
+    if (delivered) {
+      await db.insert(customerNotifications).values({
+        itemId: row.id,
+        accountUserId: row.submitterId,
+        kind: "status",
+        toStatus: m.toStatus,
+      });
+      void emitEvent(workspace.id, {
+        type: "customer.notified",
+        workspace: workspace.slug,
+        item: { short_id: row.shortId, title: row.title, type: row.type },
+        notification: { kind: "status", channel: "email", to_status: m.toStatus },
+        at: new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    log.error("status notification failed", { scope: "crumb/status", err });
+  }
+  return delivered;
+}
+
+const addressOf = (email: string) => email.trim().toLowerCase();
+
+// The requests merged into `itemId` that still follow it: those reading
+// Duplicate. One a teammate moved on its own (its thread, the bulk bar) has its
+// own status, and got its own email for it.
+const followersOf = (itemId: string) => and(eq(items.mergedIntoId, itemId), eq(items.status, "duplicate"));
+
+// Whether moving a merged request to `status` would only repeat what its
+// canonical's fan-out last told its customer. An email that carries a reason
+// or a message of its own still goes.
+async function repeatsFanOut(row: ItemRow, status: string, message: string | null): Promise<boolean> {
+  if (!row.mergedIntoId || message) return false;
+  const [last] = await db
+    .select({ toStatus: customerNotifications.toStatus })
+    .from(customerNotifications)
+    .where(and(eq(customerNotifications.itemId, row.id), eq(customerNotifications.kind, "status")))
+    .orderBy(desc(customerNotifications.sentAt))
+    .limit(1);
+  return last?.toStatus === status;
+}
+
 // ─── status change ───────────────────────────────────────────
 // `emailed` is true only when a real provider accepted the customer email (the
-// same fact the loop ledger records). The customer is emailed only for
-// outcomes (statusEmailsCustomer); every change still writes status_events and
-// fires webhooks + chat cards. `opts` is internal (reply-and-close): it can
-// suppress this core's email or put a message in it in place of the reason.
+// same fact the loop ledger records); `mergedEmailed` counts the customers
+// whose requests were merged into this one who got theirs. The customer is
+// emailed only for outcomes (statusEmailsCustomer); every change still writes
+// status_events and fires webhooks + chat cards. `opts` is internal:
+// reply-and-close can suppress this core's email or put a message in it in
+// place of the reason, and the changelog passes `alreadyTold`, the (lowercased)
+// addresses its announcement reached, so none of them gets a second email.
 export async function updateItemStatus(
   actor: VendorActor,
   input: { itemShortId: string; status: Status; reason?: string; origin?: string | null },
-  opts: { customerEmail?: boolean; customerMessage?: string } = {},
-): Promise<{ ok: true; emailed: boolean } | { ok: false; error: string }> {
+  opts: { customerEmail?: boolean; customerMessage?: string; alreadyTold?: ReadonlySet<string> } = {},
+): Promise<{ ok: true; emailed: boolean; mergedEmailed: number } | { ok: false; error: string }> {
   if (!ALLOWED_STATUSES.includes(input.status)) return { ok: false, error: "bad_status" };
   const reason = input.reason?.trim() || null;
   if (REASON_REQUIRED.has(input.status) && !reason) return { ok: false, error: "reason_required" };
@@ -142,7 +230,7 @@ export async function updateItemStatus(
 
   // No-op when status hasn't actually changed; avoids spamming the timeline
   // (and webhooks/notifications).
-  if (fromStatus === input.status) return { ok: true, emailed: false };
+  if (fromStatus === input.status) return { ok: true, emailed: false, mergedEmailed: 0 };
 
   await db.update(items).set({ status: input.status, updatedAt: new Date() }).where(eq(items.id, row.id));
   await db.insert(statusEvents).values({
@@ -190,46 +278,56 @@ export async function updateItemStatus(
   // may be emailed (widget-origin, has an address, not muted) is the shared
   // plan; which statuses are worth an email is statusEmailsCustomer.
   let emailed = false;
-  if (opts.customerEmail !== false && statusEmailsCustomer(input.status) && shouldSend(notifyPlanFor(row).status)) {
-    try {
-      emailed = await sendStatusChangeNotification({
-        to: row.submitterEmail,
-        workspaceName: workspace.name,
-        vendorName: user.name,
-        itemShortId: input.itemShortId,
-        itemTitle: row.title,
-        fromStatus,
-        toStatus: input.status,
-        reason: opts.customerMessage || reason,
-        productUrl: workspace.productUrl,
-        viewUrl: origin ? origin + hostedThreadPath(input.itemShortId, workspace.signingSecret) : null,
-        accent: workspace.accent,
-        inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
-        unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=status` : null,
+  let mergedEmailed = 0;
+  const toldElsewhere = (r: ItemRow) => !!opts.alreadyTold?.has(addressOf(r.submitterEmail));
+  if (statusEmailsCustomer(input.status)) {
+    const message = opts.customerMessage || reason;
+    if (
+      opts.customerEmail !== false && !toldElsewhere(row) && shouldSend(notifyPlanFor(row).status)
+      && !(await repeatsFanOut(row, input.status, message))
+    ) {
+      emailed = await emailStatus(workspace, user.name, row, {
+        fromStatus, toStatus: input.status, reason: message, origin,
       });
-      // Loop ledger: a status notification for a terminal status is the loop
-      // actually closing — the customer heard the outcome (see Insights).
-      if (emailed) {
-        await db.insert(customerNotifications).values({
-          itemId: row.id,
-          accountUserId: row.submitterId,
-          kind: "status",
-          toStatus: input.status,
-        });
-        void emitEvent(workspace.id, {
-          type: "customer.notified",
-          workspace: workspace.slug,
-          item: { short_id: input.itemShortId, title: row.title, type: row.type },
-          notification: { kind: "status", channel: "email", to_status: input.status },
-          at: new Date().toISOString(),
-        });
+    }
+    // Customers whose requests were merged into this one and still follow it
+    // hear it too, each about their own item (its status reads Duplicate, hence
+    // no "from") under their own plan, and once per person: whoever was just
+    // told is skipped. They get the status and its standard wording, never the
+    // typed reason or a reply-and-close message: those were written while
+    // looking at this item's customer and can name them or their account.
+    // mergedReach (below) previews this set.
+    // ponytail: sequential sends in the request; move them to the sweep cron
+    // if canonicals start gathering dozens of widget duplicates.
+    const told = new Set(emailed ? [row.submitterId] : []);
+    const merged = await selectItemsWithSubmitter()
+      .where(and(eq(items.workspaceId, workspace.id), followersOf(row.id)));
+    for (const dup of merged) {
+      if (told.has(dup.submitterId) || toldElsewhere(dup) || !shouldSend(notifyPlanFor(dup).status)) continue;
+      if (await emailStatus(workspace, user.name, dup, {
+        fromStatus: null, toStatus: input.status, reason: null, origin,
+      })) {
+        told.add(dup.submitterId);
+        mergedEmailed++;
       }
-    } catch (err) {
-      log.error("status notification failed", { scope: "crumb/status", err });
     }
   }
 
-  return { ok: true, emailed };
+  return { ok: true, emailed, mergedEmailed };
+}
+
+// How many more customers an outcome email on this item reaches: the people
+// whose requests were merged into it (and still follow it) and whose own plan
+// emails them, each once, besides its own submitter when they're emailed. The
+// same set updateItemStatus's fan-out sends to, so the status controls can say
+// who gets the email (and the reason) before the vendor commits.
+export async function mergedReach(workspaceId: string, itemId: string): Promise<number> {
+  const group = await selectItemsWithSubmitter()
+    .where(and(eq(items.workspaceId, workspaceId), or(eq(items.id, itemId), followersOf(itemId))));
+  const head = group.find(r => r.id === itemId);
+  const reached = new Set(group.filter(r => r !== head && notifyPlanFor(r).status.willEmail).map(r => r.submitterId));
+  if (head && notifyPlanFor(head).status.willEmail) reached.delete(head.submitterId);
+  return reached.size;
 }
 
 // ─── vendor reply ────────────────────────────────────────────
@@ -315,7 +413,9 @@ export async function createItemReply(
 
   // Email the customer. Don't fail the action if delivery hiccups — the reply
   // is already in the DB. Who may be emailed is the shared plan (widget-origin,
-  // has an address, replies not muted).
+  // has an address, replies not muted). Only this item's submitter: unlike
+  // status changes, a reply never fans out to requests merged into this one,
+  // because it is written to this customer and can carry their details.
   let emailed = false;
   if (!input.internal && opts.customerEmail !== false && shouldSend(notifyPlanFor(row).replies)) {
     try {
@@ -405,9 +505,12 @@ export async function replyAndSetItemStatus(
 }
 
 // ─── assignment ──────────────────────────────────────────────
+// `notify: false` skips the assignee's alert: the inbox bulk bar sends one
+// summary per assignee instead, and its Undo sends none.
 export async function assignItemTo(
   actor: VendorActor,
   input: { itemShortId: string; assigneeId: string | null },
+  opts: { notify?: boolean } = {},
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!canManage(actor.role)) return { ok: false, error: "forbidden" };
 
@@ -426,12 +529,14 @@ export async function assignItemTo(
     assignee = { id: member.id, name: member.name };
   }
 
+  const where = and(eq(items.workspaceId, workspace.id), eq(items.shortId, input.itemShortId));
+  const [before] = await db.select({ assigneeId: items.assigneeId }).from(items).where(where).limit(1);
   const [row] = await db
     .update(items)
     .set({ assigneeId: input.assigneeId, updatedAt: new Date() })
-    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, input.itemShortId)))
+    .where(where)
     .returning({ id: items.id, title: items.title, type: items.type });
-  if (!row) return { ok: false, error: "not_found" };
+  if (!before || !row) return { ok: false, error: "not_found" };
 
   void emitEvent(workspace.id, {
     type: "item.assigned",
@@ -441,5 +546,55 @@ export async function assignItemTo(
     at: new Date().toISOString(),
   });
 
+  // Tell the new assignee, unless nothing changed or they took it themselves.
+  if (opts.notify !== false && input.assigneeId && input.assigneeId !== before.assigneeId && input.assigneeId !== actor.actorWorkspaceUserId) {
+    void notifyAssigned({
+      workspaceId: workspace.id,
+      itemId: row.id,
+      assigneeId: input.assigneeId,
+      actorWorkspaceUserId: actor.actorWorkspaceUserId,
+    });
+  }
+
   return { ok: true };
+}
+
+// ─── merge notice ────────────────────────────────────────────
+// The one email a customer gets when their request is merged into another
+// (thread actions mergeItems). It is about their own item, never the
+// canonical's title, account or words; from then on they hear the canonical's
+// status changes through updateItemStatus. Same plan and ledger as any status
+// email. True only when a real provider accepted it. Only an open canonical
+// will move again, so only its notice promises news; a closed one says how it
+// ended.
+export function mergeNoticeText(canonicalStatus: string | null): string {
+  const earlier = "We've combined this with an earlier request for the same thing.";
+  if (canonicalStatus === "shipped") return `${earlier} It's already live.`;
+  if (canonicalStatus === "declined") return `${earlier} We've decided not to take it on.`;
+  if (CLOSED_STATUSES.has(canonicalStatus ?? "")) return earlier;
+  return "We've combined this with a request we're already tracking. You'll hear from us here when it moves.";
+}
+
+export async function notifyMergedItem(
+  actor: VendorActor,
+  input: { itemShortId: string; origin?: string | null },
+): Promise<boolean> {
+  if (!canManage(actor.role)) return false;
+  const { workspace, user } = await loadActor(actor);
+  if (!workspace || !user) return false;
+  const row = await loadItem(workspace.id, input.itemShortId);
+  if (!row || !shouldSend(notifyPlanFor(row).status)) return false;
+  const [canonical] = row.mergedIntoId
+    ? await db.select({ status: items.status }).from(items).where(eq(items.id, row.mergedIntoId)).limit(1)
+    : [];
+  return emailStatus(workspace, user.name, row, {
+    fromStatus: null, toStatus: "duplicate", reason: mergeNoticeText(canonical?.status ?? null), origin: input.origin ?? null,
+  });
+}
+
+// Who that email would reach and whether it goes out, from the same plan, so
+// the vendor sees it before confirming a merge (MergePanel).
+export async function mergeNoticePlan(workspaceId: string, itemShortId: string) {
+  const row = await loadItem(workspaceId, itemShortId);
+  return row && { name: row.submitterName, accountName: row.accountName, source: row.source, plan: notifyPlanFor(row).status };
 }

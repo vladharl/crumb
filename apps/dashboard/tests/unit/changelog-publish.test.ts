@@ -58,7 +58,11 @@ describe.skipIf(!reachable && !process.env.CI)("publishChangelogEntry", () => {
       .values({ workspaceId: ws!.id, initiativeId: ini!.id, title: "Dark mode is here", body: "Find it under Settings." })
       .returning({ id: changelogEntries.id });
 
-    expect(await publishChangelogEntry(ws!, entry!.id)).toEqual({ ok: true, notified: 2 });
+    // stdout never counts as delivered, so nothing is reported sent.
+    expect(await publishChangelogEntry(ws!, entry!.id)).toEqual({
+      ok: true, announced: true, delivered: 0, failed: 0, emailOn: false, marked: 0,
+      skipped: { count: 0, sources: [], noEmail: false, muted: false },
+    });
     const mail = Object.fromEntries(sent.map(m => [m.to, m]));
     expect(Object.keys(mail).sort()).toEqual(["asker@initech.test", "fan@initech.test"]);
     for (const m of sent) {

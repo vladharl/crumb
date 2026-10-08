@@ -2,40 +2,36 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Card, CardHead, Field, Pill, Switch } from "@crumb/ui";
+import { Card, CardHead, Field, Switch } from "@crumb/ui";
 import { savePreferences, type PrefsInput } from "./actions";
 
 export type PrefsState = {
   digestFrequency: "off" | "daily" | "weekly";
   newSubmissionRealtime: boolean;
+  assignedRealtime: boolean;
   replyRealtime: boolean;
   mentionRealtime: boolean;
-  statusChangeRealtime: boolean;
-  clusterSuggestionsRealtime: boolean;
   delivery: "email" | "slack" | "none";
 };
 
 type ToggleRow = {
   key: Exclude<keyof PrefsState, "digestFrequency" | "delivery">;
   label: string;
-  cloudOnly?: boolean;
 };
 
+// One row per nudge lib/vendor-notify.ts actually sends.
 const ROWS: ToggleRow[] = [
-  { key: "newSubmissionRealtime", label: "New submission in my accounts" },
-  { key: "replyRealtime",         label: "Reply on an item I'm assigned to" },
+  { key: "newSubmissionRealtime", label: "New submission" },
+  { key: "assignedRealtime",      label: "Assigned to me" },
+  { key: "replyRealtime",         label: "Customer reply" },
   { key: "mentionRealtime",       label: "Mention" },
-  { key: "statusChangeRealtime",  label: "Status change on items I follow" },
-  { key: "clusterSuggestionsRealtime", label: "Cluster suggestions", cloudOnly: true },
 ];
 
 export function PreferencesCard({
   initial,
-  isCloud,
   slackInstalled,
 }: {
   initial: PrefsState;
-  isCloud: boolean;
   slackInstalled: boolean;
 }) {
   const router = useRouter();
@@ -63,7 +59,7 @@ export function PreferencesCard({
             : null}
       />
       <div className="card-body col gap-4">
-        <Field label="Daily email digest">
+        <Field label="Email digest">
           <div className="seg" style={{ width: "100%" }}>
             {(["off", "daily", "weekly"] as const).map(v => (
               <button
@@ -72,7 +68,7 @@ export function PreferencesCard({
                 onClick={() => update("digestFrequency", v)}
                 disabled={pending}
               >
-                {v === "off" ? "Off" : v === "daily" ? "Daily · 9am" : "Weekly"}
+                {v === "off" ? "Off" : v === "daily" ? "Daily" : "Weekly"}
               </button>
             ))}
           </div>
@@ -108,8 +104,6 @@ export function PreferencesCard({
 
         {ROWS.map(r => {
           const value = prefs[r.key];
-          // Hide cluster-suggestions toggle on self-host (Cloud-only feature).
-          if (r.cloudOnly && !isCloud) return null;
           return (
             <div key={r.key} className="row gap-3 center">
               <button
@@ -122,7 +116,6 @@ export function PreferencesCard({
                 <Switch on={value} />
               </button>
               <span className="text-sm grow">{r.label}</span>
-              {r.cloudOnly && <Pill ring ringFill>Cloud</Pill>}
             </div>
           );
         })}

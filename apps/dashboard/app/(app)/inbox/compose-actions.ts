@@ -19,8 +19,21 @@ export async function composeOnBehalf(input: {
   title: string;
   body?: string;
 }): Promise<ComposeResult> {
-  const { workspace } = await getActiveSession();
-  const r = await composeItem({ workspaceId: workspace.id, workspace, ...input });
+  const { workspace, user } = await getActiveSession();
+  // Fields picked one by one: a server action's argument is whatever the
+  // client sent, so spreading it would let it override workspaceId (another
+  // tenant), the plan, the source or the announce/triage flags.
+  const r = await composeItem({
+    workspaceId: workspace.id,
+    workspace,
+    actorWorkspaceUserId: user.id,
+    accountName: input.accountName,
+    submitterEmail: input.submitterEmail,
+    submitterName: input.submitterName,
+    type: input.type,
+    title: input.title,
+    body: input.body,
+  });
   if (!r.ok) return { ok: false, error: r.error };
   revalidatePath("/inbox");
   return { ok: true, shortId: r.shortId };

@@ -28,7 +28,7 @@ export function NotificationsSidebarSkeleton() {
   return (
     <div className="col gap-4">
       <SkeletonCard title="Preferences" lines={6} />
-      <SkeletonCard title="Digest preview · tomorrow 9am" lines={4} />
+      <SkeletonCard title="Digest preview" lines={4} />
     </div>
   );
 }

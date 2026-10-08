@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
-import { db, accounts } from "@crumb/db";
+import { db, accounts, workspaceUsers } from "@crumb/db";
 import { verifySlackSignature } from "@/lib/slack/verify";
 import { workspaceForSlackTeam } from "@/lib/slack/install";
 import { integrationsAllowed } from "@/lib/entitlements";
 import { composeItem } from "@/lib/compose";
+import { SLACK_SOURCE } from "@/lib/feedback/source";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -80,6 +81,15 @@ export async function POST(req: Request) {
   }
 
   const submitterEmail = emailIn || `slack-${payload.user?.id ?? "unknown"}@slack.invalid`;
+  // The teammate who ran /crumb, once their Slack id is known (it's cached the
+  // first time they're DMed): their Trail entry, and no alert to themselves.
+  const [teammate] = payload.user?.id
+    ? await db
+        .select({ id: workspaceUsers.id })
+        .from(workspaceUsers)
+        .where(and(eq(workspaceUsers.workspaceId, ws.id), eq(workspaceUsers.slackUserId, payload.user.id)))
+        .limit(1)
+    : [];
   const r = await composeItem({
     workspaceId: ws.id,
     accountName,
@@ -88,6 +98,9 @@ export async function POST(req: Request) {
     type,
     title,
     body: bodyText,
+    // The customer never opted into Crumb's loop here: don't auto-email them.
+    source: SLACK_SOURCE,
+    actorWorkspaceUserId: teammate?.id ?? null,
   });
   if (!r.ok) {
     log.warn("slack compose failed", { scope: "crumb/slack", error: r.error });

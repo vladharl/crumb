@@ -8,10 +8,9 @@ import { requireSession } from "@/lib/auth";
 export type PrefsInput = {
   digestFrequency?: "off" | "daily" | "weekly";
   newSubmissionRealtime?: boolean;
+  assignedRealtime?: boolean;
   replyRealtime?: boolean;
   mentionRealtime?: boolean;
-  statusChangeRealtime?: boolean;
-  clusterSuggestionsRealtime?: boolean;
   delivery?: "email" | "slack" | "none";
 };
 
@@ -43,17 +42,18 @@ export async function savePreferences(input: PrefsInput): Promise<Result> {
 
   // Upsert: insert defaults if no row exists, otherwise update the provided keys.
   const set: Record<string, unknown> = { updatedAt: new Date() };
-  if (input.digestFrequency !== undefined)            set.digestFrequency = input.digestFrequency;
-  if (input.newSubmissionRealtime !== undefined)      set.newSubmissionRealtime = input.newSubmissionRealtime;
-  if (input.replyRealtime !== undefined)              set.replyRealtime = input.replyRealtime;
-  if (input.mentionRealtime !== undefined)            set.mentionRealtime = input.mentionRealtime;
-  if (input.statusChangeRealtime !== undefined)       set.statusChangeRealtime = input.statusChangeRealtime;
-  if (input.clusterSuggestionsRealtime !== undefined) set.clusterSuggestionsRealtime = input.clusterSuggestionsRealtime;
-  if (input.delivery !== undefined)                   set.delivery = input.delivery;
+  if (input.digestFrequency !== undefined)       set.digestFrequency = input.digestFrequency;
+  if (input.newSubmissionRealtime !== undefined) set.newSubmissionRealtime = input.newSubmissionRealtime;
+  if (input.assignedRealtime !== undefined)      set.assignedRealtime = input.assignedRealtime;
+  if (input.replyRealtime !== undefined)         set.replyRealtime = input.replyRealtime;
+  if (input.mentionRealtime !== undefined)       set.mentionRealtime = input.mentionRealtime;
+  if (input.delivery !== undefined)              set.delivery = input.delivery;
 
   await db
     .insert(notificationPreferences)
-    .values({ workspaceUserId: user.id, ...set })
+    // A first row keeps the default this member had without one: new-submission
+    // alerts on for admins only (lib/vendor-notify.ts nudgeChannel).
+    .values({ workspaceUserId: user.id, newSubmissionRealtime: user.role === "admin", ...set })
     .onConflictDoUpdate({
       target: notificationPreferences.workspaceUserId,
       set,

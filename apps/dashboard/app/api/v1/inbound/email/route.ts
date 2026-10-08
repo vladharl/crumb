@@ -3,7 +3,7 @@ import { secretMatches } from "@/lib/secret-match";
 import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import { parseInboxAddress, verifyInboxToken } from "@/lib/inbound-address";
-import { extractSender, extractSenderName, stripQuotedTail } from "@/lib/inbound-text";
+import { captureFromEmail, normalizeMessageId } from "@/lib/inbound-text";
 import { createInboundCapture } from "@/lib/captures";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { LIMITS } from "@/lib/validation";
@@ -14,10 +14,12 @@ export const runtime = "nodejs";
 // ─── POST /api/v1/inbound/email ────────────────────────────────
 // Forwarded-email capture ("meet customers where they are"). A vendor forwards
 // (or auto-routes) a customer email to the per-workspace inbox address
-// `inbox+<slug>.<token>@<CRUMB_INBOUND_DOMAIN>`. We DON'T create an item — the
-// `From` is often the vendor, not the customer — we create a PENDING capture
-// with an AI-suggested account (Cloud-only) for the vendor to confirm at
-// /captures. Provider-agnostic JSON shape, same as /api/v1/inbound/reply.
+// `inbox+<slug>.<token>@<CRUMB_INBOUND_DOMAIN>`. We DON'T create an item; we
+// create a PENDING capture with an AI-suggested account (Cloud-only) for the
+// vendor to confirm in the Inbox. A forward is attributed to the customer named
+// in its forwarded header block, not the teammate who forwarded it (see
+// captureFromEmail). Provider-agnostic JSON shape, same as /api/v1/inbound/reply;
+// a retry with the same message_id is answered { accepted: false, reason: "duplicate" }.
 
 type InboundPayload = {
   to?: string | string[];
@@ -68,21 +70,23 @@ export async function POST(req: Request) {
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.slug, parsed.slug)).limit(1);
   if (!ws) return NextResponse.json({ error: "workspace_not_found" }, { status: 404 });
 
-  const senderEmail = extractSender(payload.from);
-  const senderName = extractSenderName(payload.from);
-  const subject = payload.subject?.trim().slice(0, 300) || null;
-  const stripped = stripQuotedTail((payload.text ?? "").trim());
-  const body = stripped.length > LIMITS.reply ? stripped.slice(0, LIMITS.reply) : stripped;
+  const mail = captureFromEmail(payload);
+  const subject = mail.subject?.slice(0, 300) || null;
+  const body = mail.body.slice(0, LIMITS.reply);
   if (!subject && !body) return NextResponse.json({ error: "empty" }, { status: 400 });
 
+  const messageId = normalizeMessageId(payload.message_id ?? payload.messageId);
   const captureId = await createInboundCapture(ws, {
     source: "email",
-    fromEmail: senderEmail,
-    fromName: senderName,
+    fromEmail: mail.fromEmail,
+    fromName: mail.fromName,
     subject,
     body,
-    rawMeta: { message_id: payload.message_id ?? payload.messageId ?? null },
+    // A provider retry of this message is a no-op on (workspace, source, external_id).
+    externalId: messageId,
+    rawMeta: { message_id: messageId },
   });
+  if (!captureId) return NextResponse.json({ ok: true, accepted: false, reason: "duplicate" });
 
   return NextResponse.json({ ok: true, captureId });
 }

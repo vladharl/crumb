@@ -48,6 +48,7 @@ export async function createItemFromCapture(input: {
   const r = await composeItem({
     workspaceId: workspace.id,
     workspace,
+    actorWorkspaceUserId: user.id,
     accountName: input.accountName,
     submitterEmail: input.submitterEmail,
     submitterName: input.submitterName,

@@ -1,21 +1,14 @@
 import { NextResponse } from "next/server";
-import { createHash } from "node:crypto";
-import { db, workspaces, workspaceUsers, items, itemEmbeddings, dedupeSuggestions, replies, statusEvents, replaySessions, attachments } from "@crumb/db";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { db, accounts, items, replaySessions } from "@crumb/db";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
-import { clusterConfigured } from "@/lib/ai/cluster";
-import { autoClusterItem } from "@/lib/ai/auto-cluster";
-import { suggestTriage, triageConfigured, TRIAGE_MODEL } from "@/lib/ai/triage";
-import { embedText, embeddingsConfigured, EMBEDDINGS_MODEL, EMBEDDINGS_DIM } from "@/lib/ai/embeddings";
-import { findDuplicateCandidates } from "@/lib/ai/dedup";
-import { withAiBudget } from "@/lib/ai/run";
-import { notifyWorkspaceChannel } from "@/lib/notify/chat";
-import { hasFeature } from "@/lib/entitlements";
+import { createItem } from "@/lib/items/create";
+import { WIDGET_SOURCE } from "@/lib/feedback/source";
 import { createItemSchema, parseJsonBody } from "@/lib/validation";
 import { loopTurn } from "@/lib/loop";
+import { lastTurnSideSql } from "@/lib/loop-sql";
 import { log } from "@/lib/log";
-import type { Workspace } from "@crumb/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -60,16 +53,11 @@ export async function GET(req: Request) {
         WHERE replies.item_id = items.id
           AND replies.internal = false
       )`,
-      // Loop-turn inputs for the launcher: who moved last, and the latest
-      // customer-visible event (reply vs status change) so the whisper tab
-      // can phrase "Maya replied" / "Shipped: …" without another request.
-      lastReplySide: sql<"vendor" | "customer" | null>`(
-        SELECT CASE WHEN r.workspace_user_id IS NOT NULL THEN 'vendor' ELSE 'customer' END
-        FROM replies r
-        WHERE r.item_id = items.id AND r.internal = false
-        ORDER BY r.created_at DESC
-        LIMIT 1
-      )`,
+      // Loop-turn inputs for the launcher: whose turn it is (the same rule
+      // the inbox uses, so the two agree), and the latest customer-visible
+      // event (reply vs status change) so the whisper tab can phrase
+      // "Maya replied" / "Shipped: …" without another request.
+      lastReplySide: lastTurnSideSql(items.id),
       lastReplyAtMs: sql<number | null>`(
         SELECT (EXTRACT(EPOCH FROM MAX(r.created_at)) * 1000)::double precision
         FROM replies r
@@ -171,60 +159,29 @@ export async function POST(req: Request) {
   const wsRl = await checkRateLimitAsync(`items:ws:${ws.id}`, { capacity: 600, refillPerSec: 10 });
   if (!wsRl.ok) return tooManyRequests(wsRl.retryAfterSeconds);
 
-  const [bumped] = await db
-    .update(workspaces)
-    .set({ nextItemSeq: sql`${workspaces.nextItemSeq} + 1` })
-    .where(eq(workspaces.id, ws.id))
-    .returning({ next: workspaces.nextItemSeq });
-  const seq = (bumped?.next ?? 1) - 1;
-  const shortId = `FB-${seq}`;
+  // The account the customer actually belongs to (a JWT body carries no
+  // account_name), for the item.created payload and the Teams post.
+  const [acct] = await db.select({ name: accounts.name }).from(accounts).where(eq(accounts.id, user.accountId)).limit(1);
 
-  const [created] = await db.insert(items).values({
+  // The shared core: sequence, item, "Submitted" event, the seed message with
+  // the compose files, then item.created, the Teams post, the new-submission
+  // alert, and AI clustering + triage + embedding when entitled.
+  const created = await createItem({
     workspaceId: ws.id,
     accountId: user.accountId,
+    accountName: acct?.name ?? "a customer",
     submitterId: user.id,
-    seq,
-    shortId,
-    title: title.trim(),
-    body: (body ?? "").trim(),
+    submitterName: user.name,
     type,
-    status: "open",
+    title,
+    body,
     // Widget-origin: the customer raised this through the embed widget, so they
     // opted into Crumb's loop and may be auto-notified (see lib/feedback/source).
-    source: "widget",
+    source: WIDGET_SOURCE,
     // Page / browser / app build; capped and redacted by createItemSchema.
     context: context ?? null,
-  }).returning();
-
-  // Initial status event so the timeline always starts with "Submitted".
-  await db.insert(statusEvents).values({
-    itemId: created!.id,
-    fromStatus: null,
-    toStatus: "open",
+    attachmentIds: attachment_ids,
   });
-
-  // Seed the first message in the thread so the customer's own words appear in
-  // the reply feed, with the files they attached in compose: their own uploads
-  // not yet on a message, as the reply route links them.
-  const attachmentIds = attachment_ids ?? [];
-  if ((body && body.trim()) || attachmentIds.length) {
-    const [first] = await db.insert(replies).values({
-      itemId: created!.id,
-      accountUserId: user.id,
-      body: (body ?? "").trim(),
-      internal: false,
-    }).returning({ id: replies.id });
-    if (attachmentIds.length) {
-      await db
-        .update(attachments)
-        .set({ replyId: first!.id })
-        .where(and(
-          inArray(attachments.id, attachmentIds),
-          isNull(attachments.replyId),
-          eq(attachments.uploadedByAccountUserId, user.id),
-        ));
-    }
-  }
 
   // Link a replay session if the widget passed a token. Best-effort: the
   // session must belong to this workspace and have ≥1 chunk (empty rows
@@ -243,7 +200,7 @@ export async function POST(req: Request) {
         // every time, and unlocks a future per-customer session view.
         await db
           .update(replaySessions)
-          .set({ itemId: created!.id, accountUserId: user.id })
+          .set({ itemId: created.id, accountUserId: user.id })
           .where(eq(replaySessions.id, replay.id));
       }
     } catch (err) {
@@ -251,134 +208,10 @@ export async function POST(req: Request) {
     }
   }
 
-  // Fire-and-forget AI clustering. Customer doesn't wait for the LLM call
-  // — the item is already saved. Errors get swallowed by the helper.
-  // Gated on the deployment capability (cloud + key) AND this workspace's
-  // plan entitlement.
-  if (clusterConfigured() && hasFeature(ws, "ai")) {
-    void autoClusterItem(ws, { itemId: created!.id, title: created!.title, body: created!.body, type: created!.type });
-  }
-
-  // Fire-and-forget AI auto-triage + embedding (feature 3/4). Same deal: the
-  // item is saved, the customer never waits on the 36 GB model's cold-load.
-  // Triage + embedding share ONE metered unit (withAiBudget) to bound cost on
-  // a path that touches every captured item; clustering above is its own unit.
-  if (hasFeature(ws, "ai") && (triageConfigured() || embeddingsConfigured())) {
-    void autoTriage(ws, created!.id, created!.title, created!.body, created!.type);
-  }
-
-  // Vendor Teams firehose — new submission from the widget (if connected).
-  void notifyWorkspaceChannel(ws.id, {
-    kind: "new_submission",
-    shortId: created!.shortId,
-    title: created!.title,
-    type: created!.type,
-    accountName: account_name ?? "a customer",
-    submitterName: user.name,
-    url: null,
-  });
-
   return cors(NextResponse.json({
-    id: created!.id,
-    short_id: created!.shortId,
-    status: created!.status,
-    created_at: created!.createdAt,
+    id: created.id,
+    short_id: created.shortId,
+    status: created.status,
+    created_at: created.createdAt,
   }, { status: 201 }));
 }
-
-// Triage (advisory ai_* columns) + embedding (item_embeddings, for dedup/
-// search) under a single metered unit. Best-effort: any failure is swallowed
-// — the item is already saved and these are enrichment.
-async function autoTriage(
-  ws: Workspace,
-  itemId: string,
-  title: string,
-  body: string,
-  type: string,
-): Promise<void> {
-  try {
-    const members = await db
-      .select({ id: workspaceUsers.id, name: workspaceUsers.name, role: workspaceUsers.role })
-      .from(workspaceUsers)
-      .where(eq(workspaceUsers.workspaceId, ws.id))
-      .limit(50);
-
-    const res = await withAiBudget(ws, async () => {
-      const triage = triageConfigured() ? await suggestTriage({ title, body, type }, members) : null;
-      const embedding = embeddingsConfigured() ? await embedText(`${title}\n\n${body}`) : null;
-      return { triage, embedding };
-    });
-    if (!res.ok) {
-      if (res.error === "ai_cap_reached") {
-        log.warn("ai cap reached — skipping autoTriage", { scope: "crumb/ai", workspaceId: ws.id });
-      }
-      return;
-    }
-
-    const { triage, embedding } = res.value;
-
-    if (triage) {
-      await db
-        .update(items)
-        .set({
-          aiType: triage.type,
-          aiSeverity: triage.severity,
-          aiSentiment: triage.sentiment,
-          aiUrgency: triage.urgency,
-          aiSuggestedAssigneeId: triage.suggestedAssigneeId,
-          aiTriageReason: triage.reason,
-          aiSummary: triage.summary,
-          aiTriagedAt: new Date(),
-          aiTriageModel: TRIAGE_MODEL,
-          detectedLang: triage.lang,
-        })
-        .where(eq(items.id, itemId));
-    }
-
-    if (embedding) {
-      const contentHash = createHash("sha256").update(`${title}\n\n${body}`).digest("hex");
-      await db
-        .insert(itemEmbeddings)
-        .values({
-          itemId,
-          workspaceId: ws.id,
-          embedding,
-          model: EMBEDDINGS_MODEL,
-          dim: EMBEDDINGS_DIM,
-          contentHash,
-        })
-        .onConflictDoUpdate({
-          target: itemEmbeddings.itemId,
-          set: { embedding, model: EMBEDDINGS_MODEL, contentHash, updatedAt: new Date() },
-        });
-
-      // With the embedding stored, check for a near-duplicate and record a
-      // pending suggestion so the inbox arrives pre-flagged (feature 4). Higher
-      // bar than the thread's browse threshold to keep the auto-flag quiet.
-      try {
-        const [best] = await findDuplicateCandidates({
-          workspaceId: ws.id,
-          itemId,
-          limit: 1,
-          threshold: DEDUP_SUGGEST_THRESHOLD,
-        });
-        if (best) {
-          await db.insert(dedupeSuggestions).values({
-            itemId,
-            candidateItemId: best.itemId,
-            similarity: best.similarity,
-            model: EMBEDDINGS_MODEL,
-          });
-        }
-      } catch (err) {
-        log.error("autoDedup failed", { scope: "crumb/ai", err });
-      }
-    }
-  } catch (err) {
-    log.error("autoTriage failed", { scope: "crumb/ai", err });
-  }
-}
-
-// Only auto-flag a duplicate at capture when we're quite sure — keeps the
-// inbox chip trustworthy. PMs can still browse looser matches in the thread.
-const DEDUP_SUGGEST_THRESHOLD = 0.88;

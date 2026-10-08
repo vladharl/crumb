@@ -11,7 +11,7 @@ import type { Status, VendorStatus } from "@crumb/ui";
 import { translateItem, assignItem, updateType } from "./actions";
 import { useToast } from "@/components/toast";
 import {
-  ReplyComposer, useStatusMove, runAction, firstName, sourceLabel, noEmailNote, statusWillEmail, type ItemNotifyPlan,
+  ReplyComposer, useStatusMove, runAction, firstName, sourceLabel, noEmailNote, statusWillEmail, statusEmailees, reasonNote, type ItemNotifyPlan,
 } from "@/components/ReplyComposer";
 import { InitiativePanel, type ThreadInitiativeOption } from "./InitiativePanel";
 import { ThreadSuggestionCard, type ThreadSuggestion } from "./ThreadSuggestionCard";
@@ -144,6 +144,9 @@ export type ThreadData = {
     } | null;
   };
   notifyPlan: ItemNotifyPlan;
+  // Customers whose requests were merged into this one that an outcome email
+  // also reaches (mergedReach in lib/items/mutations).
+  mergedReach: number;
   account: { id: string; name: string; arrCents: number };
   submitter: { name: string; initials: string };
   assignee: { id: string; initials: string; name: string } | null;
@@ -188,9 +191,11 @@ type TrailEntry =
 export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boolean }) {
   const router = useRouter();
   const toast = useToast();
-  const { item, notifyPlan, account, submitter, assignee, messages, events, notices, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, aiReplyAvailable, replay, usageBreadcrumb, merge } = data;
+  const { item, notifyPlan, mergedReach, account, submitter, assignee, messages, events, notices, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, aiReplyAvailable, replay, usageBreadcrumb, merge } = data;
   const teammateNames = useMemo(() => teammates.map(t => t.name), [teammates]);
   const first = firstName(submitter.name);
+  // Who an outcome email reaches: the submitter (by their plan) and the merged requesters.
+  const emailees = statusEmailees(first, notifyPlan.status.willEmail, mergedReach);
 
   const customerMsgs = messages.filter(m => !m.internal);
   const internalMsgs = messages.filter(m => m.internal);
@@ -220,6 +225,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
     first,
     source: item.source,
     plan: notifyPlan.status,
+    mergedReach,
     onMoved: () => setReasonText(""),
   });
   const shown = statusMove.shown;
@@ -594,9 +600,10 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                 const isCurrent = shown === s;
                 // Going back to the saved status is an undo, so no reason.
                 const needsReason = REASON_REQUIRED.has(s) && s !== item.status;
+                const emails = statusWillEmail(s, item.status, notifyPlan.status, mergedReach);
                 const hint = isCurrent ? "" : [
                   needsReason && "say why",
-                  statusWillEmail(s, item.status, notifyPlan.status) && `emails ${first}`,
+                  emails && `emails ${emailees}`,
                 ].filter(Boolean).join(" · ");
                 return (
                   <div key={s}>
@@ -634,6 +641,9 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                           disabled={statusMove.saving}
                           autoFocus
                         />
+                        {emails && reasonNote(first, notifyPlan.status.willEmail, mergedReach) && (
+                          <span className="text-xs muted">{reasonNote(first, notifyPlan.status.willEmail, mergedReach)}</span>
+                        )}
                         <div className="row gap-2">
                           <Btn sm onClick={() => { setReasonFor(null); setReasonText(""); }} disabled={statusMove.saving}>Cancel</Btn>
                           <Btn sm variant="primary" onClick={submitReason} disabled={statusMove.saving || !reasonText.trim()}>

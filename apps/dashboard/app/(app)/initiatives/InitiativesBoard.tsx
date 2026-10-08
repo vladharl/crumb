@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState, useTransition, type CSSProperties } from "react";
+import { useEffect, useRef, useState, useTransition, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { Card, Switch } from "@crumb/ui";
 import { InitiativeStatusPill } from "./InitiativeChip";
 import { reorderInitiatives, setInitiativePublic } from "./actions";
 import { formatArr } from "@/lib/priority";
+import { sendAfterDelay, STATUS_EMAIL_DELAY_MS } from "@/components/ReplyComposer";
+import { useToast } from "@/components/toast";
 
 export type BoardCol = "now" | "next" | "later";
 export type BoardKey = BoardCol | "unscheduled";
@@ -38,6 +40,31 @@ const COLUMNS: Array<{ key: BoardKey; label: string; hint: string }> = [
 
 const colOf = (key: BoardKey): BoardCol | null => (key === "unscheduled" ? null : key);
 
+const sortCards = (a: BoardItem, b: BoardItem) => a.order - b.order || a.shortId.localeCompare(b.shortId);
+
+// Gives each listed card `column`, and its place in the list as its order.
+function placed(list: BoardItem[], column: BoardCol | null, orderedIds: string[]): BoardItem[] {
+  const pos = new Map(orderedIds.map((id, i) => [id, i]));
+  return list.map(i => {
+    const p = pos.get(i.id);
+    return p === undefined ? i : { ...i, column, order: p };
+  });
+}
+
+// A public card's move to another roadmap column, waiting behind its Undo toast.
+type Held = {
+  id: string;
+  from: { column: BoardCol | null; order: number };
+  column: BoardCol;
+  orderedIds: string[];
+  toastId: number;
+  undo: () => boolean;
+  flush: () => void;
+};
+
+// The board with the held card back where it was.
+const unheld = (list: BoardItem[], h: Held) => list.map(i => (i.id === h.id ? { ...i, ...h.from } : i));
+
 function fmtDate(iso: string): string {
   try {
     return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
@@ -48,30 +75,87 @@ function fmtDate(iso: string): string {
 
 export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[]; canManage: boolean }) {
   const router = useRouter();
+  const toast = useToast();
   const [items, setItems] = useState<BoardItem[]>(initial);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ col: BoardKey; index: number } | null>(null);
+  const held = useRef<Held | null>(null);
+  const server = useRef(initial);
+  server.current = initial;
 
-  useEffect(() => { setItems(initial); }, [initial]);
+  // The server's board, with a held move still showing until it saves or is undone.
+  const serverView = () => {
+    const h = held.current;
+    return h ? placed(server.current, h.column, h.orderedIds) : server.current;
+  };
 
-  const run = (optimistic: BoardItem[], fn: () => Promise<{ ok: boolean; error?: string }>) => {
-    setError(null);
-    setItems(optimistic);
+  useEffect(() => {
+    const h = held.current;
+    setItems(h ? placed(initial, h.column, h.orderedIds) : initial);
+  }, [initial]);
+
+  // Leaving the board saves a held move now, rather than on a timer nothing is
+  // left to undo it from.
+  useEffect(() => () => held.current?.flush(), []);
+
+  const save = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     startTransition(async () => {
       const r = await fn();
       if (!r.ok) {
-        setError(r.error === "forbidden" ? "Only admins and PMs can edit the board." : (r.error ?? "Something went wrong. The board wasn't changed. Try again."));
-        setItems(initial);
+        setError(r.error === "forbidden" ? "Only admins and PMs can edit the board." : "Something went wrong. The board wasn't changed. Try again.");
+        setItems(serverView());
       } else {
         router.refresh();
       }
     });
   };
 
-  const byCol = (key: BoardKey) =>
-    items.filter(i => i.column === colOf(key)).sort((a, b) => a.order - b.order || a.shortId.localeCompare(b.shortId));
+  const run = (optimistic: BoardItem[], fn: () => Promise<{ ok: boolean; error?: string }>) => {
+    setError(null);
+    setItems(optimistic);
+    save(fn);
+  };
+
+  // Drops the held move; true when it stopped in time.
+  function dropHeld(): boolean {
+    const h = held.current;
+    if (!h) return false;
+    held.current = null;
+    toast.dismiss(h.toastId);
+    return h.undo();
+  }
+
+  // A public card landing in another roadmap column emails its followers, so
+  // that move waits behind an Undo toast before it's saved, like a status email
+  // (useStatusMove). Hiding or leaving the page saves it at once.
+  function hold(card: BoardItem, column: BoardCol, orderedIds: string[]) {
+    const pending = sendAfterDelay(() => {
+      // Saving, on time or early: Undo is over.
+      const h = held.current;
+      held.current = null;
+      if (h) toast.dismiss(h.toastId);
+      save(() => reorderInitiatives(column, orderedIds));
+    }, STATUS_EMAIL_DELAY_MS);
+    const label = COLUMNS.find(c => c.key === column)?.label ?? column;
+    const toastId = toast.show({
+      message: `Moved to ${label}. Emailing its followers in ${STATUS_EMAIL_DELAY_MS / 1000} seconds.`,
+      duration: STATUS_EMAIL_DELAY_MS,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          const h = held.current;
+          if (h?.toastId !== toastId || !dropHeld()) return;
+          setItems(list => unheld(list, h));
+          toast.show({ message: "Undone. Its followers weren't emailed." });
+        },
+      },
+    });
+    held.current = { id: card.id, from: { column: card.column, order: card.order }, column, orderedIds, toastId, ...pending };
+  }
+
+  const byCol = (key: BoardKey) => items.filter(i => i.column === colOf(key)).sort(sortCards);
 
   // Scale every initiative's revenue meter against the board's largest, so the
   // bars are comparable across columns. `|| 1` guards the empty board.
@@ -87,29 +171,39 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
   function handleDrop(targetKey: BoardKey) {
     if (!dragId) return;
     const target = colOf(targetKey);
-    const dragged = items.find(i => i.id === dragId);
+    // The latest move of a card wins: its held move is dropped and this one
+    // starts from where the card was. A held move of another card saves now.
+    const h = held.current;
+    let base = items;
+    let undone = false;
+    if (h && h.id === dragId) {
+      if (dropHeld()) { base = unheld(items, h); undone = true; }
+    } else h?.flush();
+    const dragged = base.find(i => i.id === dragId);
     if (!dragged) { setDragId(null); setDropTarget(null); return; }
 
-    const colList = items
-      .filter(i => i.column === target && i.id !== dragId)
-      .sort((a, b) => a.order - b.order || a.shortId.localeCompare(b.shortId));
+    const inTarget = base.filter(i => i.column === target).sort(sortCards);
+    const colList = inTarget.filter(i => i.id !== dragId);
     let index = dropTarget && dropTarget.col === targetKey ? dropTarget.index : colList.length;
     index = Math.max(0, Math.min(index, colList.length));
 
     const orderedIds = [...colList.slice(0, index).map(i => i.id), dragged.id, ...colList.slice(index).map(i => i.id)];
-    const posIn = new Map(orderedIds.map((id, i) => [id, i]));
-
-    const noop = dragged.column === target && colList.map(i => i.id).join() !== "" &&
-      orderedIds.join() === items.filter(i => i.column === target).sort((a, b) => a.order - b.order || a.shortId.localeCompare(b.shortId)).map(i => i.id).join();
+    const noop = dragged.column === target && orderedIds.join() === inTarget.map(i => i.id).join();
+    // Private and unscheduled cards (and moves within a column) email no one.
+    const emails = dragged.isPublic && dragged.followers > 0 && target !== null && target !== dragged.column;
 
     setDragId(null);
     setDropTarget(null);
-    if (noop) return;
+    if (undone && !emails) toast.show({ message: "Undone. Its followers weren't emailed." });
+    if (noop) {
+      if (undone) setItems(base);
+      return;
+    }
 
-    run(items.map(i => {
-      const p = posIn.get(i.id);
-      return p === undefined ? i : { ...i, column: target, order: p };
-    }), () => reorderInitiatives(target, orderedIds));
+    setError(null);
+    setItems(placed(base, target, orderedIds));
+    if (emails && target !== null) hold(dragged, target, orderedIds);
+    else save(() => reorderInitiatives(target, orderedIds));
   }
 
   return (
@@ -132,7 +226,7 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
         </Card>
       )}
       {canManage && items.length > 0 && (
-        <span className="board-drag-hint text-xs muted">Drag cards to schedule and reorder them. Toggle <strong style={{ fontWeight: 600 }}>Public</strong> to show an initiative on the customer roadmap.</span>
+        <span className="board-drag-hint text-xs muted">Drag cards to schedule and reorder them. Toggle <strong style={{ fontWeight: 600 }}>Public</strong> to show an initiative on the customer roadmap. Moving a public card to another column emails its followers, after a few seconds to undo.</span>
       )}
       <div className="board-cols">
         {COLUMNS.map(c => {

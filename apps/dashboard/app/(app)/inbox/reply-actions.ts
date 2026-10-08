@@ -7,6 +7,7 @@ import { replyConfigured } from "@/lib/ai/reply";
 import { hasFeature } from "@/lib/entitlements";
 import { emailConfigured } from "@/lib/email";
 import { customerNotifyPlan } from "@/lib/notify/customer-plan";
+import { mergedReach } from "@/lib/items/mutations";
 
 export type ReplyDrawerMessage = {
   id: string;
@@ -43,6 +44,9 @@ export type ReplyContext = {
   // Whether a reply / status change will actually email the submitter: the
   // same plan the send paths gate on, so the drawer's copy can't drift.
   notifyPlan: ReturnType<typeof customerNotifyPlan>;
+  // Customers whose requests were merged into this one that an outcome email
+  // also reaches (mergedReach in lib/items/mutations).
+  mergedReach: number;
 };
 
 // How many recent messages each tab shows in the drawer. The full trail lives
@@ -99,7 +103,9 @@ export async function getReplyContext(
       .orderBy(desc(replies.createdAt))
       .limit(PER_TAB)
       .then(rows => rows.reverse());
-  const [customerRows, internalRows] = await Promise.all([lastReplies(false), lastReplies(true)]);
+  const [customerRows, internalRows, reach] = await Promise.all([
+    lastReplies(false), lastReplies(true), mergedReach(workspace.id, head.id),
+  ]);
 
   const replyIds = [...customerRows, ...internalRows].map(r => r.id);
   const attRows = replyIds.length === 0 ? [] : await db
@@ -163,6 +169,7 @@ export async function getReplyContext(
         notifyStatus: head.submitterNotifyStatus,
         emailConfigured: emailConfigured(),
       }),
+      mergedReach: reach,
     },
   };
 }

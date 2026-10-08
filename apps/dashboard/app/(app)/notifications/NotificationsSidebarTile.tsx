@@ -1,105 +1,73 @@
 import Link from "next/link";
 import { Btn, Card, CardHead, StatusDot } from "@crumb/ui";
-import { db, items, accounts, accountUsers, notificationPreferences, replies } from "@crumb/db";
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { db, notificationPreferences, type WorkspaceUser } from "@crumb/db";
+import { eq } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
-import { isCloud } from "@/lib/tier";
+import { previewDigest } from "@/lib/vendor-notify";
 import { PreferencesCard, type PrefsState } from "./PreferencesCard";
 
-const DEFAULT_PREFS: PrefsState = {
-  digestFrequency: "daily",
-  newSubmissionRealtime: true,
-  replyRealtime: true,
-  mentionRealtime: true,
-  statusChangeRealtime: false,
-  clusterSuggestionsRealtime: false,
-  delivery: "email",
-};
-
-async function loadPreferences(workspaceUserId: string): Promise<PrefsState> {
+async function loadPreferences(user: Pick<WorkspaceUser, "id" | "role">): Promise<PrefsState & { lastDigestAt: Date | null }> {
   const [row] = await db
     .select()
     .from(notificationPreferences)
-    .where(eq(notificationPreferences.workspaceUserId, workspaceUserId))
+    .where(eq(notificationPreferences.workspaceUserId, user.id))
     .limit(1);
-  if (!row) return DEFAULT_PREFS;
+  // No saved row: the defaults the nudges apply (lib/vendor-notify.ts), which
+  // keep new-submission alerts to admins.
+  if (!row) {
+    return {
+      digestFrequency: "daily",
+      newSubmissionRealtime: user.role === "admin",
+      assignedRealtime: true,
+      replyRealtime: true,
+      mentionRealtime: true,
+      delivery: "email",
+      lastDigestAt: null,
+    };
+  }
   return {
     digestFrequency: (row.digestFrequency as PrefsState["digestFrequency"]),
     newSubmissionRealtime: row.newSubmissionRealtime,
+    assignedRealtime: row.assignedRealtime,
     replyRealtime: row.replyRealtime,
     mentionRealtime: row.mentionRealtime,
-    statusChangeRealtime: row.statusChangeRealtime,
-    clusterSuggestionsRealtime: row.clusterSuggestionsRealtime,
     delivery: (row.delivery as PrefsState["delivery"]),
+    lastDigestAt: row.lastDigestAt,
   };
-}
-
-// "Last 24 hours" preview for the digest card. Scoped to recent items +
-// recent customer replies so we get the same "what's about to be in
-// tomorrow's email" shape without re-querying the full feed.
-async function loadLastDay(workspaceId: string) {
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-  const recentItems = await db
-    .select({
-      what: sql<string>`'New:'`,
-      item: items.title,
-      whoSub: accounts.name,
-      at: items.createdAt,
-    })
-    .from(items)
-    .innerJoin(accounts, eq(accounts.id, items.accountId))
-    .where(and(eq(items.workspaceId, workspaceId), gt(items.createdAt, since)))
-    .orderBy(desc(items.createdAt))
-    .limit(8);
-
-  const recentReplies = await db
-    .select({
-      what: sql<string>`'Reply:'`,
-      item: items.title,
-      whoSub: accounts.name,
-      at: replies.createdAt,
-    })
-    .from(replies)
-    .innerJoin(items, eq(items.id, replies.itemId))
-    .innerJoin(accounts, eq(accounts.id, items.accountId))
-    .leftJoin(accountUsers, eq(accountUsers.id, replies.accountUserId))
-    .where(and(eq(items.workspaceId, workspaceId), gt(replies.createdAt, since), eq(replies.internal, false)))
-    .orderBy(desc(replies.createdAt))
-    .limit(8);
-
-  const all = [...recentItems, ...recentReplies].sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, 8);
-  const accountsTouched = new Set(all.map(e => e.whoSub)).size;
-  return { entries: all, accountsTouched };
 }
 
 export async function NotificationsSidebarTile() {
   const { workspace, user } = await getActiveSession();
-  const [prefs, lastDay] = await Promise.all([
-    loadPreferences(user.id),
-    loadLastDay(workspace.id),
-  ]);
+  const { lastDigestAt, ...prefs } = await loadPreferences(user);
+  // The same sections the digest email would carry right now.
+  const digest = await previewDigest(workspace.id, { id: user.id, frequency: prefs.digestFrequency, lastDigestAt });
 
-  const digestLine = lastDay.entries.length === 0
-    ? "Today's trail: nothing new. Quiet day."
-    : `Today's trail: ${lastDay.entries.length} ${lastDay.entries.length === 1 ? "event" : "events"} across ${lastDay.accountsTouched} ${lastDay.accountsTouched === 1 ? "account" : "accounts"}.`;
+  const headline = digest.sections.length === 0
+    ? "Nothing to report yet. Quiet day."
+    : digest.waiting > 0
+      ? `${digest.waiting} ${digest.waiting === 1 ? "loop" : "loops"} waiting on your team.`
+      : "Nothing waiting on your team.";
 
   return (
     <div className="col gap-4">
-      <PreferencesCard initial={prefs} isCloud={isCloud()} slackInstalled={!!workspace.slackBotToken} />
+      <PreferencesCard initial={prefs} slackInstalled={!!workspace.slackBotToken} />
 
       <Card>
-        <CardHead title="Digest preview · tomorrow 9am" />
+        <CardHead title="Digest preview" />
         <div className="card-body col gap-3">
-          <div className="text-xs muted mono">from noreply@crumb.localhostlabs.net</div>
-          <div className="display" style={{ fontSize: 22, lineHeight: 1.25 }}>{digestLine}</div>
-          {lastDay.entries.length > 0 && (
+          <div className="text-xs muted">
+            {prefs.digestFrequency === "off"
+              ? "Your digest is off. This is what it would say."
+              : `What your next ${prefs.digestFrequency} digest says right now.`}
+          </div>
+          <div className="display" style={{ fontSize: 22, lineHeight: 1.25 }}>{headline}</div>
+          {digest.sections.length > 0 && (
             <div className="col gap-2 text-sm">
-              {lastDay.entries.slice(0, 4).map((e, i) => (
-                <div key={i} className="row gap-3 center">
+              {digest.sections.map(s => (
+                <div key={s.heading} className="row gap-3 center">
                   <StatusDot status="open" />
-                  <span className="grow truncate">{e.what} {e.item}</span>
-                  <span className="muted">{e.whoSub}</span>
+                  <span className="grow truncate">{s.heading}</span>
+                  <span className="muted">{s.total}</span>
                 </div>
               ))}
             </div>

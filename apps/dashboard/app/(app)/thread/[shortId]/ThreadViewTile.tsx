@@ -13,6 +13,7 @@ import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { eventsBefore } from "@/lib/usage/signals";
 import { emailConfigured } from "@/lib/email";
 import { customerNotifyPlan } from "@/lib/notify/customer-plan";
+import { mergedReach } from "@/lib/items/mutations";
 import { ThreadView, type ThreadData } from "./ThreadView";
 
 // Combined ARR + follower count over a merge group {canonical} ∪ {its
@@ -183,6 +184,7 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
     suggestionRow,
     replayManifest,
     usageBreadcrumb,
+    reach,
   ] = await Promise.all([
     head.mergedIntoId
       ? db
@@ -266,6 +268,7 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       .then((r) => r[0] ?? null),
     getReplayForItem(head.shortId, workspaceId),
     loadUsageBreadcrumb(workspace, head.submitterId, head.createdAt),
+    mergedReach(workspaceId, head.id),
   ]);
 
   const { combinedArrCents, accountCount, followerCount } = mergeGroup;
@@ -422,6 +425,7 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       notifyStatus: head.submitterNotifyStatus,
       emailConfigured: emailConfigured(),
     }),
+    mergedReach: reach,
     account: {
       id: head.accountId,
       name: head.accountName,

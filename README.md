@@ -161,6 +161,8 @@ CRUMB_EMAIL_FROM="Crumb <crumb@yourdomain.com>"
 
 Any sender domain you use must have SPF/DKIM set up at the provider first or messages won't deliver.
 
+Crumb starts at most `CRUMB_EMAIL_SENDS_PER_SEC` emails a second (default 2, Resend's default limit), shared by digests, alerts and announcements, and retries a Resend 429 after its `Retry-After`. Raise it to match your provider's limit; with several dashboard processes on one account, split the limit between them.
+
 ### Inbound email replies
 
 When a vendor replies to a thread, the customer gets an email sent as `<Workspace> via Crumb`. Without inbound wiring, it goes out from `noreply@` on your `CRUMB_EMAIL_FROM` domain. To let customers reply by email and land back on the thread:
@@ -503,11 +505,12 @@ Schedule the dump however you like (host cron, a sidecar) and ship the file off-
 
 ### Maintenance cron
 
-Three internal endpoints do scheduled work. Set `CRUMB_INTERNAL_SWEEP_SECRET`, then `POST` to each with the header `X-Crumb-Sweep-Secret: <secret>` (they return 503 until the secret is set):
+Four internal endpoints do scheduled work. Set `CRUMB_INTERNAL_SWEEP_SECRET`, then `POST` to each with the header `X-Crumb-Sweep-Secret: <secret>` (they return 503 until the secret is set):
 
 - `/api/v1/internal/replay-sweep`, hourly: prunes orphaned uploads and replay sessions, enforces replay retention, drops aged usage events (a bounded batch per run).
 - `/api/v1/internal/crm-sync`, every few hours: refreshes accounts and ARR from a connected CRM.
 - `/api/v1/internal/feedback-sync`, every 15 to 30 minutes: pulls new tickets and calls from connected feedback sources.
+- `/api/v1/internal/digest`, daily: emails each teammate's daily or weekly digest (at most one per period), then embeds the items AI-entitled workspaces still lack, so dedup and Similar items cover them (Cloud).
 
 ```bash
 curl -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" \

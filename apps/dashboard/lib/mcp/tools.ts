@@ -9,6 +9,7 @@ import {
   ALLOWED_STATUSES, type Status, type VendorActor,
 } from "@/lib/items/mutations";
 import { composeItem, COMPOSE_ALLOWED_TYPES } from "@/lib/compose";
+import { MCP_SOURCE } from "@/lib/feedback/source";
 
 // MCP tool registry. Each tool is a JSON-RPC-callable function exposed to a
 // connected AI client (Claude/Cursor) over the /api/mcp endpoint. Read tools
@@ -409,6 +410,10 @@ export const TOOLS: ToolDef[] = [
         title,
         body: str(args.body) ?? undefined,
         workspace: ws ?? undefined,
+        // The customer never opted into Crumb's loop here: don't auto-email them.
+        source: MCP_SOURCE,
+        // The key's owner logged it: their Trail entry, and no alert to themselves.
+        actorWorkspaceUserId: ctx.actorWorkspaceUserId,
       }));
       return { ok: true, short_id: r.shortId, account: r.accountName };
     },
