@@ -225,6 +225,13 @@
       "when": 1791449922079,
       "tag": "0031_tough_lady_bullseye",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791466955390,
+      "tag": "0032_private_initiative_changelog_private",
+      "breakpoints": true
     }
   ]
 }

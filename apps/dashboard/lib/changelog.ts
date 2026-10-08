@@ -111,6 +111,27 @@ type Recipient = { id: string; email: string; unsubToken: string; reason: "asked
 
 const addr = (email: string) => email.trim().toLowerCase();
 
+// The loop ledger: who a provider accepted a Shipped status email for, about
+// one of the initiative's requests or one merged into them. Lowercased.
+async function toldShipped(workspaceId: string, initiativeId: string): Promise<Set<string>> {
+  const linked = db
+    .select({ id: items.id })
+    .from(items)
+    .where(and(eq(items.workspaceId, workspaceId), eq(items.initiativeId, initiativeId)));
+  const rows = await db
+    .select({ email: accountUsers.email })
+    .from(customerNotifications)
+    .innerJoin(items, eq(items.id, customerNotifications.itemId))
+    .innerJoin(accountUsers, eq(accountUsers.id, customerNotifications.accountUserId))
+    .where(and(
+      eq(items.workspaceId, workspaceId),
+      or(eq(items.initiativeId, initiativeId), inArray(items.mergedIntoId, linked)),
+      eq(customerNotifications.kind, "status"),
+      eq(customerNotifications.toStatus, "shipped"),
+    ));
+  return new Set(rows.map(r => addr(r.email)));
+}
+
 // Everyone the announcement is for: item submitters on the initiative and its
 // followers, deduped by address. Anyone reachable through either counts once,
 // and asking wins over following for the email's footer. Whoever a Shipped
@@ -128,11 +149,7 @@ async function audienceOf(
     unsubscribedAll: accountUsers.unsubscribedAll,
     notifyRoadmap: accountUsers.notifyRoadmap,
   };
-  const linked = db
-    .select({ id: items.id })
-    .from(items)
-    .where(and(eq(items.workspaceId, workspaceId), eq(items.initiativeId, initiativeId)));
-  const [asked, follows, shippedTold] = await Promise.all([
+  const [asked, follows, toldBefore] = await Promise.all([
     db
       .select({ ...person, source: items.source })
       .from(items)
@@ -143,21 +160,9 @@ async function audienceOf(
       .from(roadmapFollows)
       .innerJoin(accountUsers, eq(accountUsers.id, roadmapFollows.accountUserId))
       .where(eq(roadmapFollows.initiativeId, initiativeId)),
-    // The loop ledger: a provider accepted their Shipped status email.
-    db
-      .select({ email: accountUsers.email })
-      .from(customerNotifications)
-      .innerJoin(items, eq(items.id, customerNotifications.itemId))
-      .innerJoin(accountUsers, eq(accountUsers.id, customerNotifications.accountUserId))
-      .where(and(
-        eq(items.workspaceId, workspaceId),
-        or(eq(items.initiativeId, initiativeId), inArray(items.mergedIntoId, linked)),
-        eq(customerNotifications.kind, "status"),
-        eq(customerNotifications.toStatus, "shipped"),
-      )),
+    toldShipped(workspaceId, initiativeId),
   ]);
 
-  const toldBefore = new Set(shippedTold.map(t => addr(t.email)));
   const heard = new Set<string>();
   const reached = new Map<string, Recipient>();
   const missed: Array<{ key: string; why: NotifySkipReason; source: string | null }> = [];
@@ -359,6 +364,7 @@ export async function publishChangelogEntry(
   });
 
   let marked = 0;
+  let heard = toldBefore;
   if (opts.markShipped) {
     const actor = opts.markShipped;
     const open = await db
@@ -379,11 +385,17 @@ export async function publishChangelogEntry(
       });
       if (r.ok) marked++;
     });
+    // Whoever those Shipped emails reached is in the ledger now too. The emails
+    // are out, so a failed read falls back rather than failing the publish.
+    heard = await toldShipped(ws.id, initiativeId).catch((err: unknown) => {
+      log.error("shipped ledger read failed", { scope: "crumb/changelog", err });
+      return toldBefore;
+    });
   }
 
   if (told.size > 0) await recordTold(ws, initiativeId, told);
   // Public followers the announcement reached, or who already heard, aren't emailed twice.
-  const followers = await tellPublicFollowers(ws, entry, origin, [...told, ...toldBefore]);
+  const followers = await tellPublicFollowers(ws, entry, origin, [...told, ...heard]);
 
   log.info("changelog published", { scope: "crumb/changelog", workspaceId: ws.id, entryId, delivered, failed, followers, marked });
   return { ok: true, announced: true, delivered, failed, followers, skipped, emailOn, marked };

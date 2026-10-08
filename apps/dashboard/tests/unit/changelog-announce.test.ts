@@ -1,6 +1,8 @@
 import { afterAll, describe, it, expect, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { eq, inArray, sql } from "drizzle-orm";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { eq, inArray, sql, TransactionRollbackError } from "drizzle-orm";
 import {
   db, accounts, accountUsers, changelogEntries, customerNotifications, initiatives, items, roadmapFollows,
   workspaces, workspaceUsers,
@@ -201,5 +203,39 @@ describe.skipIf(!reachable && !process.env.CI)("announcing a shipped initiative"
     ]).returning({ id: initiatives.id });
     expect((await draftChangelogForInitiative(ws!, priv!.id))?.isPublic).toBe(false);
     expect((await draftChangelogForInitiative(ws!, pub!.id))?.isPublic).toBe(true);
+  });
+
+  it("upgrades private initiatives' entries to private, and leaves the rest alone", async () => {
+    const [ws] = await db.insert(workspaces)
+      .values({ slug: `backfill-${randomUUID().slice(0, 8)}`, name: "Acme" })
+      .returning();
+    created.push(ws!.id);
+    const [globex, sso, dark] = await db.insert(initiatives).values([
+      { workspaceId: ws!.id, seq: 1, shortId: "IN-1", name: "Dedicated DB for Globex", status: "shipped", isPublic: false },
+      { workspaceId: ws!.id, seq: 2, shortId: "IN-2", name: "SSO for Globex", status: "shipped", isPublic: false },
+      { workspaceId: ws!.id, seq: 3, shortId: "IN-3", name: "Dark mode", status: "shipped", isPublic: true },
+    ]).returning({ id: initiatives.id });
+    // Public, whatever the initiative, as drafting used to write them.
+    await db.insert(changelogEntries).values([
+      { workspaceId: ws!.id, initiativeId: globex!.id, title: "Dedicated DB for Globex", publishedAt: new Date() },
+      { workspaceId: ws!.id, initiativeId: sso!.id, title: "SSO for Globex" }, // a draft
+      { workspaceId: ws!.id, initiativeId: dark!.id, title: "Dark mode", publishedAt: new Date() },
+      { workspaceId: ws!.id, title: "Faster search", publishedAt: new Date() },
+    ]);
+
+    // The migration spans every workspace, so it runs in a transaction that
+    // rolls back: other tests' rows stay as they are.
+    const backfill = readFileSync(resolve(__dirname, "../../../../packages/db/drizzle/0032_private_initiative_changelog_private.sql"), "utf8");
+    let after: Record<string, boolean> = {};
+    await db.transaction(async tx => {
+      await tx.execute(sql.raw(backfill));
+      const rows = await tx
+        .select({ title: changelogEntries.title, isPublic: changelogEntries.isPublic })
+        .from(changelogEntries)
+        .where(eq(changelogEntries.workspaceId, ws!.id));
+      after = Object.fromEntries(rows.map(r => [r.title, r.isPublic]));
+      tx.rollback();
+    }).catch((err: unknown) => { if (!(err instanceof TransactionRollbackError)) throw err; });
+    expect(after).toEqual({ "Dedicated DB for Globex": false, "SSO for Globex": false, "Dark mode": true, "Faster search": true });
   });
 });

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
 import {
   db, accounts, accountUsers, changelogEntries, customerNotifications, initiatives, items, publicFollows,
-  roadmapFollows, workspaces,
+  roadmapFollows, workspaces, workspaceUsers,
 } from "@crumb/db";
 import type { OutgoingEmail } from "@/lib/email/provider";
 
@@ -152,5 +152,39 @@ describe.skipIf(!reachable && !process.env.CI)("changelog followers and order", 
     await db.update(changelogEntries).set({ publishedAt: day(2) }).where(eq(changelogEntries.id, late!.id));
     await db.insert(changelogEntries).values({ workspaceId: ws!.id, title: "Draft", body: "" });
     expect((await listPublicChangelog(ws!.id)).map(e => e.title)).toEqual(["Dark mode is here", "Quiet fix", "Faster search"]);
+  });
+
+  it("leaves out a follower the Shipped email about their own request just told", async () => {
+    const [ws] = await db.insert(workspaces)
+      .values({ slug: `followers-${randomUUID().slice(0, 8)}`, name: "Acme", publicPagesEnabled: true })
+      .returning();
+    created.push(ws!.id);
+    const [pm] = await db.insert(workspaceUsers)
+      .values({ workspaceId: ws!.id, email: "pat@acme.test", name: "Pat", initials: "P", role: "admin" })
+      .returning({ id: workspaceUsers.id });
+    const [acct] = await db.insert(accounts).values({ workspaceId: ws!.id, name: "Initech" }).returning({ id: accounts.id });
+    // Roadmap emails off, so the announcement skips Eve; Shipped emails on.
+    const [eve] = await db.insert(accountUsers)
+      .values({ workspaceId: ws!.id, accountId: acct!.id, email: "eve@initech.test", name: "Eve", initials: "E", notifyRoadmap: false })
+      .returning({ id: accountUsers.id });
+    const [ini] = await db.insert(initiatives)
+      .values({ workspaceId: ws!.id, seq: 1, shortId: "IN-1", name: "Dark mode", status: "shipped" })
+      .returning({ id: initiatives.id });
+    await db.insert(items).values({
+      workspaceId: ws!.id, accountId: acct!.id, submitterId: eve!.id, initiativeId: ini!.id,
+      seq: 1, shortId: "FB-1", title: "Dark theme please", type: "idea", source: "widget",
+    });
+    const [entry] = await db.insert(changelogEntries)
+      .values({ workspaceId: ws!.id, initiativeId: ini!.id, title: "Dark mode is here", body: "" })
+      .returning({ id: changelogEntries.id });
+
+    h.sent.length = 0;
+    const r = await publishChangelogEntry(ws!, entry!.id, {
+      origin: "https://crumb.test",
+      markShipped: { workspaceId: ws!.id, actorWorkspaceUserId: pm!.id, role: "admin" },
+    });
+    expect(r).toMatchObject({ ok: true, delivered: 0, marked: 1 });
+    expect(h.sent.map(m => [m.to, m.subject])).toEqual([["eve@initech.test", "Shipped: Dark theme please"]]);
+    expect(h.notified.at(-1)).toMatchObject({ title: "Dark mode is here", skip: ["eve@initech.test"] });
   });
 });
