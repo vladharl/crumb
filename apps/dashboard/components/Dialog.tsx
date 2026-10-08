@@ -35,6 +35,10 @@ export function wrapTab<T>(stops: readonly T[], active: T | null, back: boolean)
   return at === -1 || at === stops.length - 1 ? stops[0] : null;
 }
 
+// Open modal cards, innermost last: only the top one answers keys that land
+// outside every card.
+const openCards: HTMLElement[] = [];
+
 /**
  * What makes a dialog modal while `open`. The rest of the page goes inert
  * (live regions excepted, so toasts still speak). Focus moves into `card`
@@ -57,6 +61,8 @@ export function useModal(
   else if (!opener.current && typeof document !== "undefined") opener.current = document.activeElement;
   // Where focus settled, so a StrictMode remount puts it back there.
   const landed = useRef<HTMLElement | null>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useLayoutEffect(() => {
     const root = rootRef.current;
@@ -82,7 +88,28 @@ export function useModal(
     }
     landed.current = card.contains(document.activeElement) ? (document.activeElement as HTMLElement) : null;
 
+    // Focus can leave the card without leaving the dialog: a button that turns
+    // disabled while it works drops focus to <body>, where the card's own
+    // handler never hears a key. Escape still closes, and Tab goes back in.
+    openCards.push(card);
+    const onPageKey = (e: KeyboardEvent) => {
+      if (openCards[openCards.length - 1] !== card || card.contains(document.activeElement)) return;
+      if (e.defaultPrevented || e.isComposing) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeRef.current();
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        const stops = tabStops(card);
+        ((e.shiftKey ? stops[stops.length - 1] : stops[0]) ?? card).focus();
+      }
+    };
+    document.addEventListener("keydown", onPageKey);
+
     return () => {
+      document.removeEventListener("keydown", onPageKey);
+      const at = openCards.lastIndexOf(card);
+      if (at >= 0) openCards.splice(at, 1);
       for (const el of quieted) el.inert = false;
       if (back instanceof HTMLElement && back.isConnected) back.focus();
     };

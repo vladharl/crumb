@@ -54,6 +54,16 @@ test("the inbox answers to j, ?, Escape and Enter, and arrows still scroll from 
   await page.keyboard.press("Escape");
   await expect(sheet).toBeHidden();
 
+  // Focus can fall out of a dialog (a button disabling itself drops it to
+  // <body>); Escape still closes it, and the page isn't left inert.
+  await page.keyboard.press("?");
+  await expect(sheet).toBeVisible();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  expect(await page.evaluate(() => !!document.querySelector("main")?.closest("[inert]"))).toBe(false);
+
   await page.keyboard.press("Enter");
   await page.waitForURL(/\/thread\/FB-\d+$/, { timeout: 30_000 });
 });
