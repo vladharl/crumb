@@ -15,8 +15,9 @@ You'll need **Node 22+**, **pnpm 11+**, and **Docker** (for Postgres).
 
 ```bash
 pnpm install
-pnpm db:up         # boots Postgres 16 in Docker on :5432
-pnpm db:push       # applies the schema
+pnpm db:up         # boots Postgres 16 (with pgvector) in Docker on :5432
+export DATABASE_URL=postgres://crumb:crumb@localhost:5432/crumb
+pnpm db:migrate    # applies the migrations, which also create the pgcrypto + vector extensions
 pnpm db:seed       # seeds the sample "southbeam" workspace
 pnpm widget:build  # builds the embed widget → apps/dashboard/public/widget.js
 cp apps/dashboard/.env.local.example apps/dashboard/.env.local
@@ -49,7 +50,8 @@ Crumb ships from one repo as two builds. The default **community** build is open
 - **Match the surrounding code.** Follow the existing TypeScript style and patterns; keep changes focused.
 - **One logical change per PR.** Smaller PRs get reviewed faster.
 - **Reference the issue** your PR addresses (e.g. "Closes #123") and describe what changed and why.
-- **Update docs** if you changed behavior, env vars, or the API.
+- **Schema changes** go in `packages/db/src/schema.ts`; then run `pnpm db:generate` and commit the new migration under `packages/db/drizzle/`.
+- **Update docs** if you changed behavior, env vars, or the API. A new env var belongs in `apps/dashboard/.env.local.example`; Docker Compose passes everything in `.env` to the container, so there's no compose allowlist to update.
 
 CI runs type-checks, unit tests, and a both-edition build on every PR, plus a secrets scan — please make sure those pass.
 

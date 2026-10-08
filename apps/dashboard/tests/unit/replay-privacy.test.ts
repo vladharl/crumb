@@ -108,14 +108,12 @@ describe("replay retention", () => {
     expect(retentionDaysForPlan("team")).toBe(0);
   });
 
-  // Compose passes env to the container by an explicit allowlist. Without these
-  // lines an operator's "0 = keep forever" never arrives and the 30-day default
-  // deletes replays anyway.
+  // Compose hands .env to the container through env_file. An environment entry
+  // for these would override the operator's "0 = keep forever" with the
+  // 30-day default and delete replays anyway.
   it("reaches the docker-compose container", () => {
     const compose = readFileSync(resolve(__dirname, "../../../../docker-compose.yml"), "utf8");
-    for (const plan of ["", "_FREE", "_TEAM", "_GROWTH"]) {
-      const name = `CRUMB_REPLAY_RETENTION_DAYS${plan}`;
-      expect(compose).toContain(`${name}: \${${name}:-}`);
-    }
+    expect(compose).toMatch(/env_file:\n\s+- path: \.env\n\s+required: false/);
+    expect(compose).not.toContain("CRUMB_REPLAY_RETENTION_DAYS:");
   });
 });

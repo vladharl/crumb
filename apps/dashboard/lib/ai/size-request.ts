@@ -1,7 +1,7 @@
 import "server-only";
 import { isCloud } from "@/lib/tier";
 import { log } from "@/lib/log";
-import { aistackChat, aistackConfigured, AISTACK_MODEL } from "@/lib/ai/aistack";
+import { aistackChat, aistackConfigured, AISTACK_MODEL, NO_EM_DASH_RULE } from "@/lib/ai/aistack";
 import { parseJsonLine } from "@/lib/ai/run";
 
 // Slack Phase-0 request sizing. One model call: restate the request, T-shirt
@@ -62,7 +62,7 @@ export async function sizeRequest(input: SizeRequestInput): Promise<SizeRequestR
         readme ? `Project README (truncated):\n"""\n${readme}\n"""` : "",
         tree ? `Repo top-level paths: ${tree}` : "",
       ].filter(Boolean).join("\n")
-    : "(no repository connected — size from the request description alone)";
+    : "(no repository connected: size from the request description alone)";
 
   const similarBlock = input.similar.length
     ? input.similar.slice(0, SIMILAR_MAX).map(s => `- [${s.status}] ${s.title}`).join("\n")
@@ -80,13 +80,14 @@ Request to size:
 ${request}
 """
 
-Respond with a single line of JSON only — no prose, no code fences. Schema:
+Respond with a single line of JSON only, no prose and no code fences. Schema:
 {"restatement":"<neutral one-line restatement of the request, ≤120 chars>","size":"S"|"M"|"L"|"XL","rationale":"<1-2 sentences on why this size>","confidence":"low"|"medium"|"high"}
 
 Rules:
 - Sizes: S = hours to a day; M = a few days; L = one to two weeks; XL = multi-week or architectural.
 - The rationale MUST describe scope in PRODUCT terms only. Do NOT name any file, directory, module, class, function, or internal component from the repository (say "touches the notification flow", never a path or symbol).
-- If no repository is connected, size from the request text alone and set confidence to "low".`;
+- If no repository is connected, size from the request text alone and set confidence to "low".
+- ${NO_EM_DASH_RULE}`;
 
   const text = await aistackChat(prompt, { maxTokens: 700, temperature: 0.2, scope: "crumb/ai/size" });
   if (!text) return null;

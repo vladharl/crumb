@@ -4,6 +4,7 @@ import { db, accounts } from "@crumb/db";
 import { verifySlackSignature } from "@/lib/slack/verify";
 import { buildCaptureModal, openView } from "@/lib/slack/commands";
 import { workspaceForSlackTeam } from "@/lib/slack/install";
+import { integrationsAllowed } from "@/lib/entitlements";
 import { open } from "@/lib/crypto-at-rest";
 import { log } from "@/lib/log";
 
@@ -30,6 +31,13 @@ export async function POST(req: Request) {
   const ws = await workspaceForSlackTeam(teamId);
   if (!ws || !ws.slackBotToken) {
     return NextResponse.json({ response_type: "ephemeral", text: "This Slack workspace isn't connected to Crumb yet." });
+  }
+  // A downgrade keeps the install but pauses using it.
+  if (!integrationsAllowed(ws)) {
+    return NextResponse.json({
+      response_type: "ephemeral",
+      text: "/crumb is paused on this workspace's current Crumb plan. A Crumb admin can upgrade in Settings, then Billing, to turn it back on.",
+    });
   }
 
   const accountRows = await db

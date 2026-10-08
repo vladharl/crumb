@@ -1,8 +1,9 @@
 import "server-only";
-import type { IntegrationConnection } from "@crumb/db";
 import { open } from "@/lib/crypto-at-rest";
-import { log } from "@/lib/log";
-import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfig, lookbackStart, vendorSubdomain } from "./types";
+import {
+  type ConnectionCreds, type FeedbackAdapter, type FeedbackPage, type FeedbackRecord,
+  FeedbackSyncError, cursorSeconds, readConfig, vendorFetch, vendorSubdomain,
+} from "./types";
 
 // Zendesk Support — Incremental Ticket Export.
 //   https://developer.zendesk.com/api-reference/ticketing/ticket-management/incremental_exports/
@@ -29,6 +30,17 @@ type ExportResponse = {
   end_of_stream?: boolean;
 };
 
+function account(conn: ConnectionCreds): { sub: string; headers: Record<string, string> } {
+  const cfg = readConfig(conn);
+  const token = conn.accessToken ? open(conn.accessToken) : null;
+  const sub = vendorSubdomain(cfg.subdomain);
+  if (!sub || !cfg.email || !token) {
+    throw new FeedbackSyncError("config", 'Zendesk needs the "acme" of acme.zendesk.com, an agent email and an API token.');
+  }
+  const auth = Buffer.from(`${cfg.email}/token:${token}`).toString("base64");
+  return { sub, headers: { authorization: `Basic ${auth}`, accept: "application/json" } };
+}
+
 export const zendesk: FeedbackAdapter = {
   provider: "zendesk",
 
@@ -36,29 +48,17 @@ export const zendesk: FeedbackAdapter = {
     return true; // BYO subdomain + agent email + API token on the connection
   },
 
-  async listSince(conn: IntegrationConnection, cursor: string | null): Promise<FeedbackPage> {
-    const cfg = readConfig(conn);
-    const token = conn.accessToken ? open(conn.accessToken) : null;
-    if (!cfg.subdomain || !cfg.email || !token) {
-      log.error("zendesk connection incomplete", { scope: "crumb/zendesk", workspaceId: conn.workspaceId });
-      return { records: [], nextCursor: cursor, done: true };
-    }
-    const sub = vendorSubdomain(cfg.subdomain);
-    if (!sub) throw new Error('Invalid Zendesk subdomain. Enter just the "acme" of acme.zendesk.com.');
-
-    const startTime = cursor ? Number(cursor) : Math.floor(lookbackStart().getTime() / 1000);
+  async listSince(conn, cursor): Promise<FeedbackPage> {
+    const { sub, headers } = account(conn);
+    // The export refuses a start_time inside the last minute, which a "from
+    // now on" connection would send on its first sync.
+    const startTime = Math.min(cursorSeconds(cursor), Math.floor(Date.now() / 1000) - 60);
     const url = new URL(`https://${sub}.zendesk.com/api/v2/incremental/tickets.json`);
     url.searchParams.set("start_time", String(startTime));
     url.searchParams.set("include", "users");
     url.searchParams.set("per_page", String(PAGE_LIMIT));
 
-    const auth = Buffer.from(`${cfg.email}/token:${token}`).toString("base64");
-    const resp = await fetch(url, { headers: { authorization: `Basic ${auth}`, accept: "application/json" }, redirect: "manual" });
-    if (!resp.ok) {
-      log.error("zendesk incremental export failed", { scope: "crumb/zendesk", status: resp.status });
-      return { records: [], nextCursor: cursor, done: true };
-    }
-    const data = (await resp.json()) as ExportResponse;
+    const data = (await (await vendorFetch(url, { headers })).json()) as ExportResponse;
 
     const emailById = new Map<number, { email: string | null; name: string | null }>();
     for (const u of data.users ?? []) emailById.set(u.id, { email: u.email ?? null, name: u.name ?? null });
@@ -84,5 +84,14 @@ export const zendesk: FeedbackAdapter = {
     const nextCursor = data.end_time != null ? String(data.end_time) : cursor;
     const done = data.end_of_stream === true || (data.tickets?.length ?? 0) === 0;
     return { records, nextCursor, done };
+  },
+
+  // Search's count endpoint: one request, day granularity, fine for an estimate.
+  async count(conn, since) {
+    const { sub, headers } = account(conn);
+    const url = new URL(`https://${sub}.zendesk.com/api/v2/search/count`);
+    url.searchParams.set("query", `type:ticket updated>${since.toISOString().slice(0, 10)}`);
+    const data = (await (await vendorFetch(url, { headers })).json()) as { count?: number };
+    return data.count ?? 0;
   },
 };

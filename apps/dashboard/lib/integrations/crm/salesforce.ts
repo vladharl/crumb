@@ -1,12 +1,11 @@
 import "server-only";
 import { eq } from "drizzle-orm";
-import { db, workspaces, type Workspace } from "@crumb/db";
+import { db, workspaces } from "@crumb/db";
 import { signState } from "../state";
 import { seal, open } from "../../crypto-at-rest";
 import { clearProviderInstall, IntegrationAuthError } from "../revoke";
-import { log } from "@/lib/log";
-import type { CrmAdapter, CrmCompany, CrmTokens } from "./types";
-import { dollarsToArrCents } from "./types";
+import type { CrmAdapter, CrmField, CrmTokens } from "./types";
+import { dollarsToArrCents, fetchWithRetry, safeFieldName } from "./types";
 
 // Salesforce OAuth 2.0 web-server flow + REST/SOQL. Docs:
 //   https://help.salesforce.com/s/articleView?id=sf.remoteaccess_oauth_web_server_flow.htm
@@ -16,6 +15,8 @@ import { dollarsToArrCents } from "./types";
 
 const API_VERSION = "v59.0";
 const SCOPES = "api refresh_token";
+// Account field types the ARR picker offers.
+const NUMBER_TYPES = new Set(["currency", "double", "int", "long"]);
 
 function loginUrl() {
   return (process.env.SALESFORCE_LOGIN_URL?.trim() || "https://login.salesforce.com").replace(/\/+$/, "");
@@ -84,77 +85,108 @@ export const salesforce: CrmAdapter = {
     };
   },
 
-  async listCompaniesWithArr(workspace): Promise<CrmCompany[]> {
-    const t = await getValidToken(workspace);
-    if (!t) return [];
-    const soql = encodeURIComponent("SELECT Id, Name, AnnualRevenue FROM Account WHERE Name != null");
-    const out: CrmCompany[] = [];
-    let nextUrl: string | null = `${t.instanceUrl}/services/data/${API_VERSION}/query?q=${soql}`;
-    for (let page = 0; page < 50 && nextUrl; page++) {
-      const resp: Response = await fetch(nextUrl, {
-        headers: { authorization: `Bearer ${t.accessToken}`, accept: "application/json" },
-      });
-      if (resp.status === 401) {
-        // Token expired/revoked — one reactive refresh, then retry once.
-        const refreshed = await refreshToken(workspace);
-        if (!refreshed) {
-          await clearProviderInstall(workspace.id, "salesforce");
-          throw new IntegrationAuthError("salesforce", "401");
-        }
-        return this.listCompaniesWithArr({ ...workspace, salesforceAccessToken: seal(refreshed.accessToken) });
-      }
-      if (!resp.ok) {
-        log.error("salesforce query failed", { scope: "crumb/salesforce", status: resp.status });
-        break;
-      }
-      const data = (await resp.json()) as {
-        records?: Array<{ Id: string; Name: string; AnnualRevenue: number | null }>;
-        nextRecordsUrl?: string;
-        done?: boolean;
-      };
-      for (const r of data.records ?? []) {
-        if (!r.Name) continue;
-        out.push({ externalId: r.Id, name: r.Name, arrCents: dollarsToArrCents(r.AnnualRevenue) });
-      }
-      nextUrl = data.nextRecordsUrl ? `${t.instanceUrl}${data.nextRecordsUrl}` : null;
+  // The admin's pick. AnnualRevenue is the account's own revenue, so there is
+  // no default.
+  arrField(workspace) {
+    return safeFieldName(workspace.salesforceArrField);
+  },
+
+  // Number and currency fields on Account, from its describe.
+  async numberFields(workspace) {
+    if (!workspace.salesforceAccessToken || !workspace.salesforceInstanceUrl) return [];
+    const url = `${workspace.salesforceInstanceUrl.replace(/\/+$/, "")}/services/data/${API_VERSION}/sobjects/Account/describe`;
+    let accessToken = open(workspace.salesforceAccessToken);
+    const get = () => fetchWithRetry(url, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } });
+    let resp = await get();
+    if (resp.status === 401) {
+      ({ accessToken } = await refreshAccessToken(workspace.id, workspace.salesforceRefreshToken));
+      resp = await get();
     }
-    return out;
+    if (!resp.ok) throw new Error(`salesforce_describe_failed: ${resp.status}`);
+    const data = (await resp.json()) as { fields?: Array<{ name: string; label?: string; type?: string }> };
+    return (data.fields ?? [])
+      .filter((f) => NUMBER_TYPES.has(f.type ?? "") && safeFieldName(f.name))
+      .map((f): CrmField => ({ name: f.name, label: f.label || f.name }));
+  },
+
+  // Pages through every Account (no page cap). An expired session refreshes
+  // once and retries the same page.
+  async *companyPages(workspace, arrField) {
+    if (!workspace.salesforceAccessToken || !workspace.salesforceInstanceUrl) return;
+    const instanceUrl = workspace.salesforceInstanceUrl.replace(/\/+$/, "");
+    let accessToken = open(workspace.salesforceAccessToken);
+    let refreshToken = workspace.salesforceRefreshToken;
+    const soql = `SELECT Id, Name${arrField ? `, ${arrField}` : ""} FROM Account WHERE Name != null`;
+    let nextUrl: string | null = `${instanceUrl}/services/data/${API_VERSION}/query?q=${encodeURIComponent(soql)}`;
+    while (nextUrl) {
+      const get = (url: string) =>
+        fetchWithRetry(url, { headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" } });
+      let resp = await get(nextUrl);
+      if (resp.status === 401) {
+        ({ accessToken, refreshToken } = await refreshAccessToken(workspace.id, refreshToken));
+        resp = await get(nextUrl);
+      }
+      if (!resp.ok) throw new Error(`salesforce_query_failed: ${resp.status}`);
+      const data = (await resp.json()) as {
+        records?: Array<Record<string, unknown> & { Id: string; Name: string | null }>;
+        nextRecordsUrl?: string;
+      };
+      yield (data.records ?? [])
+        .filter((r) => r.Name?.trim())
+        .map((r) => ({
+          externalId: r.Id,
+          name: r.Name!.trim(),
+          arrCents: arrField ? dollarsToArrCents(r[arrField]) : null,
+        }));
+      nextUrl = data.nextRecordsUrl ? `${instanceUrl}${data.nextRecordsUrl}` : null;
+    }
   },
 };
 
-async function getValidToken(workspace: Workspace): Promise<{ accessToken: string; instanceUrl: string } | null> {
-  if (!workspace.salesforceAccessToken || !workspace.salesforceInstanceUrl) return null;
-  return {
-    accessToken: open(workspace.salesforceAccessToken),
-    instanceUrl: workspace.salesforceInstanceUrl.replace(/\/+$/, ""),
-  };
-}
-
 // Reactive refresh (Salesforce tokens have no expiry we can read). Persists the
-// new access token. Returns null when there's no refresh token to use.
-async function refreshToken(workspace: Workspace): Promise<{ accessToken: string } | null> {
-  if (!workspace.salesforceRefreshToken) return null;
+// new access token, and the refresh token too when the org rotates them (the
+// caller carries the rotated one into its next refresh).
+// Disconnects only on invalid_grant (the refresh token was revoked or expired)
+// or when there is no refresh token to try. An outage or rate limit is retried
+// once; any other failure fails this sync and the next one tries again.
+async function refreshAccessToken(
+  workspaceId: string,
+  sealedRefreshToken: string | null,
+): Promise<{ accessToken: string; refreshToken: string }> {
+  if (!sealedRefreshToken) {
+    await clearProviderInstall(workspaceId, "salesforce");
+    throw new IntegrationAuthError("salesforce", "no_refresh_token");
+  }
   const id = clientId();
   const secret = clientSecret();
-  if (!id || !secret) return null;
-  const resp = await fetch(`${loginUrl()}/services/oauth2/token`, {
+  if (!id || !secret) throw new Error("SALESFORCE creds not configured");
+  const resp = await fetchWithRetry(`${loginUrl()}/services/oauth2/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "refresh_token",
       client_id: id,
       client_secret: secret,
-      refresh_token: open(workspace.salesforceRefreshToken),
+      refresh_token: open(sealedRefreshToken),
     }),
   });
-  if (!resp.ok) return null;
+  if (!resp.ok) {
+    const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+    if (body?.error === "invalid_grant") {
+      await clearProviderInstall(workspaceId, "salesforce");
+      throw new IntegrationAuthError("salesforce", "invalid_grant");
+    }
+    throw new Error(`salesforce_refresh_failed: ${resp.status} ${body?.error ?? ""}`.trim());
+  }
   const token = (await resp.json()) as TokenResponse;
+  const rotated = token.refresh_token ? seal(token.refresh_token) : null;
   await db
     .update(workspaces)
     .set({
       salesforceAccessToken: seal(token.access_token),
+      ...(rotated ? { salesforceRefreshToken: rotated } : {}),
       ...(token.instance_url ? { salesforceInstanceUrl: token.instance_url } : {}),
     })
-    .where(eq(workspaces.id, workspace.id));
-  return { accessToken: token.access_token };
+    .where(eq(workspaces.id, workspaceId));
+  return { accessToken: token.access_token, refreshToken: rotated ?? sealedRefreshToken };
 }

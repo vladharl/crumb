@@ -6,7 +6,10 @@ import type { CaptureSource } from "@/lib/captures";
 import type { ExtractMode } from "@/lib/ai/extract-feedback";
 
 function envNum(name: string, def: number): number {
-  const v = Number(process.env[name]);
+  // Blank counts as unset: compose's env_file passes `NAME=` through, and Number("") is 0.
+  const raw = process.env[name]?.trim();
+  if (!raw) return def;
+  const v = Number(raw);
   return Number.isFinite(v) && v >= 0 && v <= 1 ? v : def;
 }
 

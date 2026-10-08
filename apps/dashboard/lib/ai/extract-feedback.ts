@@ -1,6 +1,6 @@
 import "server-only";
 import { isCloud } from "@/lib/tier";
-import { aistackChat, aistackConfigured, AISTACK_MODEL } from "@/lib/ai/aistack";
+import { aistackChat, aistackConfigured, AISTACK_MODEL, NO_EM_DASH_RULE } from "@/lib/ai/aistack";
 import { parseJsonLine } from "@/lib/ai/run";
 
 // The "relevant?" half of the Autopilot gate (the "new?" half is pgvector dedup
@@ -76,7 +76,7 @@ IGNORE everything that is not product feedback: scheduling/logistics, pricing or
 ${subjectLine}Content:
 ${text}
 
-Respond with a single line of JSON only — no prose, no code fences. A JSON array (possibly empty). Each element:
+Respond with a single line of JSON only, no prose and no code fences. A JSON array (possibly empty). Each element:
 {"title":"<short imperative summary>","body":"<1-3 sentence paraphrase in English>","type":"bug|idea|question|integration","severity":"low|medium|high|critical","tags":["<theme>", ...],"relevance":<0..1>,"confidence":<0..1>}
 
 Rules:
@@ -86,7 +86,8 @@ Rules:
 - severity: how blocking for the customer.
 - tags: 0-3 short lowercase theme labels (e.g. "exports", "mobile", "sso"). Reuse obvious shared themes.
 - relevance: how confidently this is real, actionable product feedback (low for vague grumbles).
-- confidence: how confident you are this extraction is accurate.`;
+- confidence: how confident you are this extraction is accurate.
+- ${NO_EM_DASH_RULE}`;
 
   const raw = await aistackChat(prompt, { maxTokens: 2048, temperature: 0.1, scope: "crumb/ai" });
   return parseExtraction(raw);

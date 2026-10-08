@@ -5,13 +5,15 @@ import { issueTicketRef, verifyWebhook } from "@/lib/integrations/github";
 import { clearProviderInstall } from "@/lib/integrations/revoke";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
+import { syncExternalStatus } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // GitHub webhook. Status sync only — issue close/reopen/label changes
 // hit `issues.edited` / `issues.closed` / `issues.reopened`. We map to
-// the externalStatus field on the linked item.
+// the externalStatus field on the linked item (and emit
+// item.external_status_changed).
 //
 // Header: `X-Hub-Signature-256: sha256=<hex>`. The `X-GitHub-Event` header
 // names the event type. We filter to `issues` events.
@@ -78,29 +80,22 @@ export async function POST(req: Request) {
   const newStatus = event.issue.state; // "open" | "closed"
 
   try {
-    await db
-      .update(items)
-      .set({
-        externalStatus:   newStatus,
-        externalSyncedAt: new Date(),
-        updatedAt:        new Date(),
-      })
-      .where(and(
-        inArray(items.workspaceId, db
-          .select({ id: workspaces.id })
-          .from(workspaces)
-          .where(eq(workspaces.githubAppInstallId, String(installationId)))),
-        eq(items.externalProvider, "github"),
-        or(
-          eq(items.externalTicketId, ticketRef),
-          // ponytail: rows linked before refs were repo-qualified hold a bare
-          // "#N"; their stored issue URL pins the repo. Drop once none remain.
-          and(
-            eq(items.externalTicketId, `#${event.issue.number}`),
-            eq(items.externalTicketUrl, event.issue.html_url),
-          ),
+    await syncExternalStatus(and(
+      inArray(items.workspaceId, db
+        .select({ id: workspaces.id })
+        .from(workspaces)
+        .where(eq(workspaces.githubAppInstallId, String(installationId)))),
+      eq(items.externalProvider, "github"),
+      or(
+        eq(items.externalTicketId, ticketRef),
+        // ponytail: rows linked before refs were repo-qualified hold a bare
+        // "#N"; their stored issue URL pins the repo. Drop once none remain.
+        and(
+          eq(items.externalTicketId, `#${event.issue.number}`),
+          eq(items.externalTicketUrl, event.issue.html_url),
         ),
-      ));
+      ),
+    ), newStatus);
   } catch (err) {
     log.error("github webhook DB update failed", { scope: "crumb/github", ticketRef, err });
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });

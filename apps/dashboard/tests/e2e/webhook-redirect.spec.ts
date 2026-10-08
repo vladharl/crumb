@@ -66,7 +66,9 @@ test("a delivery answered with a redirect isn't followed and counts as failed", 
   const row = page.locator("div.col", { has: page.getByText(hookUrl, { exact: true }) }).last();
   await expect(async () => {
     await page.goto("/settings/webhooks");
-    await expect(row).toContainText(/Last delivery 302 · \d+ fails?/, { timeout: 1_000 });
+    await expect(row).toContainText(/\d+ failed events? in a row\./, { timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
+  await row.getByText(/Recent deliveries/).click();
+  await expect(row.locator("tr", { hasText: "302" }).first()).toContainText("Answered with a redirect, which is not followed");
   expect(targetHits).toEqual([]);
 });

@@ -2,7 +2,7 @@ import "server-only";
 import { sql } from "drizzle-orm";
 import { db, type Workspace } from "@crumb/db";
 import { isCloud } from "@/lib/tier";
-import { aistackChat, aistackConfigured, AISTACK_MODEL } from "@/lib/ai/aistack";
+import { aistackChat, aistackConfigured, AISTACK_MODEL, noEmDash } from "@/lib/ai/aistack";
 import { withAiBudget } from "@/lib/ai/run";
 import { log } from "@/lib/log";
 
@@ -70,11 +70,11 @@ ARR tiers: all | enterprise (≥ $100k) | mid ($10k–100k) | smb (< $10k)
 
 Question: ${question}
 
-Respond with a single line of JSON only — no prose, no code fences. Schema:
+Respond with a single line of JSON only, no prose and no code fences. Schema:
 {"metric": "<one of the metrics>", "event_name": "<known name or null>", "window_days": <integer 1..180>, "arr_tier": "all|enterprise|mid|smb"}
 
 Rules:
-- If the metric needs an event_name but the question doesn't map to a known name, set metric to whatever fits best and event_name to null — the caller will ask for clarification.
+- If the metric needs an event_name but the question doesn't map to a known name, set metric to whatever fits best and event_name to null; the caller will ask for clarification.
 - Default window_days to 7 for "this week", 30 for "this month", else 30.`;
 
   const text = await aistackChat(prompt, { maxTokens: 1024, temperature: 0.1, scope: "crumb/ai" });
@@ -86,8 +86,9 @@ Rules:
     if (!METRICS.includes(p.metric as Metric)) return null;
     const windowDays = Math.min(180, Math.max(1, Math.round(Number(p.window_days) || 30)));
     const arrTier = ARR_TIERS.includes(p.arr_tier as ArrTier) ? (p.arr_tier as ArrTier) : "all";
-    // Only accept an event name from the known set.
-    const eventName = p.event_name && names.includes(p.event_name) ? p.event_name : null;
+    // Only accept an event name from the known set. aistackChat rewrote any
+    // em-dash in the reply, so compare names the same way.
+    const eventName = names.find((n) => n === p.event_name || noEmDash(n) === p.event_name) ?? null;
     return { metric: p.metric as Metric, eventName, windowDays, arrTier };
   } catch (err) {
     log.error("ask-usage intent parse failed", { scope: "crumb/ai", err });
@@ -161,8 +162,8 @@ function phrase(intent: Intent, res: { value: number; secondary?: number }): str
     case "accounts_using_event": return `${res.value.toLocaleString()}${tier} accounts used ${ev} in the last ${d} days.`;
     case "adoption_trend": {
       const recent = res.value, prior = res.secondary ?? 0;
-      const delta = prior === 0 ? (recent > 0 ? "up from 0" : "no change") : `${recent >= prior ? "up" : "down"} from ${prior}`;
-      return `${recent.toLocaleString()} accounts used ${ev} in the last ${d} days — ${delta} the prior ${d} days.`;
+      const delta = recent === prior ? "the same as" : `${recent > prior ? "up" : "down"} from ${prior.toLocaleString()}`;
+      return `${recent.toLocaleString()} accounts used ${ev} in the last ${d} days, ${delta} in the prior ${d} days.`;
     }
   }
 }

@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { isNotNull, or } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
-import { syncCrmAccounts } from "@/lib/integrations/crm/sync";
+import type { CrmProvider } from "@/lib/integrations/crm";
+import { syncCrmAccounts, type SyncResult } from "@/lib/integrations/crm/sync";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +17,10 @@ export const runtime = "nodejs";
 //     https://your-crumb-host/api/v1/internal/crm-sync
 //
 // 503 until the secret is set, so a misconfigured cron is loud, not silent.
+// Each sync pages through the whole CRM, so a run can take minutes on big
+// portals. Workspaces whose plan no longer includes integrations come back
+// as plan_required (paused) without calling the CRM; a sync that stopped
+// partway is logged here and shown on that workspace's settings card.
 
 function secretMatches(provided: string | null, expected: string): boolean {
   if (provided === null) return false;
@@ -42,21 +47,21 @@ export async function POST(req: Request) {
     .from(workspaces)
     .where(or(isNotNull(workspaces.hubspotAccessToken), isNotNull(workspaces.salesforceAccessToken)));
 
-  let upserted = 0;
-  const results: Array<{ workspace: string; provider: string; ok: boolean; upserted?: number; error?: string }> = [];
+  const results: Array<{ workspace: string; provider: CrmProvider } & SyncResult> = [];
   for (const ws of rows) {
-    if (ws.hubspotAccessToken) {
-      const r = await syncCrmAccounts(ws, "hubspot");
-      results.push({ workspace: ws.slug, provider: "hubspot", ...r });
-      if (r.ok) upserted += r.upserted;
-    }
-    if (ws.salesforceAccessToken) {
-      const r = await syncCrmAccounts(ws, "salesforce");
-      results.push({ workspace: ws.slug, provider: "salesforce", ...r });
-      if (r.ok) upserted += r.upserted;
-    }
+    if (ws.hubspotAccessToken) results.push({ workspace: ws.slug, provider: "hubspot", ...(await syncCrmAccounts(ws, "hubspot")) });
+    if (ws.salesforceAccessToken) results.push({ workspace: ws.slug, provider: "salesforce", ...(await syncCrmAccounts(ws, "salesforce")) });
   }
 
-  log.info("crm-sync cron ran", { scope: "crumb/crm", workspaces: rows.length, upserted });
-  return NextResponse.json({ workspaces: rows.length, upserted, results });
+  const upserted = results.reduce((n, r) => n + r.upserted, 0);
+  const failed = results.filter((r) => !r.ok && r.error !== "plan_required");
+  const paused = results.filter((r) => !r.ok && r.error === "plan_required").length;
+  if (failed.length) {
+    log.warn("crm-sync cron: some syncs didn't complete", {
+      scope: "crumb/crm",
+      failed: failed.map((r) => ({ workspace: r.workspace, provider: r.provider, error: r.ok ? null : r.error })),
+    });
+  }
+  log.info("crm-sync cron ran", { scope: "crumb/crm", workspaces: rows.length, upserted, failed: failed.length, paused });
+  return NextResponse.json({ workspaces: rows.length, upserted, failed: failed.length, paused, results });
 }

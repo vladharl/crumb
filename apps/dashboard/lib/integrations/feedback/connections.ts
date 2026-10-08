@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db, integrationConnections } from "@crumb/db";
 import { seal } from "@/lib/crypto-at-rest";
 import type { ConnectionConfig, FeedbackProvider } from "./types";
@@ -37,19 +37,31 @@ export async function listConnections(workspaceId: string): Promise<ConnectionVi
 
 // Create or replace a connection. Updates creds + config + status, preserving the
 // sync cursor across a re-connect (so a token refresh doesn't re-pull history).
+// A new connection starts at `startCursor`: the first sync's window, chosen at
+// connect time. Replacing config drops the failure streak (see sync.ts), so a
+// reconnect starts clean, but keeps a running sync's claim (syncingSince):
+// dropping it would let a second run start beside the first one.
 export async function upsertConnection(
   workspaceId: string,
   provider: FeedbackProvider,
   input: { accessToken?: string | null; refreshToken?: string | null; config?: ConnectionConfig },
+  startCursor: string,
 ): Promise<void> {
   const accessToken = input.accessToken ? seal(input.accessToken) : null;
   const refreshToken = input.refreshToken ? seal(input.refreshToken) : null;
   await db
     .insert(integrationConnections)
-    .values({ workspaceId, provider, accessToken, refreshToken, config: input.config ?? {}, status: "active" })
+    .values({ workspaceId, provider, accessToken, refreshToken, config: input.config ?? {}, status: "active", syncCursor: startCursor })
     .onConflictDoUpdate({
       target: [integrationConnections.workspaceId, integrationConnections.provider],
-      set: { accessToken, refreshToken, config: input.config ?? {}, status: "active", error: null, updatedAt: new Date() },
+      set: {
+        accessToken,
+        refreshToken,
+        config: sql`${JSON.stringify(input.config ?? {})}::jsonb || jsonb_strip_nulls(jsonb_build_object('syncingSince', ${integrationConnections.config}->'syncingSince'))`,
+        status: "active",
+        error: null,
+        updatedAt: new Date(),
+      },
     });
 }
 

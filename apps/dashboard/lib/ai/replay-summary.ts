@@ -1,6 +1,6 @@
 import "server-only";
 import { isCloud } from "@/lib/tier";
-import { aistackChat, aistackConfigured, AISTACK_MODEL } from "@/lib/ai/aistack";
+import { aistackChat, aistackConfigured, AISTACK_MODEL, NO_EM_DASH_RULE } from "@/lib/ai/aistack";
 import { parseJsonLine } from "@/lib/ai/run";
 
 // AI session-replay summaries (feature 8). Turns the compact action trace from
@@ -23,14 +23,14 @@ export async function summarizeSession(
   if (!trace.trim()) return null;
 
   const dur = ctx?.durationMs ? `${Math.round(ctx.durationMs / 1000)}s` : "unknown";
-  const prompt = `You are summarizing a customer's screen session (from a click/navigation trace) so a product manager grasps what happened in seconds. Be concrete and behavioral: what the user was trying to do, where they hesitated or clicked repeatedly, and where they went idle. Don't restate every line.
+  const prompt = `You are summarizing a customer's screen session (from a click/navigation trace) so a product manager grasps what happened in seconds. Be concrete and behavioral: what the user was trying to do, where they hesitated or clicked repeatedly, and where they went idle. Don't restate every line. ${NO_EM_DASH_RULE}
 
 Session duration: ${dur}${ctx?.pageUrl ? `\nStart page: ${ctx.pageUrl}` : ""}
 
 Trace (timestamps mm:ss):
 ${trace.slice(0, 4000)}
 
-Respond with a single line of JSON only — no prose, no code fences:
+Respond with a single line of JSON only, no prose and no code fences:
 {"summary":"<2-3 sentence narrative>","highlights":["<short beat, e.g. 'hunted for Export for 40s'>"]}`;
 
   const text = await aistackChat(prompt, { maxTokens: 800, temperature: 0.3, scope: "crumb/ai" });

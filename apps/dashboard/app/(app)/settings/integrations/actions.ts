@@ -14,7 +14,7 @@ import {
   linearConfigured,
   listTeams as listLinearTeamsApi,
 } from "@/lib/integrations/linear";
-import { IntegrationAuthError, clearProviderInstall } from "@/lib/integrations/revoke";
+import { IntegrationAuthError, clearProviderInstall, withoutAlert } from "@/lib/integrations/revoke";
 import {
   buildAuthUrl as buildJiraAuthUrl,
   JIRA_REDIRECT_URL,
@@ -25,8 +25,9 @@ import {
   githubConfigured,
 } from "@/lib/integrations/github";
 import { getCrmAdapter } from "@/lib/integrations/crm";
-import { syncCrmAccounts } from "@/lib/integrations/crm/sync";
-import type { CrmProvider } from "@/lib/integrations/crm/types";
+import { crmSyncState, syncCrmAccounts } from "@/lib/integrations/crm/sync";
+import { safeFieldName, type CrmField, type CrmProvider } from "@/lib/integrations/crm/types";
+import { log } from "@/lib/log";
 import { seal, open } from "@/lib/crypto-at-rest";
 import { assertSafeWebhookUrl } from "@/lib/notify/url-guard";
 import { postTeamsWebhook, teamsCardFor } from "@/lib/notify/chat";
@@ -68,6 +69,7 @@ export async function disconnectLinear(): Promise<{ ok: true } | { ok: false; er
       linearTeamName:    null,
       linearOrganizationId: null,
       linearInstalledAt: null,
+      integrationAlerts: withoutAlert("linear"),
     })
     .where(eq(workspaces.id, workspace.id));
 
@@ -136,6 +138,7 @@ export async function disconnectJira(): Promise<{ ok: true } | { ok: false; erro
       jiraSiteUrl:           null,
       jiraDefaultProjectKey: null,
       jiraInstalledAt:       null,
+      integrationAlerts:     withoutAlert("jira"),
     })
     .where(eq(workspaces.id, workspace.id));
 
@@ -164,6 +167,7 @@ export async function disconnectGithub(): Promise<{ ok: true } | { ok: false; er
       githubAppInstallAccount: null,
       githubDefaultRepo:       null,
       githubInstalledAt:       null,
+      integrationAlerts:       withoutAlert("github"),
     })
     .where(eq(workspaces.id, workspace.id));
 
@@ -183,6 +187,7 @@ export async function disconnectSlack(): Promise<{ ok: true } | { ok: false; err
       slackBotToken: null,
       slackBotUserId: null,
       slackInstalledAt: null,
+      integrationAlerts: withoutAlert("slack"),
     })
     .where(eq(workspaces.id, workspace.id));
 
@@ -222,6 +227,8 @@ export async function disconnectHubspot(): Promise<{ ok: true } | { ok: false; e
       hubspotTokenExpiresAt: null,
       hubspotPortalId: null,
       hubspotInstalledAt: null,
+      hubspotArrField: null,
+      integrationAlerts: withoutAlert("hubspot"),
     })
     .where(eq(workspaces.id, workspace.id));
   revalidatePath("/settings/integrations");
@@ -248,25 +255,73 @@ export async function disconnectSalesforce(): Promise<{ ok: true } | { ok: false
       salesforceInstanceUrl: null,
       salesforceTokenExpiresAt: null,
       salesforceInstalledAt: null,
+      salesforceArrField: null,
+      integrationAlerts: withoutAlert("salesforce"),
     })
     .where(eq(workspaces.id, workspace.id));
   revalidatePath("/settings/integrations");
   return { ok: true };
 }
 
-// Manual "Sync now". Admin/pm (ARR data, not just a connection). Returns the
-// number of accounts upserted so the UI can confirm.
+// Manual "Sync now". Admin/pm (ARR data, not just a connection). Starts the
+// sync and returns: a big CRM takes minutes, longer than a proxy waits for a
+// response. The card polls getCrmCardStatus and refreshes when it ends.
 export async function syncCrmNow(
   provider: CrmProvider,
-): Promise<{ ok: true; upserted: number } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
-  const r = await syncCrmAccounts(workspace, provider);
-  if (r.ok) {
-    revalidatePath("/settings/integrations");
-    revalidatePath("/accounts");
+  if (provider !== "hubspot" && provider !== "salesforce") return { ok: false, error: "not_found" };
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
+  if (!getCrmAdapter(provider).configured()) return { ok: false, error: "not_configured" };
+  void syncCrmAccounts(workspace, provider); // never rejects
+  return { ok: true };
+}
+
+// The CRM's number and currency fields, for the ARR field picker. Admin only.
+export async function listCrmArrFields(
+  provider: CrmProvider,
+): Promise<{ ok: true; fields: CrmField[] } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin") return { ok: false, error: "forbidden" };
+  if (provider !== "hubspot" && provider !== "salesforce") return { ok: false, error: "not_found" };
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
+  try {
+    const fields = await getCrmAdapter(provider).numberFields(workspace);
+    return { ok: true, fields: fields.sort((a, b) => a.label.localeCompare(b.label)) };
+  } catch (err) {
+    if (err instanceof IntegrationAuthError) return { ok: false, error: "revoked" };
+    log.error("crm field list failed", { scope: `crumb/${provider}`, workspaceId: workspace.id, err });
+    return { ok: false, error: "list_failed" };
   }
-  return r;
+}
+
+// Choose the field each company's ARR syncs from, then sync with it. Admin
+// only. The name lands in a SOQL query and a URL, so only plain API names.
+export async function setCrmArrField(
+  provider: CrmProvider,
+  field: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin") return { ok: false, error: "forbidden" };
+  if (provider !== "hubspot" && provider !== "salesforce") return { ok: false, error: "not_found" };
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
+  const name = typeof field === "string" ? safeFieldName(field) : null;
+  if (!name) return { ok: false, error: "invalid_field" };
+  const [updated] = await db
+    .update(workspaces)
+    .set(provider === "hubspot" ? { hubspotArrField: name } : { salesforceArrField: name })
+    .where(eq(workspaces.id, workspace.id))
+    .returning();
+  if (updated) {
+    // A sync already going (often the first one after connecting) started
+    // without this field, and this call joins it: sync again once it ends.
+    const joined = crmSyncState(updated.id, provider).running;
+    const run = syncCrmAccounts(updated, provider); // never rejects
+    if (joined) void run.then(() => syncCrmAccounts(updated, provider));
+  }
+  revalidatePath("/settings/integrations");
+  return { ok: true };
 }
 
 // ─── MS Teams vendor webhook (feature: dual-side notifications) ──────

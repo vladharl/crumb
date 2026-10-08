@@ -1,8 +1,9 @@
 import "server-only";
-import type { IntegrationConnection } from "@crumb/db";
 import { open } from "@/lib/crypto-at-rest";
-import { log } from "@/lib/log";
-import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfig, lookbackStart, vendorBaseUrl } from "./types";
+import {
+  type ConnectionCreds, type FeedbackAdapter, type FeedbackPage, type FeedbackRecord,
+  FeedbackSyncError, cursorIso, readConfig, vendorBaseUrl, vendorFetch,
+} from "./types";
 
 // Gong — list calls since a timestamp, then pull their transcripts.
 //   https://gong.app.gong.io/settings/api/documentation
@@ -14,19 +15,38 @@ import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfi
 
 const DEFAULT_BASE = "https://api.gong.io";
 const MAX_CALLS_PER_PAGE = 100;
+const TRANSCRIPT_GRACE_MS = 24 * 60 * 60 * 1000;
 
 type GongCall = { id: string; url?: string | null; started?: string | null; title?: string | null };
-type CallsResponse = { calls?: GongCall[]; records?: { cursor?: string | null } | null };
+type CallsResponse = { calls?: GongCall[]; records?: { totalRecords?: number; cursor?: string | null } | null };
 type TranscriptSentence = { text?: string | null };
 type TranscriptMonologue = { sentences?: TranscriptSentence[] | null };
 type CallTranscript = { callId: string; transcript?: TranscriptMonologue[] | null };
 type TranscriptResponse = { callTranscripts?: CallTranscript[] };
 
-function basicAuth(conn: IntegrationConnection): string | null {
+function account(conn: ConnectionCreds): { base: string; headers: Record<string, string> } {
   const key = conn.accessToken ? open(conn.accessToken) : null;
   const secret = conn.refreshToken ? open(conn.refreshToken) : null;
-  if (!key || !secret) return null;
-  return Buffer.from(`${key}:${secret}`).toString("base64");
+  const base = vendorBaseUrl(readConfig(conn).baseUrl?.trim() || DEFAULT_BASE, "api.gong.io");
+  if (!key || !secret || !base) {
+    throw new FeedbackSyncError("config", "Gong needs an access key, its secret and a base URL on api.gong.io.");
+  }
+  const auth = Buffer.from(`${key}:${secret}`).toString("base64");
+  return { base, headers: { authorization: `Basic ${auth}`, "content-type": "application/json", accept: "application/json" } };
+}
+
+const notFound = (err: unknown) => err instanceof FeedbackSyncError && err.status === 404;
+
+async function listCalls(base: string, headers: Record<string, string>, fromDateTime: string): Promise<CallsResponse> {
+  const url = new URL(`${base}/v2/calls`);
+  url.searchParams.set("fromDateTime", fromDateTime);
+  try {
+    return (await (await vendorFetch(url, { headers })).json()) as CallsResponse;
+  } catch (err) {
+    // Gong answers an empty window with 404 "No calls found", not an empty list.
+    if (notFound(err)) return { calls: [], records: { totalRecords: 0 } };
+    throw err;
+  }
 }
 
 export const gong: FeedbackAdapter = {
@@ -36,56 +56,50 @@ export const gong: FeedbackAdapter = {
     return true; // BYO access key + secret on the connection
   },
 
-  async listSince(conn: IntegrationConnection, cursor: string | null): Promise<FeedbackPage> {
-    const auth = basicAuth(conn);
-    if (!auth) {
-      log.error("gong connection incomplete", { scope: "crumb/gong", workspaceId: conn.workspaceId });
-      return { records: [], nextCursor: cursor, done: true };
-    }
-    const base = vendorBaseUrl(readConfig(conn).baseUrl?.trim() || DEFAULT_BASE, "api.gong.io");
-    if (!base) throw new Error("Gong base URL must be on api.gong.io, like https://us-12345.api.gong.io.");
-    const fromDateTime = cursor ?? lookbackStart().toISOString();
-    const headers = { authorization: `Basic ${auth}`, "content-type": "application/json", accept: "application/json" };
+  async listSince(conn, cursor): Promise<FeedbackPage> {
+    const { base, headers } = account(conn);
+    const fromDateTime = cursorIso(cursor);
 
     // 1. List calls in the window.
-    const callsUrl = new URL(`${base}/v2/calls`);
-    callsUrl.searchParams.set("fromDateTime", fromDateTime);
-    const callsResp = await fetch(callsUrl, { headers, redirect: "manual" });
-    if (!callsResp.ok) {
-      log.error("gong list calls failed", { scope: "crumb/gong", status: callsResp.status });
-      return { records: [], nextCursor: cursor, done: true };
-    }
-    const callsData = (await callsResp.json()) as CallsResponse;
+    const callsData = await listCalls(base, headers, fromDateTime);
     const calls = (callsData.calls ?? []).slice(0, MAX_CALLS_PER_PAGE);
     if (calls.length === 0) return { records: [], nextCursor: cursor, done: true };
 
     const byId = new Map(calls.map((c) => [c.id, c]));
 
-    // 2. Pull transcripts for those calls.
-    const tResp = await fetch(`${base}/v2/calls/transcript`, {
+    // 2. Pull transcripts for those calls. A failure here fails the page, so the
+    // cursor never moves past calls whose transcripts we didn't read. A 404
+    // means none of them is transcribed yet: retried, not a settings problem.
+    // ponytail: a page of calls that never get a transcript retries at the
+    // backoff cap. Skip calls older than a day here if that shows up.
+    const tResp = await vendorFetch(`${base}/v2/calls/transcript`, {
       method: "POST",
       headers,
-      redirect: "manual",
       body: JSON.stringify({ filter: { fromDateTime, callIds: calls.map((c) => c.id) } }),
+    }).catch((err: unknown) => {
+      throw notFound(err) ? new FeedbackSyncError("transient", "HTTP 404", 404) : err;
     });
     const transcripts: Record<string, string> = {};
-    if (tResp.ok) {
-      const tData = (await tResp.json()) as TranscriptResponse;
-      for (const ct of tData.callTranscripts ?? []) {
-        const text = (ct.transcript ?? [])
-          .flatMap((m) => (m.sentences ?? []).map((s) => s.text ?? ""))
-          .filter(Boolean)
-          .join(" ");
-        if (text.trim()) transcripts[ct.callId] = text;
-      }
-    } else {
-      log.error("gong transcript fetch failed", { scope: "crumb/gong", status: tResp.status });
+    const tData = (await tResp.json()) as TranscriptResponse;
+    for (const ct of tData.callTranscripts ?? []) {
+      const text = (ct.transcript ?? [])
+        .flatMap((m) => (m.sentences ?? []).map((s) => s.text ?? ""))
+        .filter(Boolean)
+        .join(" ");
+      if (text.trim()) transcripts[ct.callId] = text;
     }
 
     const records: FeedbackRecord[] = [];
     let maxStarted = fromDateTime;
-    for (const c of calls) {
+    // A transcript can lag its call by hours. The cursor stops before the
+    // first recent call that has none yet, so the next run reads it again
+    // (calls already captured are skipped); a call older than the grace
+    // period with no transcript was never recorded and doesn't hold it back.
+    let held = false;
+    const sorted = [...calls].sort((a, b) => (a.started ?? "").localeCompare(b.started ?? ""));
+    for (const c of sorted) {
       const text = transcripts[c.id];
+      if (!text && c.started && Date.now() - new Date(c.started).getTime() < TRANSCRIPT_GRACE_MS) held = true;
       if (text) {
         records.push({
           externalId: c.id,
@@ -98,13 +112,22 @@ export const gong: FeedbackAdapter = {
           raw: { startedAt: c.started ?? null },
         });
       }
-      if (c.started && c.started > maxStarted) maxStarted = c.started;
+      if (!held && c.started && c.started > maxStarted) maxStarted = c.started;
     }
 
-    // Gong paginates with records.cursor; absent ⇒ caught up. We advance the time
-    // cursor regardless so the next sync resumes after the newest call seen.
+    // Gong paginates with records.cursor; absent ⇒ caught up. The time cursor
+    // moves to just after the newest call seen (or the last one before a held
+    // call); a held page ends the run so it isn't re-read in a loop.
     const more = !!callsData.records?.cursor;
-    const nextCursor = new Date(new Date(maxStarted).getTime() + 1000).toISOString();
-    return { records, nextCursor, done: !more };
+    const nextCursor = maxStarted === fromDateTime
+      ? cursor
+      : new Date(new Date(maxStarted).getTime() + 1000).toISOString();
+    return { records, nextCursor, done: held || !more };
+  },
+
+  // The calls list reports records.totalRecords for the whole window.
+  async count(conn, since) {
+    const { base, headers } = account(conn);
+    return (await listCalls(base, headers, since.toISOString())).records?.totalRecords ?? 0;
   },
 };

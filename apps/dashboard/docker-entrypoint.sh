@@ -17,6 +17,12 @@ for fvar in $(env | cut -d= -f1 | grep '_FILE$' || true); do
   fi
 done
 
+# "local" storage with no CRUMB_STORAGE_DIR writes inside the container, which
+# every recreate (each upgrade) throws away. Say so on every start.
+if [ "${CRUMB_STORAGE_PROVIDER:-local}" = "local" ] && [ -z "${CRUMB_STORAGE_DIR:-}" ]; then
+  echo "[entrypoint] WARNING: uploaded files are stored inside this container and are lost when it is recreated. Set CRUMB_STORAGE_PROVIDER=postgres, or point CRUMB_STORAGE_DIR at a mounted volume."
+fi
+
 if [ "${CRUMB_SKIP_MIGRATIONS:-}" = "1" ]; then
   echo "[entrypoint] CRUMB_SKIP_MIGRATIONS=1 — skipping migrations"
 else

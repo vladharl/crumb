@@ -87,6 +87,16 @@ describe("getThresholds — env overrides", () => {
     delete process.env.CRUMB_AUTOPILOT_MERGE_THRESHOLD;
     delete process.env.CRUMB_AUTOPILOT_SUGGEST_THRESHOLD;
   });
+
+  it("treats a blank value (compose env_file passthrough) as unset, not 0", () => {
+    process.env.CRUMB_AUTOPILOT_MERGE_THRESHOLD = "";
+    process.env.CRUMB_AUTOPILOT_RELEVANCE_FLOOR = " ";
+    const t = getThresholds();
+    expect(t.merge).toBe(0.9);
+    expect(t.relevanceFloor).toBe(0.3);
+    delete process.env.CRUMB_AUTOPILOT_MERGE_THRESHOLD;
+    delete process.env.CRUMB_AUTOPILOT_RELEVANCE_FLOOR;
+  });
 });
 
 describe("source/type/idempotency helpers", () => {

@@ -42,27 +42,92 @@ export type ConnectionConfig = {
   region?: string; // freshchat: data-center region
 };
 
+// What an adapter reads off a connection: the saved row, or the unsaved form
+// values when estimating at connect time (open() passes plaintext through).
+export type ConnectionCreds = Pick<IntegrationConnection, "workspaceId" | "accessToken" | "refreshToken" | "config">;
+
 export interface FeedbackAdapter {
   readonly provider: FeedbackProvider;
   // Whether this provider can be offered for connection in this deployment.
   // Connection-token providers are always available (BYO token on self-host);
   // OAuth providers require their app creds in the environment.
   configured(): boolean;
-  // Pull one page of records updated after `cursor` (null = first sync). Reads
-  // sealed creds off the connection. Never throws on "nothing new" — returns an
-  // empty page with done=true.
-  listSince(conn: IntegrationConnection, cursor: string | null): Promise<FeedbackPage>;
+  // Pull one page of records updated after `cursor`. "Nothing new" is an empty
+  // page with done=true; every failure throws a FeedbackSyncError, so a failed
+  // pull can never pass for a quiet success.
+  listSince(conn: ConnectionCreds, cursor: string | null): Promise<FeedbackPage>;
+  // How many records changed since `since`, for the connect-time estimate.
+  // Only on providers that can count in one cheap call.
+  count?(conn: ConnectionCreds, since: Date): Promise<number>;
 }
 
-// First-sync lookback so a brand-new connection doesn't try to pull all history.
-export const DEFAULT_LOOKBACK_DAYS = 90;
+// How far back the first sync reaches is chosen at connect time and written as
+// the starting cursor (an ISO timestamp). A connection made before that choice
+// existed has no cursor and falls back to DEFAULT_LOOKBACK_DAYS.
+export const LOOKBACK_CHOICES = [0, 7, 30, 90] as const;
+export const DEFAULT_LOOKBACK_DAYS = 7;
 
-export function lookbackStart(days = DEFAULT_LOOKBACK_DAYS): Date {
+export function lookbackStart(days: number = DEFAULT_LOOKBACK_DAYS): Date {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 }
 
-export function readConfig(conn: IntegrationConnection): ConnectionConfig {
+// The cursor as an ISO timestamp (Freshdesk, Freshchat, Gong).
+export function cursorIso(cursor: string | null): string {
+  return cursor ?? lookbackStart().toISOString();
+}
+
+// The cursor as unix seconds (Zendesk, Intercom). Their own cursors are unix
+// seconds; the connect-time starting cursor is ISO.
+export function cursorSeconds(cursor: string | null): number {
+  if (cursor && /^\d+$/.test(cursor)) return Number(cursor);
+  return Math.floor(Date.parse(cursorIso(cursor)) / 1000);
+}
+
+export function readConfig(conn: ConnectionCreds): ConnectionConfig {
   return (conn.config as ConnectionConfig | null) ?? {};
+}
+
+// ─── failures ──────────────────────────────────────────────────
+// Why a pull failed. Stored in integration_connections.error and turned into a
+// sentence by the settings card; never shown raw.
+//   auth       401/403: the provider rejected the credentials. Reconnect.
+//   config     any other refusal (404, 422, a redirect) or settings that can't
+//              work. Fix them and reconnect.
+//   transient  timeout, network error, 408/429/5xx. Retried with backoff.
+export type SyncFailure = "auth" | "config" | "transient";
+
+export class FeedbackSyncError extends Error {
+  readonly reason: SyncFailure;
+  // The HTTP status when the provider answered with one (vendorFetch).
+  readonly status: number | null;
+  constructor(reason: SyncFailure, detail: string = reason, status: number | null = null) {
+    super(detail);
+    this.name = "FeedbackSyncError";
+    this.reason = reason;
+    this.status = status;
+  }
+}
+
+export function failureForStatus(status: number): SyncFailure {
+  if (status === 401 || status === 403) return "auth";
+  if (status === 408 || status === 429 || status >= 500) return "transient";
+  return "config";
+}
+
+const FETCH_TIMEOUT_MS = 30_000;
+
+// Every vendor request goes through here: redirects off (see the host guards
+// below), a timeout so a hung provider can't hold the sync, and anything but a
+// 2xx thrown as a FeedbackSyncError.
+export async function vendorFetch(url: string | URL, init: RequestInit = {}): Promise<Response> {
+  let resp: Response;
+  try {
+    resp = await fetch(url, { ...init, redirect: "manual", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  } catch (err) {
+    throw new FeedbackSyncError("transient", String(err));
+  }
+  if (!resp.ok) throw new FeedbackSyncError(failureForStatus(resp.status), `HTTP ${resp.status}`, resp.status);
+  return resp;
 }
 
 // ─── outbound host guards ──────────────────────────────────────

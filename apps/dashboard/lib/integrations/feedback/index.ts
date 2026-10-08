@@ -19,7 +19,7 @@ export function getFeedbackAdapter(provider: FeedbackProvider): FeedbackAdapter 
 }
 
 export function isFeedbackProvider(v: string): v is FeedbackProvider {
-  return v in ADAPTERS;
+  return Object.hasOwn(ADAPTERS, v); // not `in`: "constructor" would pass
 }
 
 export type { FeedbackProvider, FeedbackAdapter, FeedbackRecord, FeedbackPage } from "./types";

@@ -21,7 +21,7 @@ SSH in, then (skip if you chose a Docker/Coolify template that already has it):
 ```bash
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER && newgrp docker   # run docker without sudo
-docker version && docker compose version          # sanity check
+docker version && docker compose version          # sanity check: Compose 2.24 or newer
 ```
 
 ## 3. Get the code
@@ -38,7 +38,7 @@ nano .env
 ```
 Fill in at minimum:
 - `POSTGRES_PASSWORD` → a long random string (`openssl rand -hex 24`)
-- `CRUMB_APP_URL=https://crumb.localhostlabs.net`
+- `CRUMB_APP_URL` → your dashboard's public URL, e.g. `https://crumb.example.com`
 - `CRUMB_ENCRYPTION_KEY` → `openssl rand -hex 32` (encrypts integration tokens)
 - `CRUMB_INTERNAL_SWEEP_SECRET` → `openssl rand -hex 32`
 - `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` / `SLACK_SIGNING_SECRET` (and any other integrations you've registered). `SLACK_SIGNING_SECRET` verifies Slack request signatures on the `/crumb` command and the events endpoint.
@@ -46,13 +46,15 @@ Fill in at minimum:
 - *(GitHub App)* also `GITHUB_APP_CLIENT_ID`/`GITHUB_APP_CLIENT_SECRET`, with **Request user authorization (OAuth) during installation** turned on in the App. Without them Crumb only accepts an installation made in the last 10 minutes, so reconnecting an older one means reinstalling the App.
 - `CLOUDFLARE_TUNNEL_TOKEN` → from step 5
 
-`.env` is gitignored — never commit it.
+`.env` is gitignored: never commit it. Compose passes every variable in it to
+the dashboard, so any optional setting from `apps/dashboard/.env.local.example`
+(rate limits, logging, AI caps, key rotation, and so on) works by adding it here.
 
 ## 5. Create the Cloudflare Tunnel  **(you, browser)**
 1. **Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create a tunnel** → type **Cloudflared** → name it `crumb` → **Save**.
 2. On the install screen, **copy the tunnel token** (the long string after `--token` in the shown command). Put it in `.env` as `CLOUDFLARE_TUNNEL_TOKEN=...`. *(You don't run their install command — our compose runs cloudflared with this token.)*
 3. Open the tunnel → **Public Hostname → Add a public hostname**:
-   - **Subdomain:** `crumb`  · **Domain:** `localhostlabs.net`
+   - **Subdomain:** `crumb`  · **Domain:** your domain (e.g. `example.com`)
    - **Service:** **HTTP** → `dashboard:3000`
    - Save. Cloudflare creates the `crumb` DNS record for you automatically.
 
@@ -98,7 +100,7 @@ For real email, set `CRUMB_EMAIL_PROVIDER=smtp` + `SMTP_*` (or Resend on cloud t
 
 ## 8. Connect Slack (and others)
 In the app → **Settings → Integrations → Connect Slack**. Confirm the Slack app's
-redirect URL is exactly `https://crumb.localhostlabs.net/api/integrations/slack/callback`
+redirect URL is exactly `https://crumb.example.com/api/integrations/slack/callback`
 (it must match `CRUMB_APP_URL`). Repeat per provider you registered.
 
 **Jira on Cloud (`CRUMB_TIER=cloud`).** Add the `manage:jira-webhook` scope to the
@@ -111,7 +113,7 @@ sync. Self-host is unchanged: the manual webhook signed with `JIRA_WEBHOOK_SECRE
 **Enable @mention request sizing.** To let people @mention Crumb for an in-thread
 sizing reply, the Slack app needs the `app_mentions:read` bot scope and Event
 Subscriptions turned on: set the **Request URL** to
-`https://crumb.localhostlabs.net/api/integrations/slack/events` (Slack sends a
+`https://crumb.example.com/api/integrations/slack/events` (Slack sends a
 one-time `challenge` on save and the endpoint answers it), then subscribe to the
 `app_mention` bot event. `SLACK_SIGNING_SECRET` must be set (it verifies the
 request signature). Workspaces connected before this scope existed must
@@ -126,27 +128,49 @@ self-host answers the webhook but posts a "needs Cloud AI" note.
 ```bash
 git pull && docker compose --profile tunnel up -d --build
 ```
-
-**Maintenance cron** (orphan attachment/replay sweep + usage-event retention) — add to the VPS crontab:
+*Once, if your install predates Postgres file storage* (uploads were kept on the
+container's disk, which `up -d` throws away): copy the files out **before** that
+command, then load them into the database once the new version is running.
 ```bash
-# daily at 03:00
-0 3 * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" http://127.0.0.1:3000/api/v1/internal/replay-sweep
+# before upgrading
+docker cp crumb-dashboard:/app/apps/dashboard/.crumb-uploads ./crumb-uploads
+# after upgrading
+(cd crumb-uploads && find . -type f | sed 's|^\./||' | while read -r key; do
+  printf "INSERT INTO storage_blobs (key, content_type, data_b64, size_bytes) VALUES ('%s', 'application/octet-stream', '%s', %s) ON CONFLICT (key) DO NOTHING;\n" \
+    "$key" "$(base64 < "$key" | tr -d '\n')" "$(wc -c < "$key" | tr -d ' ')"
+done) | docker compose exec -T postgres psql -U crumb -d crumb -q
 ```
-The same endpoint prunes `usage_events` older than `CRUMB_USAGE_EVENTS_RETENTION_DAYS` (default 180). If you instrument `crumb.track()` heavily, run this daily so the high-cardinality `usage_events` table stays bounded. It also deletes session replays older than `CRUMB_REPLAY_RETENTION_DAYS` (default 30, so the first run removes every older replay; `0` keeps them forever) and, on Cloud, refreshes the Jira status webhooks.
+If you already keep `local` storage on a mounted volume, set
+`CRUMB_STORAGE_PROVIDER=local` in `.env` instead, before upgrading.
 
-**CRM refresh cron** (optional, only if you connected HubSpot/Salesforce) — keeps accounts + ARR fresh. The "Sync now" button and connect-time sync work without it:
+**Maintenance cron.** Three internal endpoints do scheduled work. Each takes a
+`POST` with `CRUMB_INTERNAL_SWEEP_SECRET` in the `X-Crumb-Sweep-Secret` header,
+and returns 503 until that secret is set. Cron doesn't load `.env`, so each line
+reads the secret from it (adjust the path if you cloned somewhere other than
+`~/crumb`, and the port if you changed `DASHBOARD_PORT`). Add them with
+`crontab -e`:
 ```bash
-# every 6 hours
-0 */6 * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" http://127.0.0.1:3000/api/v1/internal/crm-sync
+# Hourly: prune orphaned uploads and replay sessions, enforce replay retention, drop aged usage events
+0 * * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $(sed -n 's/^CRUMB_INTERNAL_SWEEP_SECRET=//p' $HOME/crumb/.env)" http://127.0.0.1:3000/api/v1/internal/replay-sweep
+# Every 6 hours: refresh accounts + ARR from HubSpot / Salesforce (no-op until a CRM is connected)
+0 */6 * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $(sed -n 's/^CRUMB_INTERNAL_SWEEP_SECRET=//p' $HOME/crumb/.env)" http://127.0.0.1:3000/api/v1/internal/crm-sync
+# Every 20 minutes: pull new tickets and calls from connected feedback sources into the Inbox (no-op until one is connected)
+*/20 * * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $(sed -n 's/^CRUMB_INTERNAL_SWEEP_SECRET=//p' $HOME/crumb/.env)" http://127.0.0.1:3000/api/v1/internal/feedback-sync
 ```
+These lines need a plain `CRUMB_INTERNAL_SWEEP_SECRET=<value>` line in `.env`
+(no quotes or trailing comment). Each replay-sweep run removes a bounded batch
+(500 orphaned sessions, 500 expired replays, 500 orphaned uploads and 5,000
+`usage_events` older than `CRUMB_USAGE_EVENTS_RETENTION_DAYS`, default 180), so
+keep it hourly, especially if you instrument `crumb.track()` heavily. Replays
+expire after `CRUMB_REPLAY_RETENTION_DAYS` (default 30, so the first runs clear
+every older replay; `0` keeps them forever). On Cloud the sweep also refreshes
+the Jira status webhooks. CRM sync and the feedback pull also run from their **Sync now**
+buttons; on Cloud the feedback pull's AI "new & relevant" gate dedups and
+auto-promotes, while on self-host every pulled record lands for review.
 
-**Feedback pull cron (Autopilot)** (optional, only if you connected Gong / Zendesk / Intercom / Freshdesk / Freshchat in Settings → Integrations) — pulls new tickets/calls and lands them in the Inbox. The "Sync now" button works without it. On Cloud the AI "new & relevant" gate dedups + auto-promotes; on self-host every pulled record lands for review:
-```bash
-# every 20 minutes
-*/20 * * * * curl -fsS -X POST -H "X-Crumb-Sweep-Secret: $CRUMB_INTERNAL_SWEEP_SECRET" http://127.0.0.1:3000/api/v1/internal/feedback-sync
-```
+**Backups:** `docker compose exec -T postgres pg_dump -U crumb crumb | gzip > crumb-$(date +%F).sql.gz` (see README "Backups & restore"). With the default `CRUMB_STORAGE_PROVIDER=postgres`, uploaded files are in the database, so the dump includes them. If you switched to `local` storage, back up `CRUMB_STORAGE_DIR` as well.
 
-**Backups** (Postgres): `docker compose exec postgres pg_dump -U crumb crumb | gzip > crumb-$(date +%F).sql.gz` (see README "Backups & restore").
+**Encrypting tokens stored before you set `CRUMB_ENCRYPTION_KEY`:** `docker compose exec dashboard node packages/db/dist/backfill-encrypt-secrets.mjs` seals the Slack, Linear and Jira tokens already in the database (safe to re-run). Reconnect any other integration to encrypt its secret.
 
 **pgvector upgrade note:** the Postgres image is `pgvector/pgvector:pg16` (needed for the embeddings / semantic-search features — the migration runs `CREATE EXTENSION vector`). It's a drop-in replacement for the stock `postgres:16` and reuses the same `crumb-pg-data` volume, but **take a backup before the first `up -d` that pulls it** (command above). If you run an **external/managed Postgres** instead of the bundled container, install the extension once as a superuser: `CREATE EXTENSION IF NOT EXISTS vector;` (most managed providers — RDS, Cloud SQL, Supabase — ship it).
 
@@ -216,10 +240,10 @@ webhook secret, then repeat in live):
 ## Quick reference
 | Thing | Value |
 |---|---|
-| Public URL | `https://crumb.localhostlabs.net` |
+| Public URL | `https://crumb.example.com` (your domain) |
 | Tunnel service target | `http://dashboard:3000` |
-| Slack redirect URL | `https://crumb.localhostlabs.net/api/integrations/slack/callback` |
-| Slack Events URL | `https://crumb.localhostlabs.net/api/integrations/slack/events` |
+| Slack redirect URL | `https://crumb.example.com/api/integrations/slack/callback` |
+| Slack Events URL | `https://crumb.example.com/api/integrations/slack/events` |
 | Start (with tunnel) | `docker compose --profile tunnel up -d --build` |
 | Logs | `docker compose logs -f dashboard` |
 | Health | `http://127.0.0.1:3000/api/health/ready` (on the box) |

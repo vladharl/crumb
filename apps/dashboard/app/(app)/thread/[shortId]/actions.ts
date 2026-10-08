@@ -1,7 +1,10 @@
 "use server";
 
-import { db, items, replies, statusEvents, workspaces, ticketSuggestions, dedupeSuggestions, replaySessions } from "@crumb/db";
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import {
+  db, items, accounts, accountUsers, replies, statusEvents, workspaces, ticketSuggestions, dedupeSuggestions, replaySessions,
+  type Workspace,
+} from "@crumb/db";
+import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { findDuplicateCandidates } from "@/lib/ai/dedup";
 import { replyConfigured, draftReply, translate } from "@/lib/ai/reply";
 import { withAiBudget } from "@/lib/ai/run";
@@ -9,12 +12,12 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { getActiveSession } from "@/lib/server";
 import { originFromHeaders } from "@/lib/origin";
+import { integrationsAllowed } from "@/lib/entitlements";
 import * as Linear from "@/lib/integrations/linear";
 import * as Jira from "@/lib/integrations/jira";
 import * as Github from "@/lib/integrations/github";
 import { suggestTicket, ticketSuggestionConfigured, TICKET_MODEL } from "@/lib/ai/ticket";
 import { open } from "@/lib/crypto-at-rest";
-import { consumeAi } from "@/lib/usage";
 import { IntegrationAuthError, clearProviderInstall } from "@/lib/integrations/revoke";
 import { emitEvent } from "@/lib/webhooks";
 import {
@@ -149,6 +152,9 @@ export type CreateExternalTicketInput = {
   // Provider-specific target. For Linear, this is the teamId. For Jira:
   // projectKey. For GitHub: "owner/repo". null means "use workspace default".
   target: string | null;
+  // Label names (an AI draft's, as edited in the modal). GitHub applies them;
+  // Linear and Jira get them as a last line of the description.
+  labels?: string[];
 };
 
 export type CreateExternalTicketResult =
@@ -159,9 +165,14 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
   const title = input.title?.trim();
   const body = input.body?.trim() ?? "";
   if (!title) return { ok: false, error: "missing_title" };
+  const labels = Array.isArray(input.labels)
+    ? input.labels.filter((l): l is string => typeof l === "string").map(l => l.trim().slice(0, 50)).filter(Boolean).slice(0, 10)
+    : [];
 
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+  // A downgrade keeps the tracker tokens; the plan decides whether they're used.
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
 
   // Confirm the item belongs to this workspace before we burn a real
   // API call against the external provider.
@@ -169,7 +180,8 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
     .select({
       id: items.id,
       shortId: items.shortId,
-      currentProvider: items.externalProvider,
+      title: items.title,
+      type: items.type,
       currentTicketId: items.externalTicketId,
     })
     .from(items)
@@ -178,112 +190,96 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
   if (!row) return { ok: false, error: "not_found" };
   if (row.currentTicketId) return { ok: false, error: "already_linked" };
 
-  if (input.provider === "linear") {
-    const token = workspace.linearAccessToken;
-    if (!token) return { ok: false, error: "linear_not_connected" };
-    const teamId = input.target ?? workspace.linearTeamId;
-    if (!teamId) return { ok: false, error: "no_team" };
+  // ponytail: Linear takes label ids and lib/integrations/jira doesn't send
+  // fields.labels yet, so their labels ride in the description. Pass them
+  // natively once those clients take label names.
+  const description = labels.length ? `${body}\n\nLabels: ${labels.join(", ")}`.trim() : body;
 
-    let issue;
-    try {
-      issue = await Linear.createIssue(open(token), { teamId, title, description: body });
-    } catch (err) {
-      const rv = await handleRevoke(err, workspace.id);
-      if (rv) return rv;
-      log.error("linear createIssue failed", { scope: "crumb/linear", err });
-      return { ok: false, error: "provider_create_failed" };
+  let ticket: { id: string; url: string; status: string };
+  try {
+    if (input.provider === "linear") {
+      const token = workspace.linearAccessToken;
+      if (!token) return { ok: false, error: "linear_not_connected" };
+      const teamId = input.target ?? workspace.linearTeamId;
+      if (!teamId) return { ok: false, error: "no_team" };
+      const issue = await Linear.createIssue(open(token), { teamId, title, description });
+      ticket = { id: issue.identifier, url: issue.url, status: issue.stateName };
+    } else if (input.provider === "jira") {
+      if (!workspace.jiraAccessToken || !workspace.jiraRefreshToken) {
+        return { ok: false, error: "jira_not_connected" };
+      }
+      const projectKey = input.target ?? workspace.jiraDefaultProjectKey;
+      if (!projectKey) return { ok: false, error: "no_project" };
+      const issue = await Jira.createIssue(workspace, { projectKey, title, description });
+      ticket = { id: issue.key, url: issue.url, status: issue.statusName };
+    } else if (input.provider === "github") {
+      if (!workspace.githubAppInstallId) return { ok: false, error: "github_not_connected" };
+      const repo = input.target ?? workspace.githubDefaultRepo;
+      if (!repo) return { ok: false, error: "no_repo" };
+      const issue = await Github.createIssue(workspace.githubAppInstallId, repo, {
+        title,
+        body,
+        labels: labels.length ? labels : undefined,
+      });
+      ticket = { id: Github.issueTicketRef(repo, issue.number), url: issue.url, status: issue.state };
+    } else {
+      return { ok: false, error: "provider_not_supported" };
     }
-
-    await db
-      .update(items)
-      .set({
-        externalProvider:  "linear",
-        externalTicketId:  issue.identifier,
-        externalTicketUrl: issue.url,
-        externalStatus:    issue.stateName,
-        externalSyncedAt:  new Date(),
-        updatedAt:         new Date(),
-      })
-      .where(eq(items.id, row.id));
-
-    revalidatePath(`/thread/${input.itemShortId}`);
-    revalidatePath("/inbox");
-    return { ok: true, externalTicketId: issue.identifier, externalTicketUrl: issue.url };
+  } catch (err) {
+    const rv = await handleRevoke(err, workspace.id);
+    if (rv) return rv;
+    log.error(`${input.provider} createIssue failed`, { scope: `crumb/${input.provider}`, err });
+    return { ok: false, error: "provider_create_failed" };
   }
 
-  if (input.provider === "jira") {
-    if (!workspace.jiraAccessToken || !workspace.jiraRefreshToken) {
-      return { ok: false, error: "jira_not_connected" };
-    }
-    const projectKey = input.target ?? workspace.jiraDefaultProjectKey;
-    if (!projectKey) return { ok: false, error: "no_project" };
+  await db
+    .update(items)
+    .set({
+      externalProvider:  input.provider,
+      externalTicketId:  ticket.id,
+      externalTicketUrl: ticket.url,
+      externalStatus:    ticket.status,
+      externalSyncedAt:  new Date(),
+      updatedAt:         new Date(),
+    })
+    .where(eq(items.id, row.id));
 
-    let issue;
-    try {
-      issue = await Jira.createIssue(workspace, { projectKey, title, description: body });
-    } catch (err) {
-      const rv = await handleRevoke(err, workspace.id);
-      if (rv) return rv;
-      log.error("jira createIssue failed", { scope: "crumb/jira", err });
-      return { ok: false, error: "provider_create_failed" };
-    }
+  void emitEvent(workspace.id, {
+    type: "ticket.linked",
+    workspace: workspace.slug,
+    item: { short_id: row.shortId, title: row.title, type: row.type },
+    ticket: { provider: input.provider, id: ticket.id, url: ticket.url },
+    at: new Date().toISOString(),
+  });
 
-    await db
-      .update(items)
-      .set({
-        externalProvider:  "jira",
-        externalTicketId:  issue.key,
-        externalTicketUrl: issue.url,
-        externalStatus:    issue.statusName,
-        externalSyncedAt:  new Date(),
-        updatedAt:         new Date(),
-      })
-      .where(eq(items.id, row.id));
-
-    revalidatePath(`/thread/${input.itemShortId}`);
-    revalidatePath("/inbox");
-    return { ok: true, externalTicketId: issue.key, externalTicketUrl: issue.url };
-  }
-
-  if (input.provider === "github") {
-    if (!workspace.githubAppInstallId) return { ok: false, error: "github_not_connected" };
-    const repo = input.target ?? workspace.githubDefaultRepo;
-    if (!repo) return { ok: false, error: "no_repo" };
-
-    let issue;
-    try {
-      issue = await Github.createIssue(workspace.githubAppInstallId, repo, { title, body });
-    } catch (err) {
-      log.error("github createIssue failed", { scope: "crumb/github", err });
-      return { ok: false, error: "provider_create_failed" };
-    }
-
-    const ticketRef = Github.issueTicketRef(repo, issue.number);
-    await db
-      .update(items)
-      .set({
-        externalProvider:  "github",
-        externalTicketId:  ticketRef,
-        externalTicketUrl: issue.url,
-        externalStatus:    issue.state,
-        externalSyncedAt:  new Date(),
-        updatedAt:         new Date(),
-      })
-      .where(eq(items.id, row.id));
-
-    revalidatePath(`/thread/${input.itemShortId}`);
-    revalidatePath("/inbox");
-    return { ok: true, externalTicketId: ticketRef, externalTicketUrl: issue.url };
-  }
-
-  return { ok: false, error: "provider_not_supported" };
+  revalidatePath(`/thread/${input.itemShortId}`);
+  revalidatePath("/inbox");
+  return { ok: true, externalTicketId: ticket.id, externalTicketUrl: ticket.url };
 }
 
+// Unlinking stays open after a downgrade: it's cleanup, and the ticket itself
+// stays in the tracker.
 export async function unlinkExternalTicket(itemShortId: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
 
-  const r = await db
+  const [row] = await db
+    .select({
+      id: items.id,
+      title: items.title,
+      type: items.type,
+      provider: items.externalProvider,
+      ticketId: items.externalTicketId,
+      ticketUrl: items.externalTicketUrl,
+    })
+    .from(items)
+    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "not_found" };
+
+  // Only the call that actually clears a link reports it, so a double click
+  // doesn't send two ticket.unlinked events.
+  const cleared = await db
     .update(items)
     .set({
       externalProvider:  null,
@@ -293,9 +289,17 @@ export async function unlinkExternalTicket(itemShortId: string): Promise<{ ok: t
       externalSyncedAt:  null,
       updatedAt:         new Date(),
     })
-    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
+    .where(and(eq(items.id, row.id), isNotNull(items.externalTicketId)))
     .returning({ id: items.id });
-  if (r.length === 0) return { ok: false, error: "not_found" };
+  if (cleared.length > 0 && row.provider && row.ticketId) {
+    void emitEvent(workspace.id, {
+      type: "ticket.unlinked",
+      workspace: workspace.slug,
+      item: { short_id: itemShortId, title: row.title, type: row.type },
+      ticket: { provider: row.provider, id: row.ticketId, url: row.ticketUrl },
+      at: new Date().toISOString(),
+    });
+  }
 
   revalidatePath(`/thread/${itemShortId}`);
   revalidatePath("/inbox");
@@ -311,6 +315,8 @@ export async function listProviderTargets(provider: Provider): Promise<
 > {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
+  // Checked here too so the modal says why as soon as it opens.
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
 
   if (provider === "linear") {
     const token = workspace.linearAccessToken;
@@ -368,23 +374,65 @@ export async function listProviderTargets(provider: Provider): Promise<
 }
 
 // AI draft for an external ticket. Cloud-only; pulls 10 recent ticket
-// titles from the target provider to give the model the team's voice.
+// titles from the target provider to give the model the team's voice, and
+// ends the body with who is asking, their ARR and a link back to the thread.
 // Persists the suggestion (pending) so a future audit can show
 // "AI proposed X, vendor edited to Y".
 export type SuggestExternalTicketResult =
   | { ok: true; title: string; body: string; labels: string[] | null; reason: string; confidence: number; suggestionId: string }
   | { ok: false; error: string };
 
+// Recent ticket titles from the target, for voice. Best-effort: on failure the
+// model still drafts, just less in the team's style.
+async function recentTickets(
+  workspace: Workspace,
+  provider: Provider,
+  target: string,
+): Promise<Array<{ identifier: string; title: string; stateName: string }>> {
+  try {
+    if (provider === "linear") return await Linear.listRecentIssues(open(workspace.linearAccessToken!), target, 10);
+    if (provider === "jira") return await Jira.listRecentIssues(workspace, target, 10);
+    return await Github.listRecentIssues(workspace.githubAppInstallId!, target, 10);
+  } catch (err) {
+    // Even on this best-effort path, a revoked token should clear the install.
+    if (err instanceof IntegrationAuthError) void clearProviderInstall(workspace.id, err.provider);
+    log.warn(`listRecentIssues(${provider}) failed (non-fatal)`, { scope: "crumb/ai", err });
+    return [];
+  }
+}
+
+// The item's merge group: distinct accounts asking, their summed ARR, and the
+// distinct people asking. Same sums as the thread header.
+async function mergeGroupReach(itemId: string): Promise<{ accounts: number; arrCents: number; requesters: number }> {
+  const [r] = (await db.execute(sql`
+    SELECT COUNT(*)::int AS accts, COALESCE(SUM(a.arr_cents), 0)::bigint AS arr,
+      (SELECT COUNT(DISTINCT p.submitter_id) FROM items p WHERE p.id = ${itemId} OR p.merged_into_id = ${itemId})::int AS people
+    FROM (SELECT DISTINCT g.account_id FROM items g WHERE g.id = ${itemId} OR g.merged_into_id = ${itemId}) grp
+    JOIN accounts a ON a.id = grp.account_id
+  `)) as unknown as Array<{ accts: number | string; arr: number | string; people: number | string }>;
+  return { accounts: Number(r?.accts ?? 0), arrCents: Number(r?.arr ?? 0), requesters: Number(r?.people ?? 0) };
+}
+
 export async function suggestExternalTicket(
   itemShortId: string,
   provider: Provider,
+  // The team / project / repo picked in the modal; null means the workspace default.
+  target: string | null = null,
 ): Promise<SuggestExternalTicketResult> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
   if (!ticketSuggestionConfigured()) return { ok: false, error: "not_configured" };
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
 
-  // Monthly AI cost cap (shared budget with clustering) — atomic consume.
-  if (!(await consumeAi(workspace)).ok) return { ok: false, error: "ai_cap_reached" };
+  const conn = {
+    linear: { connected: !!workspace.linearAccessToken, target: target ?? workspace.linearTeamId, missing: "no_team" },
+    jira: { connected: !!workspace.jiraAccessToken, target: target ?? workspace.jiraDefaultProjectKey, missing: "no_project" },
+    github: { connected: !!workspace.githubAppInstallId, target: target ?? workspace.githubDefaultRepo, missing: "no_repo" },
+  }[provider];
+  if (!conn) return { ok: false, error: "provider_not_supported" };
+  if (!conn.connected) return { ok: false, error: `${provider}_not_connected` };
+  const providerTarget = conn.target;
+  if (!providerTarget) return { ok: false, error: conn.missing };
 
   const [item] = await db
     .select({
@@ -392,72 +440,50 @@ export async function suggestExternalTicket(
       title: items.title,
       body: items.body,
       type: items.type,
+      accountName: accounts.name,
+      arrCents: accounts.arrCents,
     })
     .from(items)
+    .innerJoin(accounts, eq(accounts.id, items.accountId))
     .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
     .limit(1);
   if (!item) return { ok: false, error: "not_found" };
+  const origin = originFromHeaders(headers());
 
-  // Fetch recent tickets from the target provider for voice context.
-  // Each provider supplies a small adapter; only Linear is wired in this
-  // chunk. Jira / GitHub fall through with an empty list (the model still
-  // produces a sensible draft, just less stylistically matched).
-  let recentTickets: Array<{ identifier: string; title: string; stateName: string }> = [];
-  let providerTarget: string | null = null;
-
-  if (provider === "linear") {
-    if (!workspace.linearAccessToken || !workspace.linearTeamId) {
-      return { ok: false, error: "linear_not_connected" };
-    }
-    providerTarget = workspace.linearTeamId;
-    try {
-      recentTickets = await Linear.listRecentIssues(open(workspace.linearAccessToken), workspace.linearTeamId, 10);
-    } catch (err) {
-      // Even on this best-effort path, a revoked token should clear the install.
-      if (err instanceof IntegrationAuthError) void clearProviderInstall(workspace.id, err.provider);
-      log.warn("listRecentIssues(Linear) failed (non-fatal)", { scope: "crumb/ai", err });
-    }
-  } else if (provider === "jira") {
-    if (!workspace.jiraAccessToken || !workspace.jiraDefaultProjectKey) {
-      return { ok: false, error: "jira_not_connected" };
-    }
-    providerTarget = workspace.jiraDefaultProjectKey;
-    try {
-      recentTickets = await Jira.listRecentIssues(workspace, workspace.jiraDefaultProjectKey, 10);
-    } catch (err) {
-      log.warn("listRecentIssues(Jira) failed (non-fatal)", { scope: "crumb/ai", err });
-    }
-  } else if (provider === "github") {
-    if (!workspace.githubAppInstallId || !workspace.githubDefaultRepo) {
-      return { ok: false, error: "github_not_connected" };
-    }
-    providerTarget = workspace.githubDefaultRepo;
-    try {
-      recentTickets = await Github.listRecentIssues(workspace.githubAppInstallId, workspace.githubDefaultRepo, 10);
-    } catch (err) {
-      log.warn("listRecentIssues(GitHub) failed (non-fatal)", { scope: "crumb/ai", err });
-    }
-  }
-
-  // GitHub repo context feeds *all* providers' drafts when a GitHub repo
-  // is connected on this workspace — teams often use GitHub for code +
-  // Linear/Jira for tickets, and the model gets the project framing from
-  // the README + tree regardless of where the ticket lands.
-  let repoContext: { repo: string; readme: string | null; topLevelTree: string | null } | undefined;
-  if (workspace.githubAppInstallId && workspace.githubDefaultRepo) {
-    try {
-      repoContext = await Github.getRepoContext(workspace.githubAppInstallId, workspace.githubDefaultRepo);
-    } catch (err) {
-      log.warn("getRepoContext failed (non-fatal)", { scope: "crumb/ai", err });
-    }
-  }
-
-  const draft = await suggestTicket({
-    provider,
-    item: { title: item.title, body: item.body, type: item.type },
-    recentTickets,
-    repoContext,
+  // One metered unit; the entitlement check inside answers not_entitled after
+  // a downgrade instead of a misleading "limit reached".
+  const budget = await withAiBudget(workspace, async () => {
+    const [recent, repoContext, reach] = await Promise.all([
+      recentTickets(workspace, provider, providerTarget),
+      // GitHub repo context feeds *all* providers' drafts when a GitHub repo
+      // is connected on this workspace — teams often use GitHub for code +
+      // Linear/Jira for tickets, and the model gets the project framing from
+      // the README + tree regardless of where the ticket lands.
+      workspace.githubAppInstallId && workspace.githubDefaultRepo
+        ? Github.getRepoContext(workspace.githubAppInstallId, workspace.githubDefaultRepo).catch((err) => {
+            log.warn("getRepoContext failed (non-fatal)", { scope: "crumb/ai", err });
+            return undefined;
+          })
+        : undefined,
+      mergeGroupReach(item.id),
+    ]);
+    return suggestTicket({
+      provider,
+      item: { title: item.title, body: item.body, type: item.type },
+      recentTickets: recent,
+      repoContext,
+      impact: {
+        accountName: item.accountName,
+        arrCents: item.arrCents,
+        accounts: reach.accounts,
+        combinedArrCents: reach.arrCents,
+        requesters: reach.requesters,
+        threadUrl: origin ? `${origin}/thread/${itemShortId}` : null,
+      },
+    });
   });
+  if (!budget.ok) return { ok: false, error: budget.error };
+  const draft = budget.value;
   if (!draft) return { ok: false, error: "draft_failed" };
 
   const [stored] = await db.insert(ticketSuggestions).values({
@@ -726,23 +752,57 @@ export async function draftReplyAction(
   if (!replyConfigured()) return { ok: false, error: "not_configured" };
 
   const [item] = await db
-    .select({ title: items.title, body: items.body, type: items.type, status: items.status })
+    .select({
+      id: items.id,
+      accountId: items.accountId,
+      title: items.title,
+      body: items.body,
+      type: items.type,
+      status: items.status,
+      lang: items.detectedLang,
+    })
     .from(items)
     .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, itemShortId)))
     .limit(1);
   if (!item) return { ok: false, error: "not_found" };
 
-  // A few recent customer-facing vendor replies across the workspace, for voice.
-  const recent = await db
-    .select({ body: replies.body })
-    .from(replies)
-    .innerJoin(items, eq(items.id, replies.itemId))
-    .where(and(eq(items.workspaceId, workspace.id), isNotNull(replies.workspaceUserId), eq(replies.internal, false)))
-    .orderBy(desc(replies.createdAt))
-    .limit(5);
+  const [thread, style] = await Promise.all([
+    // This thread's customer-visible messages, the latest ten. Internal notes
+    // stay out of anything a customer might be sent.
+    db
+      .select({ body: replies.body, vendorUserId: replies.workspaceUserId })
+      .from(replies)
+      .where(and(eq(replies.itemId, item.id), eq(replies.internal, false)))
+      .orderBy(desc(replies.createdAt))
+      .limit(10),
+    // The vendor's newest replies on this customer account's other threads,
+    // for tone. Never another account's: no other customer's details reach the
+    // model. None means draftReply's default tone. Each comes with its thread's
+    // account and customer names so draftReply can scrub them out.
+    db
+      .select({ body: replies.body, accountName: accounts.name, personName: accountUsers.name })
+      .from(replies)
+      .innerJoin(items, eq(items.id, replies.itemId))
+      .innerJoin(accounts, eq(accounts.id, items.accountId))
+      .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
+      .where(and(
+        eq(items.workspaceId, workspace.id),
+        eq(items.accountId, item.accountId),
+        ne(items.id, item.id),
+        isNotNull(replies.workspaceUserId),
+        eq(replies.internal, false),
+      ))
+      .orderBy(desc(replies.createdAt))
+      .limit(5),
+  ]);
 
   const budget = await withAiBudget(workspace, () =>
-    draftReply({ item, recentVendorReplies: recent.map(r => r.body) }),
+    draftReply({
+      item: { title: item.title, body: item.body, type: item.type, status: item.status },
+      lang: item.lang,
+      thread: thread.reverse().map(r => ({ fromVendor: r.vendorUserId !== null, body: r.body })),
+      styleExamples: style.map(s => ({ body: s.body, names: [s.accountName, s.personName] })),
+    }),
   );
   if (!budget.ok) return { ok: false, error: budget.error };
   if (!budget.value) return { ok: false, error: "draft_failed" };
@@ -766,19 +826,21 @@ export async function translateItem(
   if (!item) return { ok: false, error: "not_found" };
 
   const budget = await withAiBudget(workspace, async () => {
-    const [t, b] = await Promise.all([
+    const [title, body] = await Promise.all([
       translate(item.title, WORKSPACE_LANG),
       item.body ? translate(item.body, WORKSPACE_LANG) : Promise.resolve(""),
     ]);
-    return { title: t, body: b ?? "" };
+    return { title, body };
   });
   if (!budget.ok) return { ok: false, error: budget.error };
-  const v = budget.value;
-  if (!v.title && !v.body) return { ok: false, error: "translate_failed" };
+  const { title, body } = budget.value;
+  // Both halves or nothing: saving half a translation showed an empty body (or
+  // the original title) as if it had worked.
+  if (!title || body === null) return { ok: false, error: "translate_failed" };
 
   await db
     .update(items)
-    .set({ titleTranslated: v.title, bodyTranslated: v.body, translatedAt: new Date() })
+    .set({ titleTranslated: title, bodyTranslated: body, translatedAt: new Date() })
     .where(eq(items.id, item.id));
   revalidatePath(`/thread/${itemShortId}`);
   return { ok: true };

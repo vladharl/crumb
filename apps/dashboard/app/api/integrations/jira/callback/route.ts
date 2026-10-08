@@ -10,6 +10,7 @@ import {
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
 import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
 import { seal } from "@/lib/crypto-at-rest";
+import { withoutAlert } from "@/lib/integrations/revoke";
 import { originFromHeaders } from "@/lib/origin";
 import { isCloud } from "@/lib/tier";
 import { log } from "@/lib/log";
@@ -81,6 +82,7 @@ export async function GET(req: Request) {
       jiraSiteUrl:           target.url,
       jiraDefaultProjectKey: defaultProjectKey,
       jiraInstalledAt:       new Date(),
+      integrationAlerts:     withoutAlert("jira"),
     })
     .where(eq(workspaces.id, ws.id));
 

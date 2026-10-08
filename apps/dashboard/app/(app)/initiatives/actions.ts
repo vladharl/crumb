@@ -12,10 +12,22 @@ import { autoClusterItem } from "@/lib/ai/auto-cluster";
 import { aiCap, consumeAi } from "@/lib/usage";
 import { notifyRoadmapFollowers } from "@/lib/roadmap-notify";
 import { draftChangelogForInitiative } from "@/lib/changelog";
+import { emitEvent } from "@/lib/webhooks";
 import { log } from "@/lib/log";
 
 const ROADMAP_COLUMNS = new Set(["now", "next", "later"]);
 const ROADMAP_COLUMN_LABEL: Record<string, string> = { now: "Now", next: "Next", later: "Later" };
+
+// updateInitiative's fields as initiative.updated names them in `changes`.
+const CHANGE_NAMES: Record<string, string> = {
+  name: "name",
+  description: "description",
+  internalNotes: "internal_notes",
+  status: "status",
+  color: "color",
+  ownerWorkspaceUserId: "owner",
+  trackedEventNames: "tracked_events",
+};
 
 const ALLOWED_STATUSES = ["open", "in_progress", "shipped", "parked"] as const;
 type InitiativeStatus = (typeof ALLOWED_STATUSES)[number];
@@ -213,12 +225,23 @@ export async function updateInitiative(
     }
   }
 
-  const r = await db
+  const [row] = await db
     .update(initiatives)
     .set(updates)
     .where(and(eq(initiatives.workspaceId, workspace.id), eq(initiatives.id, id)))
-    .returning({ id: initiatives.id });
-  if (r.length === 0) return { ok: false, error: "not_found" };
+    .returning({ shortId: initiatives.shortId, name: initiatives.name, status: initiatives.status, roadmapColumn: initiatives.roadmapColumn });
+  if (!row) return { ok: false, error: "not_found" };
+
+  const changes = Object.keys(updates).flatMap(k => CHANGE_NAMES[k] ?? []);
+  if (changes.length > 0) {
+    void emitEvent(workspace.id, {
+      type: "initiative.updated",
+      workspace: workspace.slug,
+      initiative: { short_id: row.shortId, name: row.name, status: row.status, roadmap_column: row.roadmapColumn },
+      changes,
+      at: new Date().toISOString(),
+    });
+  }
 
   // Just shipped → auto-draft an announce-shipped changelog entry (idempotent,
   // fire-and-forget). A human reviews + publishes it from /changelog.
@@ -285,9 +308,12 @@ export async function reorderInitiatives(
   if (!canManage(user.role)) return { ok: false, error: "forbidden" };
   if (orderedIds.length === 0) return { ok: true };
 
-  // Prior state, to detect public items that change column (for notify).
+  // Prior state, to detect cards that change column (webhook + follower notify).
   const prev = await db
-    .select({ id: initiatives.id, name: initiatives.name, isPublic: initiatives.isPublic, roadmapColumn: initiatives.roadmapColumn })
+    .select({
+      id: initiatives.id, shortId: initiatives.shortId, name: initiatives.name, status: initiatives.status,
+      isPublic: initiatives.isPublic, roadmapColumn: initiatives.roadmapColumn,
+    })
     .from(initiatives)
     .where(and(eq(initiatives.workspaceId, workspace.id), inArray(initiatives.id, orderedIds)));
   const prevById = new Map(prev.map(p => [p.id, p]));
@@ -300,6 +326,19 @@ export async function reorderInitiatives(
   }
 
   revalidatePath("/initiatives");
+
+  // A column move is an update; reordering within a column isn't.
+  const at = new Date().toISOString();
+  for (const p of prev) {
+    if (p.roadmapColumn === column) continue;
+    void emitEvent(workspace.id, {
+      type: "initiative.updated",
+      workspace: workspace.slug,
+      initiative: { short_id: p.shortId, name: p.name, status: p.status, roadmap_column: column },
+      changes: ["roadmap_column"],
+      at,
+    });
+  }
 
   if (column) {
     const origin = originFromHeaders(headers());

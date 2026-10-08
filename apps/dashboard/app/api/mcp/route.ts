@@ -19,7 +19,11 @@ export const runtime = "nodejs";
 // tools additionally require the actor's role to be admin/pm (enforced in the
 // shared mutation cores). Rate-limited per key.
 
+// Protocol revisions we speak, newest first. The server only implements
+// initialize, ping and tools/*, whose shapes are the same in all three
+// (2025-03-26's JSON-RPC batching is refused; 2025-06-18 dropped it).
 const PROTOCOL_VERSION = "2025-06-18";
+const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = [PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
 const SERVER_INFO = { name: "crumb", version: "1.0.0" };
 
 // JSON-RPC 2.0 error codes.
@@ -83,8 +87,12 @@ export async function POST(req: Request) {
   try {
     switch (method) {
       case "initialize":
+        // Version negotiation: echo the client's revision when we speak it,
+        // otherwise answer with our latest and let the client decide.
         return result(id, {
-          protocolVersion: typeof params.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION,
+          protocolVersion: typeof params.protocolVersion === "string" && SUPPORTED_PROTOCOL_VERSIONS.includes(params.protocolVersion)
+            ? params.protocolVersion
+            : PROTOCOL_VERSION,
           capabilities: { tools: {} },
           serverInfo: SERVER_INFO,
         });

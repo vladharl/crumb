@@ -3,6 +3,7 @@ import { db, workspaces } from "@crumb/db";
 import { hubspot } from "@/lib/integrations/crm/hubspot";
 import { syncCrmAccounts } from "@/lib/integrations/crm/sync";
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
+import { withoutAlert } from "@/lib/integrations/revoke";
 import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
 import { seal } from "@/lib/crypto-at-rest";
 import { log } from "@/lib/log";
@@ -11,8 +12,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // HubSpot redirects here after consent. Same shape as the Linear callback:
-// verify state, exchange code, persist sealed tokens, then run an initial
-// account+ARR sync so the user sees data immediately, and redirect back.
+// verify state, exchange code, persist sealed tokens (clearing any automatic-
+// disconnect alert), start the first account sync in the background and
+// redirect straight back. The settings card shows "Syncing…" until it ends.
 
 function redirectBack(req: Request, slug: string): Response {
   return redirectToSettings(req, "hubspot", slug);
@@ -41,7 +43,7 @@ export async function GET(req: Request) {
     return redirectBack(req, "error_exchange_failed");
   }
 
-  await db
+  const [fresh] = await db
     .update(workspaces)
     .set({
       hubspotAccessToken: seal(tokens.accessToken),
@@ -49,16 +51,14 @@ export async function GET(req: Request) {
       hubspotTokenExpiresAt: tokens.expiresAt,
       hubspotPortalId: tokens.portalId ?? null,
       hubspotInstalledAt: new Date(),
+      integrationAlerts: withoutAlert("hubspot"),
     })
-    .where(eq(workspaces.id, ws.id));
+    .where(eq(workspaces.id, ws.id))
+    .returning();
 
-  // Initial sync (best-effort) — re-read the row so it has the sealed tokens.
-  try {
-    const [fresh] = await db.select().from(workspaces).where(eq(workspaces.id, ws.id)).limit(1);
-    if (fresh) await syncCrmAccounts(fresh, "hubspot");
-  } catch (err) {
-    log.warn("hubspot initial sync failed (non-fatal)", { scope: "crumb/hubspot", err });
-  }
+  // A big portal takes minutes, so the first sync runs after the redirect. It
+  // never rejects, and its outcome is shown on the card.
+  if (fresh) void syncCrmAccounts(fresh, "hubspot");
 
   return redirectBack(req, "connected");
 }

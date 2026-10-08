@@ -55,7 +55,8 @@ function selectProvider(): { provider: EmailProvider; from: string } {
   } else if (choice === "smtp") {
     // Generic SMTP — OSS-side BYO option. Works on both tiers.
     const host = process.env.SMTP_HOST?.trim();
-    const port = parseInt(process.env.SMTP_PORT ?? "587", 10);
+    // Empty counts as unset: docker-compose passes a blank SMTP_PORT through.
+    const port = parseInt(process.env.SMTP_PORT?.trim() || "587", 10);
     const user = process.env.SMTP_USER ?? "";
     const pass = process.env.SMTP_PASS ?? "";
     const secure = (process.env.SMTP_SECURE ?? "").toLowerCase() === "true";
@@ -525,6 +526,79 @@ export async function sendDunningNotification(m: DunningNotification): Promise<v
   });
   if (!result.ok) {
     log.error("dunning send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
+  }
+}
+
+// ─── Integration disconnected (to workspace admins) ──────────
+// Sent once when Crumb drops an integration on its own (lib/integrations/
+// revoke.ts): which one, what stopped working, and a Reconnect link. noreply
+// From, like dunning: a notice, not a conversation.
+
+export type IntegrationDisconnected = {
+  to: string;
+  workspaceName: string;
+  /** Display name, e.g. "Slack". */
+  provider: string;
+  /** One sentence on what stopped working. */
+  impact: string;
+  /** Settings → Integrations on the app origin; null without CRUMB_APP_URL. */
+  reconnectUrl: string | null;
+};
+
+const escHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+export async function sendIntegrationDisconnected(m: IntegrationDisconnected): Promise<void> {
+  const { provider, from } = selectProvider();
+  const lead = `Crumb lost access to ${m.provider} for ${m.workspaceName}, so it disconnected the integration. ${m.impact}`;
+  const howTo = "Open Crumb and go to Settings, then Integrations, to reconnect.";
+  const ws = escHtml(m.workspaceName);
+  const action = m.reconnectUrl
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+              <tr><td style="border-radius:8px;background:#1C1815">
+                <a href="${escHtml(m.reconnectUrl)}" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:500;color:#FBF7F0;text-decoration:none;border-radius:8px">Reconnect ${escHtml(m.provider)}</a>
+              </td></tr>
+            </table>`
+    : `<p style="margin:0 0 24px;font-size:14px;color:#4A2E1F">${escHtml(howTo)}</p>`;
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%">
+          <tr><td style="padding:0 8px 24px">
+            <div style="font-weight:600;font-size:18px;letter-spacing:-0.01em">Crumb</div>
+            <div style="font-size:12px;color:#6B5C50">Integrations · ${ws}</div>
+          </td></tr>
+          <tr><td style="padding:0 8px">
+            <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">${escHtml(m.provider)} was disconnected</h1>
+            <p style="margin:0 0 16px;font-size:14px;color:#4A2E1F">${escHtml(lead)}</p>
+            ${action}
+          </td></tr>
+          <tr><td style="padding:32px 8px 0;border-top:1px solid rgba(28,24,21,0.08)">
+            <p style="margin:24px 0 0;font-size:11px;color:#8A7C70">You're receiving this as an admin of ${ws} on Crumb.</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const text = `${m.provider} was disconnected
+
+${lead}
+
+${m.reconnectUrl ? `Reconnect ${m.provider}: ${m.reconnectUrl}` : howTo}`;
+
+  const result = await provider.send({
+    to: m.to,
+    from: noreplyFrom(from),
+    subject: `${m.provider} disconnected from ${m.workspaceName}`,
+    html,
+    text,
+    previewLine: `${m.provider} disconnected; reconnect in Settings, Integrations`,
+    link: m.reconnectUrl ?? undefined,
+  });
+  if (!result.ok) {
+    log.error("integration-disconnected send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
 }
 

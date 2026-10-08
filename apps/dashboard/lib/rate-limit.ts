@@ -28,8 +28,8 @@ const SWEEP_EVERY = 1000;
 let callsSinceSweep = 0;
 // Defaults: 60 requests / minute. Override per call site if a path needs
 // a tighter limit (e.g. uploads can be slower than submits).
-const DEFAULT_CAPACITY = parseInt(process.env.CRUMB_RATE_LIMIT_CAPACITY ?? "60", 10);
-const DEFAULT_REFILL_PER_SEC = parseFloat(process.env.CRUMB_RATE_LIMIT_REFILL_PER_SEC ?? "1");
+const DEFAULT_CAPACITY = parseInt(process.env.CRUMB_RATE_LIMIT_CAPACITY?.trim() || "60", 10);
+const DEFAULT_REFILL_PER_SEC = parseFloat(process.env.CRUMB_RATE_LIMIT_REFILL_PER_SEC?.trim() || "1");
 
 export type RateLimitResult =
   | { ok: true; remaining: number }

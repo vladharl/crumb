@@ -12,7 +12,8 @@ test("can add a webhook endpoint and then delete it", async ({ page }) => {
   // The one-time signing secret is surfaced on create.
   await expect(page.getByText(/save this signing secret/i)).toBeVisible();
 
-  // Delete it again.
+  // Delete it again, confirming in the dialog.
   await page.getByRole("button", { name: /^Delete$/ }).first().click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete", exact: true }).click();
   await expect(page.getByText(url, { exact: true })).toBeHidden({ timeout: 10_000 });
 });

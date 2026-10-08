@@ -1,5 +1,5 @@
 import { Avatar, Card, CardHead, Ic, Pill } from "@crumb/ui";
-import { db, workspaceUsers, magicTokens, sessions } from "@crumb/db";
+import { db, workspaceUsers, magicTokens, sessions, apiKeys } from "@crumb/db";
 import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
 import { InvitePanel, RemoveButton, ResendButton, RoleSelect } from "./InvitePanel";
@@ -11,7 +11,7 @@ export default async function SettingsTeamPage() {
   const { workspace, user: me } = await getActiveSession();
   const canInvite = me.role === "admin";
 
-  const [team, sessionRows, pendingRows] = await Promise.all([
+  const [team, sessionRows, pendingRows, keyRows] = await Promise.all([
     db.select({
         id: workspaceUsers.id,
         name: workspaceUsers.name,
@@ -37,10 +37,19 @@ export default async function SettingsTeamPage() {
         gt(magicTokens.expiresAt, new Date()),
       ))
       .groupBy(magicTokens.workspaceUserId),
+
+    // Active API keys by creator: removing a member deletes their keys (FK
+    // cascade), so the remove confirm names them.
+    db.select({ userId: apiKeys.createdByWorkspaceUserId, name: apiKeys.name })
+      .from(apiKeys)
+      .where(and(eq(apiKeys.workspaceId, workspace.id), isNull(apiKeys.revokedAt)))
+      .orderBy(asc(apiKeys.name)),
   ]);
 
   const sessionByUser = new Map(sessionRows.map(r => [r.userId, r.c]));
   const pendingByUser = new Map(pendingRows.map(r => [r.userId, r.c]));
+  const keysByUser = new Map<string, string[]>();
+  for (const k of keyRows) keysByUser.set(k.userId, [...(keysByUser.get(k.userId) ?? []), k.name]);
 
   return (
     <Card>
@@ -89,7 +98,7 @@ export default async function SettingsTeamPage() {
               </span>
               <span className="row gap-2 center" style={{ justifyContent: "flex-end" }}>
                 {isPending && canInvite ? <ResendButton id={m.id} /> : null}
-                {canInvite && !isMe ? <RemoveButton id={m.id} name={m.name} /> : null}
+                {canInvite && !isMe ? <RemoveButton id={m.id} name={m.name} keys={keysByUser.get(m.id) ?? []} /> : null}
               </span>
             </div>
           );

@@ -11,7 +11,7 @@ import { slackConfigured } from "@/lib/slack/install";
 import { linearConfigured } from "@/lib/integrations/linear";
 import { jiraConfigured } from "@/lib/integrations/jira";
 import { githubConfigured } from "@/lib/integrations/github";
-import { crmConfigured } from "@/lib/integrations/crm";
+import { crmConfigured, getCrmAdapter } from "@/lib/integrations/crm";
 import { ConnectSlackButton, DisconnectSlackButton } from "./SlackActions";
 import { ConnectLinearButton, DisconnectLinearButton } from "./LinearActions";
 import { LinearTeamSwitcher } from "./LinearTeamSwitcher";
@@ -20,13 +20,14 @@ import { ConnectGithubButton, DisconnectGithubButton } from "./GithubActions";
 import {
   ConnectHubspotButton, DisconnectHubspotButton,
   ConnectSalesforceButton, DisconnectSalesforceButton,
-  SyncCrmButton,
+  SyncCrmButton, CrmArrFieldPicker,
 } from "./CrmActions";
 import { ConnectTeamsForm, TeamsConnectedActions } from "./TeamsActions";
 import { SessionRecordToggle } from "./SessionRecordToggle";
 import { retentionDaysForPlan } from "@/lib/replay/sweep";
 import { FeedbackConnectors } from "./FeedbackConnectors";
 import { listConnections } from "@/lib/integrations/feedback/connections";
+import { disconnectNotice } from "@/lib/integrations/revoke";
 import { UpgradeNotice } from "@/components/UpgradeNotice";
 
 export const dynamic = "force-dynamic";
@@ -82,7 +83,7 @@ const GITHUB_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
 
 const CRM_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
   ...SESSION_BANNER,
-  connected:             { kind: "ok",  text: "CRM connected. Accounts and ARR are syncing, visible on the Accounts page. Manually-set ARR is preserved." },
+  connected:             { kind: "ok",  text: "CRM connected. Accounts are syncing to the Accounts page. ARR syncs from the field chosen below, and manually set ARR is never overwritten." },
   error_missing_params:  { kind: "err", text: "The CRM didn't include a valid response. Please try again." },
   error_bad_state:       { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
   error_workspace_gone:  { kind: "err", text: "Workspace not found while finishing the install." },
@@ -163,20 +164,31 @@ export default async function IntegrationsPage({
 
   const hubspotInstalled = !!ws.hubspotAccessToken;
   const hubspotCanInstall = crmConfigured("hubspot");
+  const hubspotArrField = getCrmAdapter("hubspot").arrField(ws);
   const hubspotBanner = searchParams.hubspot
     ? (CRM_BANNER[searchParams.hubspot] ?? { kind: "err" as const, text: searchParams.hubspot.replace(/^error_/, "") })
     : null;
 
   const salesforceInstalled = !!ws.salesforceAccessToken;
   const salesforceCanInstall = crmConfigured("salesforce");
+  const salesforceArrField = getCrmAdapter("salesforce").arrField(ws);
   const salesforceBanner = searchParams.salesforce
     ? (CRM_BANNER[searchParams.salesforce] ?? { kind: "err" as const, text: searchParams.salesforce.replace(/^error_/, "") })
     : null;
 
   // Inbound feedback connectors (Autopilot). Creds-gated like the rest; the AI
-  // new-and-relevant filter additionally needs the "ai" feature (Cloud).
-  const feedbackConnections = integrationsEntitled ? await listConnections(ws.id) : [];
+  // new-and-relevant filter additionally needs the "ai" feature (Cloud). On a
+  // plan without integrations, existing connections still show, paused, so
+  // they can be disconnected.
+  const feedbackConnections = await listConnections(ws.id);
   const aiEnabled = hasFeature(ws, "ai");
+
+  // An integration Crumb disconnected on its own (its access was revoked):
+  // a Reconnect banner on its card until it's connected again.
+  const notice = (provider: Parameters<typeof disconnectNotice>[1]) => {
+    const n = disconnectNotice(ws, provider);
+    return n && <Banner kind="err" text={n.text} />;
+  };
 
   const teamsConnected = !!ws.teamsWebhookUrl;
 
@@ -235,6 +247,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
+              {notice("linear")}
               <p className="text-sm muted note">
                 Push Crumb items out as Linear issues, with status synced back via webhook. On Cloud, an AI draft suggests a title + body that matches your team's voice.
               </p>
@@ -291,6 +304,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
+              {notice("jira")}
               <p className="text-sm muted note">
                 Push Crumb items out as Jira issues, with status synced back via webhook. Atlassian Cloud only.
               </p>
@@ -347,6 +361,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
+              {notice("github")}
               <p className="text-sm muted note">
                 Push Crumb items out as GitHub issues. Status syncs back via webhook. When installed, README + repo structure also enrich AI drafts for any provider.
               </p>
@@ -393,10 +408,13 @@ export default async function IntegrationsPage({
                 {crmStats["hubspot"] ? <>{crmStats["hubspot"].count} accounts synced{fmtSync(crmStats["hubspot"].lastSync) ? <> · last {fmtSync(crmStats["hubspot"].lastSync)}</> : null}.</> : "Run a sync to pull accounts."}
               </p>
               <p className="text-xs muted note">
-                Companies sync into Accounts with ARR from the <span className="mono">annualrevenue</span> property. Manually-set ARR is never overwritten.
+                {hubspotArrField
+                  ? <>Companies sync into Accounts, with ARR from the <span className="mono">{hubspotArrField}</span> property. Manually set ARR is never overwritten.</>
+                  : <>Companies sync into Accounts by name. To sync ARR too, an admin picks the property that holds what each company pays you (Annual revenue is the company&apos;s own revenue, so it&apos;s never assumed).</>}
               </p>
               <div className="row gap-3 center" style={{ flexWrap: "wrap" }}>
                 <SyncCrmButton provider="hubspot" />
+                {isAdmin && integrationsEntitled && <CrmArrFieldPicker provider="hubspot" current={hubspotArrField} />}
                 {isAdmin
                   ? <DisconnectHubspotButton />
                   : <span className="text-xs muted">Only workspace admins can disconnect.</span>}
@@ -404,6 +422,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
+              {notice("hubspot")}
               <p className="text-sm muted note">
                 One-way sync of companies + ARR from HubSpot, so prioritization by revenue uses live dollar figures instead of hand-entered ones.
               </p>
@@ -448,10 +467,13 @@ export default async function IntegrationsPage({
                 {crmStats["salesforce"] ? <>{crmStats["salesforce"].count} accounts synced{fmtSync(crmStats["salesforce"].lastSync) ? <> · last {fmtSync(crmStats["salesforce"].lastSync)}</> : null}.</> : "Run a sync to pull accounts."}
               </p>
               <p className="text-xs muted note">
-                Accounts sync from the <span className="mono">AnnualRevenue</span> field. Manually-set ARR is never overwritten.
+                {salesforceArrField
+                  ? <>Accounts sync by name, with ARR from the <span className="mono">{salesforceArrField}</span> field. Manually set ARR is never overwritten.</>
+                  : <>Accounts sync by name. To sync ARR too, an admin picks the field that holds what each account pays you (Annual Revenue is the account&apos;s own revenue, so it&apos;s never assumed).</>}
               </p>
               <div className="row gap-3 center" style={{ flexWrap: "wrap" }}>
                 <SyncCrmButton provider="salesforce" />
+                {isAdmin && integrationsEntitled && <CrmArrFieldPicker provider="salesforce" current={salesforceArrField} />}
                 {isAdmin
                   ? <DisconnectSalesforceButton />
                   : <span className="text-xs muted">Only workspace admins can disconnect.</span>}
@@ -459,6 +481,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
+              {notice("salesforce")}
               <p className="text-sm muted note">
                 One-way sync of Accounts + ARR from Salesforce. Sandboxes are supported via <span className="mono">SALESFORCE_LOGIN_URL</span>.
               </p>
@@ -510,6 +533,7 @@ export default async function IntegrationsPage({
             </>
           ) : (
             <>
+              {notice("slack")}
               <p className="text-sm muted note">
                 Post new submissions, status changes, and replies into your team's Slack. Customer-side Slack is configured separately by each customer admin from inside the widget.
               </p>
@@ -601,8 +625,13 @@ export default async function IntegrationsPage({
       </Card>
 
       {/* ─── Inbound feedback connectors (Autopilot) ─────────── */}
-      {integrationsEntitled && (
-        <FeedbackConnectors connections={feedbackConnections} canManage={isAdmin} aiEnabled={aiEnabled} />
+      {(integrationsEntitled || feedbackConnections.length > 0) && (
+        <FeedbackConnectors
+          connections={feedbackConnections}
+          canManage={isAdmin}
+          aiEnabled={aiEnabled}
+          paused={!integrationsEntitled}
+        />
       )}
     </>
   );

@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Dropdown, Field, Ic, Pill } from "@crumb/ui";
+import { useConfirm } from "@/components/confirm";
 import { changeRole, inviteTeammate, removeMember, resendInvite } from "./actions";
 
 type Result =
@@ -154,33 +155,39 @@ export function RoleSelect({ id, role, isMe }: { id: string; role: string; isMe:
   );
 }
 
-export function RemoveButton({ id, name }: { id: string; name: string }) {
+// `keys`: names of the member's active API keys. Removing a member deletes
+// their keys (FK cascade), so the confirm names what will stop working.
+export function RemoveButton({ id, name, keys }: { id: string; name: string; keys: string[] }) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [pending, startTransition] = useTransition();
-  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!confirming) {
-    return (
-      <Btn sm variant="ghost" disabled={pending} onClick={() => setConfirming(true)}
-        icon={<Ic.x style={{ width: 11, height: 11 }} />}>
-        Remove
-      </Btn>
-    );
+  async function remove() {
+    const named = new Intl.ListFormat("en", { type: "conjunction" }).format(keys.map(k => `“${k}”`));
+    const keyNote = keys.length === 0 ? ""
+      : keys.length === 1 ? ` Their API key ${named} is deleted too, and anything connected with it stops working.`
+      : ` Their API keys ${named} are deleted too, and anything connected with them stops working.`;
+    if (!(await confirm({
+      title: `Remove ${name}?`,
+      body: `They lose access to this workspace right away.${keyNote}`,
+      confirmLabel: "Remove",
+      destructive: true,
+    }))) return;
+    setError(null);
+    startTransition(async () => {
+      const res = await removeMember(id);
+      if (res.ok) router.refresh();
+      else setError(res.error);
+    });
   }
 
   return (
     <div className="row gap-1 center">
-      <span className="text-xs muted">Remove {name}?</span>
-      <Btn sm variant="primary" disabled={pending} onClick={() => {
-        setError(null);
-        startTransition(async () => {
-          const res = await removeMember(id);
-          if (res.ok) router.refresh();
-          else { setError(res.error); setConfirming(false); }
-        });
-      }}>{pending ? "…" : "Yes"}</Btn>
-      <Btn sm variant="ghost" disabled={pending} onClick={() => setConfirming(false)}>No</Btn>
+      <Btn sm variant="ghost" disabled={pending} onClick={remove}
+        icon={<Ic.x style={{ width: 11, height: 11 }} />}>
+        {pending ? "Removing…" : "Remove"}
+      </Btn>
       {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
     </div>
   );

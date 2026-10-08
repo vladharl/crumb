@@ -1,6 +1,6 @@
 import "server-only";
 import { createHash } from "node:crypto";
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, like, sql } from "drizzle-orm";
 import {
   db,
   accounts,
@@ -18,8 +18,9 @@ import { createInboundCapture, type CaptureSource } from "@/lib/captures";
 import { extractFeedback, extractConfigured, EXTRACT_MODEL, type ExtractedUnit } from "@/lib/ai/extract-feedback";
 import { embedText, embeddingsConfigured, EMBEDDINGS_MODEL, EMBEDDINGS_DIM } from "@/lib/ai/embeddings";
 import { findDuplicatesForVector } from "@/lib/ai/dedup";
-import { withAiBudget } from "@/lib/ai/run";
+import type { AiBudgetResult } from "@/lib/ai/run";
 import { hasFeature } from "@/lib/entitlements";
+import { aiCap, currentPeriod } from "@/lib/usage";
 import { log } from "@/lib/log";
 import type { FeedbackRecord } from "@/lib/integrations/feedback/types";
 import { classifyUnit, getThresholds, compositeType, modeForSource, unitExternalId, titleCase } from "@/lib/feedback/decision";
@@ -33,8 +34,9 @@ import { classifyUnit, getThresholds, compositeType, modeForSource, unitExternal
 //   novel + high-confidence + email → PROMOTE (create the item automatically)
 //   otherwise                       → HOLD   (PENDING capture for human review)
 //
-// Cloud-only AI does the work (extraction + embedding dedup). On self-host (or
-// when AI isn't entitled / the cap is hit) every record lands as a raw PENDING
+// Cloud-only AI does the work (extraction + embedding dedup), paid from
+// Autopilot's own allowance (withAutopilotBudget). On self-host (or when AI
+// isn't entitled / the allowance is spent) every record lands as a raw PENDING
 // capture — nothing is silently lost.
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -43,6 +45,32 @@ export type IngestOutcome = { promoted: number; attached: number; held: number; 
 
 function emptyOutcome(): IngestOutcome {
   return { promoted: 0, attached: 0, held: 0, dropped: 0, skipped: 0 };
+}
+
+// Autopilot's AI runs on its own monthly allowance: usage_counters metric
+// "autopilot_ai", the same size as the plan's AI allowance (aiCap, which
+// CRUMB_AI_MONTHLY_CAP overrides) but counted apart from the "ai" metric that
+// triage, Ask, drafts and clustering share, so a connector backlog can't use
+// those up for the month. One unit per extraction, one per embedding. Past the
+// allowance, records land raw in the Inbox for review.
+// ponytail: consumeAi's atomic upsert under another metric. Fold it into
+// consumeAi(ws, metric) once lib/usage.ts takes one, and show the metric in the
+// billing page's usage summary.
+export async function withAutopilotBudget<T>(
+  ws: Pick<Workspace, "id" | "planId" | "subscriptionStatus">,
+  fn: () => Promise<T>,
+): Promise<AiBudgetResult<T>> {
+  if (!hasFeature(ws, "ai")) return { ok: false, error: "not_entitled" };
+  const rows = await db.execute(sql`
+    insert into usage_counters (workspace_id, metric, period, count)
+    values (${ws.id}::uuid, 'autopilot_ai', ${currentPeriod()}, 1)
+    on conflict (workspace_id, metric, period)
+    do update set count = usage_counters.count + 1, updated_at = now()
+    where usage_counters.count < ${aiCap(ws)}
+    returning count
+  `);
+  if ((rows as unknown as unknown[]).length === 0) return { ok: false, error: "ai_cap_reached" };
+  return { ok: true, value: await fn() };
 }
 
 // Have we already processed THIS provider record (any of its units)? Guards
@@ -155,7 +183,9 @@ export async function applyTags(ws: Workspace, itemId: string, names: string[]):
 // When we have a usable submitter we create a duplicate item folded into the
 // canonical — this grows the canonical's reach/ARR-at-stake via the existing
 // merge-group aggregation. Otherwise we just leave an internal note. Either way
-// no new open loop, and the customer is not emailed.
+// no new open loop, the customer is not emailed, and nothing announces it as
+// new (no item.created, no Teams post). No `workspace` on the compose call, so
+// the duplicate isn't sent for AI clustering.
 async function attachToCanonical(
   ws: Workspace,
   source: CaptureSource,
@@ -165,13 +195,12 @@ async function attachToCanonical(
   account: { accountName: string | null },
 ): Promise<string | null> {
   const email = record.authorEmail?.trim().toLowerCase();
-  const link = record.url ? ` — ${record.url}` : "";
-  const note = `Also raised via ${source}${link}: "${unit.title}"`;
+  const link = record.url ? ` (${record.url})` : "";
+  const note = `Also raised via ${titleCase(source)}${link}: "${unit.title}"`;
 
   if (email && EMAIL_RE.test(email) && account.accountName) {
     const r = await composeItem({
       workspaceId: ws.id,
-      workspace: ws,
       accountName: account.accountName,
       submitterEmail: email,
       submitterName: record.authorName ?? undefined,
@@ -180,6 +209,7 @@ async function attachToCanonical(
       body: unit.body,
       source,
       sourceUrl: record.url,
+      announce: false,
     });
     if (r.ok) {
       await db
@@ -229,11 +259,11 @@ export async function ingestRecord(
     return out;
   }
 
-  const res = await withAiBudget(ws, () =>
+  const res = await withAutopilotBudget(ws, () =>
     extractFeedback({ mode: modeForSource(source), subject: record.subject, text: record.text }),
   );
   if (!res.ok || res.value === null) {
-    // Cap reached / not entitled / model error → never drop silently: hold raw.
+    // Allowance spent / not entitled / model error → never drop silently: hold raw.
     await createInboundCapture(ws, {
       source,
       fromEmail: record.authorEmail,
@@ -291,7 +321,7 @@ export async function ingestRecord(
     // Embed for the "new?" check (metered; on cap, fall back to no-dedup hold).
     let embedding: number[] | null = null;
     if (embeddingsConfigured()) {
-      const er = await withAiBudget(ws, () => embedText(`${unit.title}\n\n${unit.body}`));
+      const er = await withAutopilotBudget(ws, () => embedText(`${unit.title}\n\n${unit.body}`));
       if (er.ok) embedding = er.value;
     }
     const candidates = embedding
@@ -304,6 +334,9 @@ export async function ingestRecord(
       { relevance: unit.relevance, confidence: unit.confidence, similarity: sim, hasMatch: !!best, hasValidEmail, hasAccountName },
       t,
     );
+    // The duplicate check couldn't run (allowance spent or the embedder failed),
+    // so "novel" is unproven: a person decides instead of auto-promoting.
+    if (decision === "promote" && embeddingsConfigured() && !embedding) decision = "hold";
 
     if (decision === "drop") {
       await createInboundCapture(ws, {

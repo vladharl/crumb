@@ -6,6 +6,15 @@ import "server-only";
 
 export const TICKET_MODEL = "qwen-35b-8bit";
 
+export type TicketImpact = {
+  accountName: string;
+  arrCents: number;
+  accounts: number;
+  combinedArrCents: number;
+  requesters: number;
+  threadUrl: string | null;
+};
+
 export type SuggestTicketInput = {
   provider: "linear" | "jira" | "github";
   item: { title: string; body: string; type: string };
@@ -15,6 +24,7 @@ export type SuggestTicketInput = {
     readme: string | null;
     topLevelTree: string | null;
   };
+  impact?: TicketImpact;
 };
 
 export type SuggestTicketResult = {
