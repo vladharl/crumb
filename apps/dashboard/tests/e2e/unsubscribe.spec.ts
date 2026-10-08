@@ -136,8 +136,9 @@ test("Shipping the customer's item emails them as the workspace, with one-click 
     .poll(() => (email = stdoutEmails()!.find((e) => e.to === EMAIL && e.subject === subject)), { timeout: 15_000 })
     .toBeTruthy();
   expect(email!.from).toMatch(new RegExp(`^"${ws} via Crumb" <[^>]+>$`));
-  // The header is this customer's own status link, the one the footer carries.
+  // The mailbox's own Unsubscribe button stops all of this workspace's email to
+  // them (the footer link keeps the per-type choice).
   const origin = publicOrigin(new URL(baseURL!).origin);
-  expect(email!["List-Unsubscribe"]).toBe(`<${origin}${mintUnsubscribeLink(SLUG, EMAIL, "status")}>`);
+  expect(email!["List-Unsubscribe"]).toBe(`<${origin}${mintUnsubscribeLink(SLUG, EMAIL)}>`);
   expect(email!["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
 });
