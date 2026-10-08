@@ -285,7 +285,7 @@ Request:
     "locale": "en-US",
     "app_version": "4.2.1"
   },
-  "session_token": "9f86d081884c7d659a2feaa0c55ad015"
+  "session_token": "<replay session token>"
 }
 ```
 
@@ -560,7 +560,7 @@ Request:
   "events": [
     { "name": "report_exported", "props": { "rows": 52000 }, "ts": "2026-01-04T10:00:00.000Z", "page_url": "https://app.acme.com/reports" }
   ],
-  "session_token": "9f86d081884c7d659a2feaa0c55ad015"
+  "session_token": "<replay session token>"
 }
 ```
 
