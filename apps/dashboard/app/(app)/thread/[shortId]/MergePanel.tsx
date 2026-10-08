@@ -3,11 +3,12 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Btn, Card, CardHead, Ic, Pill } from "@crumb/ui";
+import { Btn, Card, CardHead, Ic, Pill, statusLabel } from "@crumb/ui";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm";
 import { cancelWaitingMove, firstName, noEmailNote } from "@/components/ReplyComposer";
 import { errorMessage } from "@/lib/action-error";
+import type { NotifyPlan } from "@/lib/notify/customer-plan";
 import {
   mergeItems,
   mergeNotice,
@@ -40,6 +41,31 @@ function formatArr(cents: number): string {
   return `$${Math.round(cents / 100)}`;
 }
 
+const requests = (n: number) => (n === 1 ? "1 request" : `${n} requests`);
+
+// The merge confirm, in plain words: which way it goes, who follows what from
+// now on, and the one email the source's customer gets (or why they don't).
+// `notice` is mergeNotice's answer for the source.
+export function mergeConfirmBody(
+  source: string,
+  target: string,
+  notice: { name: string; accountName: string; source: string | null; plan: NotifyPlan; carried?: number },
+): string {
+  const first = firstName(notice.name);
+  return [
+    `${source} folds into ${target}. ${source}'s customer follows ${target} from now on.`,
+    notice.carried && `So do the ${requests(notice.carried)} already merged into ${source}.`,
+    noEmailNote(notice.plan, "status", first, notice.source)
+      ?? `${first} at ${notice.accountName} will get one email that this was combined.`,
+  ].filter(Boolean).join(" ");
+}
+
+// After an unmerge: where the item stands again, and who came back with it.
+export function unmergedMessage(shortId: string, status: string, carried: number): string {
+  return `${shortId} stands on its own again, back to ${statusLabel(status)}.`
+    + (carried > 0 ? ` The ${requests(carried)} merged into it came back too.` : "");
+}
+
 export function MergePanel({
   itemShortId, canManage, merge,
 }: {
@@ -54,37 +80,40 @@ export function MergePanel({
   const [searching, startSearch] = useTransition();
   const [candidates, setCandidates] = useState<DuplicateCandidateView[] | null>(null);
   const [searched, setSearched] = useState(false);
+  // One direction for every merge offered here: this item folds into the one
+  // picked, unless the vendor swaps it.
+  const [swap, setSwap] = useState(false);
 
   const fail = (code: string) => toast.show({ message: errorMessage(code), tone: "error" });
 
-  // Merging and unmerging change the item's status, so either wins over a
-  // status move still waiting out its undo window. A merge emails the merged
-  // item's submitter once, so the confirm says first who that is, or why
-  // nobody is emailed, from the plan the server sends by.
-  function doMerge(sourceShortId: string, targetShortId: string) {
+  // Merging and unmerging change the source's status, so either wins over a
+  // status move still waiting out its undo window. A merge emails the source's
+  // submitter once, so the confirm spells out the direction, then who that is
+  // or why nobody is emailed, from the plan the server sends by.
+  function doMerge(other: string) {
+    const [source, target] = swap ? [other, itemShortId] : [itemShortId, other];
     startTransition(async () => {
-      const notice = await mergeNotice(sourceShortId);
+      const notice = await mergeNotice(source);
       if (!notice.ok) { fail(notice.error); return; }
-      const first = firstName(notice.name);
       if (!(await confirm({
-        title: `Merge ${sourceShortId} into ${targetShortId}?`,
-        body: noEmailNote(notice.plan, "status", first, notice.source)
-          ?? `${first} at ${notice.accountName} will get one email that this was combined.`,
+        title: `Merge ${source} into ${target}?`,
+        body: mergeConfirmBody(source, target, notice),
         confirmLabel: "Merge",
       }))) return;
-      cancelWaitingMove(sourceShortId);
-      const r = await mergeItems(sourceShortId, targetShortId);
+      cancelWaitingMove(source);
+      const r = await mergeItems(source, target);
       if (!r.ok) { fail(r.error); return; }
       router.refresh();
-      toast.show({ message: `Merged ${sourceShortId} into ${targetShortId}. ${first} ${r.emailed ? "was" : "wasn't"} emailed.` });
+      toast.show({ message: `Merged ${source} into ${target}. ${firstName(notice.name)} ${r.emailed ? "was" : "wasn't"} emailed.` });
     });
   }
   function doUnmerge() {
     cancelWaitingMove(itemShortId);
     startTransition(async () => {
       const r = await unmergeItem(itemShortId);
-      if (r.ok) router.refresh();
-      else fail(r.error);
+      if (!r.ok) { fail(r.error); return; }
+      router.refresh();
+      toast.show({ message: unmergedMessage(itemShortId, r.status, r.carried) });
     });
   }
   function doDismiss() {
@@ -126,6 +155,9 @@ export function MergePanel({
   const hasContent = merge.pendingSuggestion || merge.mergedCount > 0 || merge.dedupAvailable;
   if (!hasContent) return null;
 
+  const mergeLabel = (other: string) => (swap ? `Merge ${other} here` : `Merge into ${other}`);
+  const offersMerge = canManage && (!!merge.pendingSuggestion || (candidates?.length ?? 0) > 0);
+
   return (
     <Card>
       <CardHead title="Duplicates" />
@@ -143,6 +175,17 @@ export function MergePanel({
           </div>
         )}
 
+        {offersMerge && (
+          <div className="row gap-2 center between" style={{ flexWrap: "wrap" }}>
+            <span className="text-xs muted">
+              {swap ? `The item you pick folds into ${itemShortId}.` : `${itemShortId} folds into the item you pick.`}
+            </span>
+            <Btn sm variant="ghost" aria-pressed={swap} onClick={() => setSwap(s => !s)} disabled={pending}>
+              Swap direction
+            </Btn>
+          </div>
+        )}
+
         {merge.pendingSuggestion && canManage && (
           <div className="col gap-2" style={{ padding: 10, border: "var(--border)", borderRadius: "var(--r-sm)", background: "var(--surface-2)" }}>
             <span className="text-sm row gap-2 center" style={{ flexWrap: "wrap" }}>
@@ -153,8 +196,8 @@ export function MergePanel({
             </span>
             <span className="text-xs muted truncate">{merge.pendingSuggestion.candidateTitle}</span>
             <div className="row gap-2" style={{ flexWrap: "wrap" }}>
-              <Btn sm variant="primary" onClick={() => doMerge(itemShortId, merge.pendingSuggestion!.candidateShortId)} disabled={pending}>
-                Merge into {merge.pendingSuggestion.candidateShortId}
+              <Btn sm variant="primary" onClick={() => doMerge(merge.pendingSuggestion!.candidateShortId)} disabled={pending}>
+                {mergeLabel(merge.pendingSuggestion.candidateShortId)}
               </Btn>
               <Btn sm onClick={doDismiss} disabled={pending}>Not a duplicate</Btn>
             </div>
@@ -177,7 +220,7 @@ export function MergePanel({
                       <span className="text-sm truncate"><span className="mono text-xs muted">{c.shortId}</span> {c.title}</span>
                     </Link>
                     <span className="text-2xs muted mono">{Math.round(c.similarity * 100)}%</span>
-                    <Btn sm onClick={() => doMerge(c.shortId, itemShortId)} disabled={pending}>Merge in</Btn>
+                    <Btn sm onClick={() => doMerge(c.shortId)} disabled={pending}>{mergeLabel(c.shortId)}</Btn>
                   </div>
                 ))}
               </div>

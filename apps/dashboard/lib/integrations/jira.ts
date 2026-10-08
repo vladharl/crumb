@@ -1,10 +1,10 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { eq, isNotNull } from "drizzle-orm";
-import { db, workspaces } from "@crumb/db";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { db, workspaces, type Workspace } from "@crumb/db";
 import { signState } from "./state";
 import { seal, open } from "../crypto-at-rest";
-import { clearProviderInstall, IntegrationAuthError } from "./revoke";
+import { clearProviderInstall, IntegrationAuthError, withoutAlert } from "./revoke";
 import { isCloud } from "../tier";
 import { log } from "../log";
 
@@ -93,6 +93,7 @@ export async function exchangeCode(code: string, redirectUrl: string): Promise<T
 // Atlassian's per-tenant cloud_id discovery. Called at install and on
 // every refresh — the user may reinstall against a different site keeping
 // the same refresh_token, in which case the cached cloud_id silently 404s.
+// One login can reach several sites; the admin picks one (pickSite).
 export type AccessibleResource = {
   id: string;        // cloud_id
   url: string;       // e.g. "https://acme.atlassian.net"
@@ -111,15 +112,22 @@ export async function fetchAccessibleResources(accessToken: string): Promise<Acc
   return (await resp.json()) as AccessibleResource[];
 }
 
-// Refresh path. ALWAYS re-discovers accessible resources and updates the
-// cached cloud_id on the workspace if it changed. Returns the fresh access
-// token so the caller can immediately use it.
-export async function refreshToken(workspaceId: string, currentRefreshToken: string): Promise<{
+// The site a workspace uses: the one it has while the login still reaches it,
+// else the login's only site. With several to choose from, none: the admin
+// picks one on the Jira card (setJiraSite) instead of Crumb taking the first.
+export function pickSite(resources: AccessibleResource[], cloudId: string | null): AccessibleResource | null {
+  return resources.find(r => r.id === cloudId) ?? (resources.length === 1 ? resources[0] : null);
+}
+
+// Refresh path. ALWAYS re-discovers accessible resources and re-picks the
+// site (pickSite), so a site the login lost isn't kept. Returns the fresh
+// access token so the caller can immediately use it.
+export async function refreshToken(workspaceId: string, currentRefreshToken: string, cloudId: string | null): Promise<{
   accessToken: string;
   refreshToken: string;
   expiresAt: Date;
-  cloudId: string;
-  siteUrl: string;
+  cloudId: string | null;
+  siteUrl: string | null;
 }> {
   const clientId = JIRA_CLIENT_ID();
   const clientSecret = JIRA_CLIENT_SECRET();
@@ -149,11 +157,9 @@ export async function refreshToken(workspaceId: string, currentRefreshToken: str
   const token = (await resp.json()) as TokenResponse;
   const expiresAt = new Date(Date.now() + token.expires_in * 1000);
 
-  // Re-discover. Pick the first resource; vendors with multiple sites
-  // would pick a default at install time (out of scope for v1).
-  const resources = await fetchAccessibleResources(token.access_token);
-  const target = resources[0];
-  if (!target) throw new Error("jira_no_accessible_resources");
+  // Re-discover. The rotated tokens are saved even when no site is left to
+  // use: the old refresh token is spent.
+  const site = pickSite(await fetchAccessibleResources(token.access_token), cloudId);
 
   await db
     .update(workspaces)
@@ -161,8 +167,12 @@ export async function refreshToken(workspaceId: string, currentRefreshToken: str
       jiraAccessToken:    seal(token.access_token),
       jiraRefreshToken:   seal(token.refresh_token),
       jiraTokenExpiresAt: expiresAt,
-      jiraCloudId:        target.id,
-      jiraSiteUrl:        target.url,
+      jiraCloudId:        site?.id ?? null,
+      jiraSiteUrl:        site?.url ?? null,
+      // Another site has other projects. With no site the thread stops
+      // offering Jira until the admin picks one (setJiraSite).
+      ...(site?.id !== cloudId ? { jiraDefaultProjectKey: null } : {}),
+      jiraInstalledAt:    site ? sql`coalesce(${workspaces.jiraInstalledAt}, now())` : null,
     })
     .where(eq(workspaces.id, workspaceId));
 
@@ -170,34 +180,47 @@ export async function refreshToken(workspaceId: string, currentRefreshToken: str
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
     expiresAt,
-    cloudId: target.id,
-    siteUrl: target.url,
+    cloudId: site?.id ?? null,
+    siteUrl: site?.url ?? null,
   };
 }
 
-// Get a valid access token for an outbound API call. Refreshes proactively
-// if the cached token is within 60s of expiry.
-async function getValidToken(workspace: {
+type JiraTokens = {
   id: string;
   jiraAccessToken: string | null;
   jiraRefreshToken: string | null;
   jiraTokenExpiresAt: Date | null;
-}): Promise<{ accessToken: string; cloudId: string } | null> {
+};
+
+// A live access token (refreshed when within 60s of expiry) and the site the
+// workspace uses, null while the admin hasn't picked one. The site is read
+// fresh: the caller's row may predate a pick or a refresh.
+async function liveToken(workspace: JiraTokens): Promise<{ accessToken: string; cloudId: string | null } | null> {
   if (!workspace.jiraAccessToken || !workspace.jiraRefreshToken) return null;
+  const [row] = await db
+    .select({ jiraCloudId: workspaces.jiraCloudId })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspace.id))
+    .limit(1);
+  const cloudId = row?.jiraCloudId ?? null;
   const expSoon = !workspace.jiraTokenExpiresAt
     || workspace.jiraTokenExpiresAt.getTime() - Date.now() < 60_000;
-  if (!expSoon) {
-    // Use the cached token; pair it with the cached cloud_id (loaded by caller).
-    const [row] = await db
-      .select({ jiraCloudId: workspaces.jiraCloudId })
-      .from(workspaces)
-      .where(eq(workspaces.id, workspace.id))
-      .limit(1);
-    if (!row?.jiraCloudId) return null;
-    return { accessToken: open(workspace.jiraAccessToken), cloudId: row.jiraCloudId };
-  }
-  const refreshed = await refreshToken(workspace.id, open(workspace.jiraRefreshToken));
+  if (!expSoon) return { accessToken: open(workspace.jiraAccessToken), cloudId };
+  const refreshed = await refreshToken(workspace.id, open(workspace.jiraRefreshToken), cloudId);
   return { accessToken: refreshed.accessToken, cloudId: refreshed.cloudId };
+}
+
+// Get a valid access token for an outbound API call, with its site.
+async function getValidToken(workspace: JiraTokens): Promise<{ accessToken: string; cloudId: string } | null> {
+  const t = await liveToken(workspace);
+  return t?.cloudId ? { accessToken: t.accessToken, cloudId: t.cloudId } : null;
+}
+
+// The sites this workspace's Atlassian login reaches, with the token that
+// reached them: the Jira card's site picker when there are several.
+export async function jiraSites(workspace: JiraTokens): Promise<{ accessToken: string; sites: AccessibleResource[] } | null> {
+  const t = await liveToken(workspace);
+  return t && { accessToken: t.accessToken, sites: await fetchAccessibleResources(t.accessToken) };
 }
 
 // ─── REST API helpers ───────────────────────────────────────
@@ -215,14 +238,21 @@ export async function listProjects(workspace: Parameters<typeof getValidToken>[0
 }
 
 // Token-based variant — used right after the OAuth callback, before the
-// workspace row holds the (sealed) tokens `getValidToken` would read.
+// workspace row holds the (sealed) tokens `getValidToken` would read. Every
+// project on the site, 50 a page by name.
+// ponytail: stops after 20 pages (1,000 projects).
 export async function listProjectsWithToken(cloudId: string, accessToken: string): Promise<JiraProject[]> {
-  const resp = await fetch(`${apiBase(cloudId)}/project/search?maxResults=50&orderBy=name`, {
-    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
-  });
-  if (!resp.ok) throw new Error(`jira_list_projects_failed: ${resp.status}`);
-  const data = (await resp.json()) as { values: Array<{ id: string; key: string; name: string }> };
-  return data.values.map(p => ({ id: p.id, key: p.key, name: p.name }));
+  const projects: JiraProject[] = [];
+  for (let page = 0; page < 20; page++) {
+    const resp = await fetch(`${apiBase(cloudId)}/project/search?maxResults=50&orderBy=name&startAt=${projects.length}`, {
+      headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
+    });
+    if (!resp.ok) throw new Error(`jira_list_projects_failed: ${resp.status}`);
+    const data = (await resp.json()) as { values: Array<{ id: string; key: string; name: string }>; isLast?: boolean };
+    projects.push(...data.values.map(p => ({ id: p.id, key: p.key, name: p.name })));
+    if (data.isLast !== false || data.values.length === 0) break;
+  }
+  return projects;
 }
 
 export type JiraIssueRef = {
@@ -413,8 +443,61 @@ export async function ensureWebhook(
   }
 }
 
+// Whether this install's webhook is in place, kept as integration_alerts.jira
+// with reason "no_sync" (cleared once it is) for statusSyncReady. Only while
+// connected, so the alert a disconnect leaves is never overwritten.
+async function recordSync(workspaceId: string, ok: boolean): Promise<void> {
+  const alert = JSON.stringify({ reason: "no_sync", at: new Date().toISOString() });
+  try {
+    await db
+      .update(workspaces)
+      .set({
+        integrationAlerts: ok
+          ? withoutAlert("jira")
+          : sql`coalesce(${workspaces.integrationAlerts}, '{}'::jsonb) || jsonb_build_object('jira', ${alert}::jsonb)`,
+      })
+      .where(and(eq(workspaces.id, workspaceId), isNotNull(workspaces.jiraAccessToken)));
+  } catch (err) {
+    log.warn("jira status sync state not saved", { scope: "crumb/jira", workspaceId, err });
+  }
+}
+
+// Whether Jira can tell this workspace about status changes: on Cloud through
+// the webhook this install registered, on self-host through the admin's
+// webhook signed with JIRA_WEBHOOK_SECRET.
+export function statusSyncReady(ws: Pick<Workspace, "integrationAlerts">): boolean {
+  return isCloud()
+    ? !!JIRA_CLIENT_SECRET() && ws.integrationAlerts?.jira?.reason !== "no_sync"
+    : !!JIRA_WEBHOOK_SECRET();
+}
+
+// The rest of connecting, once the site is known (at the callback, or when the
+// admin picks one of several): the default project when the site has only
+// one, and on Cloud this install's status webhook. Neither can undo the
+// connect. False when status sync couldn't be set up.
+export async function setUpSite(
+  workspaceId: string,
+  t: { accessToken: string; cloudId: string },
+  origin: string | null,
+): Promise<boolean> {
+  try {
+    const projects = await listProjectsWithToken(t.cloudId, t.accessToken);
+    if (projects.length === 1) {
+      await db.update(workspaces).set({ jiraDefaultProjectKey: projects[0].key }).where(eq(workspaces.id, workspaceId));
+    }
+  } catch (err) {
+    log.warn("jira project pre-select failed (non-fatal)", { scope: "crumb/jira", err });
+  }
+  if (!isCloud()) return true;
+  const hook = await ensureWebhook(workspaceId, t, origin);
+  await recordSync(workspaceId, hook.ok);
+  return hook.ok;
+}
+
 // The maintenance sweep's step. The origin is CRUMB_APP_URL alone: a cron
 // request's own host is the internal address.
+// ponytail: one failed sweep flags the install until the next one succeeds,
+// a transient error included. Count failures in a row if that ever misleads.
 export async function refreshWebhooks(): Promise<Array<{ workspace: string } & WebhookResult>> {
   if (!isCloud()) return [];
   const origin = process.env.CRUMB_APP_URL?.trim().replace(/\/+$/, "") || null;
@@ -431,7 +514,13 @@ export async function refreshWebhooks(): Promise<Array<{ workspace: string } & W
   const results: Array<{ workspace: string } & WebhookResult> = [];
   for (const ws of rows) {
     const t = await getValidToken(ws).catch(() => null);
-    results.push({ workspace: ws.slug, ...(t ? await ensureWebhook(ws.id, t, origin) : notSetUp(ws.id, "no_token")) });
+    if (!t) {
+      results.push({ workspace: ws.slug, ...notSetUp(ws.id, "no_token") });
+      continue;
+    }
+    const hook = await ensureWebhook(ws.id, t, origin);
+    await recordSync(ws.id, hook.ok);
+    results.push({ workspace: ws.slug, ...hook });
   }
   return results;
 }

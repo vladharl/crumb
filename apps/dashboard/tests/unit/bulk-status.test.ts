@@ -4,7 +4,9 @@ import { errorMessage } from "@/lib/action-error";
 
 // A bulk status change runs each item's whole pipeline (customer email
 // included) inside one server action, so a request is capped and runs a few
-// items at a time. The session, request and status core are faked.
+// items at a time. Merged duplicates are left to the item they were merged
+// into (which emails their customers), and a customer with several requests in
+// the batch hears about each one. The session, request and status core are faked.
 
 const update = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/server", () => ({
@@ -18,10 +20,14 @@ import { bulkUpdateStatus } from "@/app/(app)/inbox/actions";
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `item-${i}`);
 
-// The workspace-scoped lookup finds every requested item.
-function found(itemIds: string[]) {
+type Found = { id: string; shortId: string; status: string; mergedIntoId: string | null };
+
+// The workspace-scoped lookup finds every requested item (FB-1, FB-2, …).
+function found(itemIds: string[], over: Array<Partial<Found>> = []) {
   vi.spyOn(db, "select").mockReturnValue({
-    from: () => ({ where: async () => itemIds.map((_, i) => ({ shortId: `FB-${i + 1}` })) }),
+    from: () => ({
+      where: async () => itemIds.map((id, i): Found => ({ id, shortId: `FB-${i + 1}`, status: "open", mergedIntoId: null, ...over[i] })),
+    }),
   } as never);
 }
 
@@ -60,5 +66,24 @@ describe("bulkUpdateStatus", () => {
       input.itemShortId === "FB-3" ? Promise.reject(new Error("smtp down")) : { ok: true, emailed: true });
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await bulkUpdateStatus(ids(6), "shipped")).toEqual({ ok: true, affected: 5, failed: 1, firstError: "update_failed" });
+  });
+
+  it("leaves merged duplicates to the item they were merged into, and says how many", async () => {
+    found(["i1", "i2", "i3"], [{}, { mergedIntoId: "i1" }, {}]);
+    update.mockResolvedValue({ ok: true, emailed: false });
+    expect(await bulkUpdateStatus(["i1", "i2", "i3"], "review")).toEqual({ ok: true, affected: 2, failed: 0, skipped: 1 });
+    expect(update.mock.calls.map(([, input]) => input.itemShortId)).toEqual(["FB-1", "FB-3"]);
+  });
+
+  it("tells a customer about each of their requests, with no cross-item dedupe", async () => {
+    found(["i1", "i2"]);
+    update.mockResolvedValue({ ok: true, emailed: true, mergedEmailed: 0 });
+    expect(await bulkUpdateStatus(["i1", "i2"], "shipped")).toEqual({ ok: true, affected: 2, failed: 0 });
+    // Each item runs the core on its own terms: nothing tells one to skip a
+    // person another item reaches, so each request gets its email and ledger row.
+    expect(update.mock.calls.map(([, input, opts]) => [input.itemShortId, opts?.alreadyTold])).toEqual([
+      ["FB-1", undefined],
+      ["FB-2", undefined],
+    ]);
   });
 });

@@ -42,12 +42,22 @@ type StatusResult = Awaited<ReturnType<typeof bulkUpdateStatus>>;
 
 // What a status write actually did, as a toast: everything moved, nothing
 // moved (the error), or some did (counts, then the first error). `name`
-// labels a single row in place of the item count.
+// labels a single row in place of the item count. Merged duplicates the write
+// left out are named last: they follow the item they were merged into.
 export function statusToast(r: StatusResult, label: string, name?: string): { message: string; tone?: "error" } {
   if (!r.ok) return { message: errorMessage(r.error), tone: "error" };
-  if (r.failed === 0) return { message: `${name ?? `${r.affected} ${r.affected === 1 ? "item" : "items"}`} moved to ${label}.` };
-  if (r.affected === 0) return { message: errorMessage(r.firstError), tone: "error" };
-  return { message: `${r.affected} moved, ${r.failed} failed. ${errorMessage(r.firstError)}`, tone: "error" };
+  const skipped = r.skipped ?? 0;
+  if (skipped > 0 && r.affected === 0 && r.failed === 0) {
+    return { message: name
+      ? `${name} is merged into another item, so it follows that item's status.`
+      : "Nothing moved. Merged duplicates follow the item they were merged into." };
+  }
+  const note = skipped === 0 ? ""
+    : skipped === 1 ? " Skipped 1 merged duplicate. It follows the item it was merged into."
+    : ` Skipped ${skipped} merged duplicates. They follow the items they were merged into.`;
+  if (r.failed === 0) return { message: `${name ?? `${r.affected} ${r.affected === 1 ? "item" : "items"}`} moved to ${label}.${note}` };
+  if (r.affected === 0) return { message: `${errorMessage(r.firstError)}${note}`, tone: "error" };
+  return { message: `${r.affected} moved, ${r.failed} failed. ${errorMessage(r.firstError)}${note}`, tone: "error" };
 }
 
 /**
@@ -86,7 +96,7 @@ export function ReasonForm({ status, count, emailConfigured, pending, onCancel, 
       <div className="row gap-2">
         <Btn sm onClick={onCancel} disabled={pending}>Cancel</Btn>
         <Btn sm variant="primary" onClick={() => onSubmit(text.trim())} disabled={pending || !text.trim()}>
-          {pending ? "Saving…" : `Move to ${label}`}
+          {pending ? "Saving…" : count > 1 ? `Move ${count} items to ${label}` : `Move to ${label}`}
         </Btn>
       </div>
     </div>
@@ -94,14 +104,17 @@ export function ReasonForm({ status, count, emailConfigured, pending, onCancel, 
 }
 
 export function RowActionMenu({
-  itemId, shortId, assigneeId, status, initiativeId,
-  assignees, initiatives, canWrite, canManageInitiatives, emailConfigured, onStatusOptimistic,
+  itemId, shortId, assigneeId, status, initiativeId, merged = false,
+  assignees, initiatives, canWrite, canManageInitiatives, emailConfigured, onStatusOptimistic, onDelete,
 }: {
   itemId: string;
   shortId: string;
   assigneeId: string | null;
   status: string;
   initiativeId: string | null;
+  // A merged duplicate's status follows the item it was merged into, so the
+  // menu doesn't offer one (bulkUpdateStatus skips duplicates).
+  merged?: boolean;
   assignees: Assignee[];
   initiatives: InitiativeOption[];
   canWrite: boolean;
@@ -110,6 +123,9 @@ export function RowActionMenu({
   // Lets the inbox paint a single-row status change on the same frame it's
   // chosen (optimistic overlay), reverting with `null` if the write fails.
   onStatusOptimistic?: (status: string | null) => void;
+  // Admins only: delete or mark as spam. useDeleteItems confirms, hides the
+  // row and offers Undo before anything is removed.
+  onDelete?: (mode: "delete" | "spam") => void;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -129,6 +145,8 @@ export function RowActionMenu({
   const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
 
   function close() {
+    // Choosing or leaving puts focus back on the ⋯ button, as a menu button does.
+    if (menuRef.current?.contains(document.activeElement)) btnRef.current?.focus();
     setOpen(false);
     setPane("root");
     setReasonFor(null);
@@ -179,6 +197,33 @@ export function RowActionMenu({
   useLayoutEffect(() => {
     if (open) place();
   }, [open, pane, place]);
+
+  // Focus moves into the menu once it's placed (it is hidden until then), and
+  // to the first option of each pane. The reason pane focuses its own textarea.
+  const placed = coords !== null;
+  useEffect(() => {
+    if (!open || !placed || pane === "reason") return;
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
+  }, [open, pane, placed]);
+
+  // Arrows, Home and End move between options; Tab leaves the menu. The menu
+  // is portaled to <body>, so a plain Tab would jump to the end of the page.
+  function onMenuKey(e: React.KeyboardEvent) {
+    if (pane === "reason") return;
+    if (e.key === "Tab") { e.preventDefault(); close(); return; }
+    const opts = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []);
+    if (opts.length === 0) return;
+    const i = opts.indexOf(document.activeElement as HTMLElement);
+    const next =
+      e.key === "ArrowDown" ? opts[(i + 1) % opts.length]
+      : e.key === "ArrowUp" ? opts[(i - 1 + opts.length) % opts.length]
+      : e.key === "Home" ? opts[0]
+      : e.key === "End" ? opts[opts.length - 1]
+      : null;
+    if (!next) return;
+    e.preventDefault();
+    next.focus();
+  }
 
   function run(fn: () => Promise<{ ok: true } | { ok: false; error: string }>) {
     startTransition(async () => {
@@ -237,6 +282,11 @@ export function RowActionMenu({
     });
   }
 
+  function remove(mode: "delete" | "spam") {
+    close();
+    onDelete?.(mode);
+  }
+
   function copyLink() {
     void navigator.clipboard?.writeText(`${window.location.origin}/thread/${shortId}`).catch(() => {});
     setCopied(true);
@@ -254,6 +304,7 @@ export function RowActionMenu({
     <button
       key={props.key ?? props.label}
       type="button"
+      role="menuitem"
       className="dd-opt"
       disabled={pending}
       onClick={props.onClick}
@@ -266,7 +317,7 @@ export function RowActionMenu({
   );
 
   const backRow = (
-    <button type="button" className="dd-opt" onClick={() => setPane("root")} disabled={pending}>
+    <button type="button" role="menuitem" className="dd-opt" onClick={() => setPane("root")} disabled={pending}>
       <Ic.chevR style={{ width: 11, height: 11, flexShrink: 0, color: "var(--mute-2)", transform: "rotate(180deg)" }} />
       <span className="dd-opt-label">Back</span>
     </button>
@@ -298,6 +349,7 @@ export function RowActionMenu({
           // The reason pane holds a form, which a menu can't.
           role={pane === "reason" ? "dialog" : "menu"}
           aria-label={`Actions for ${shortId}`}
+          onKeyDown={onMenuKey}
           style={{
             position: "fixed",
             top: coords?.top ?? -9999,
@@ -314,9 +366,11 @@ export function RowActionMenu({
               {opt({ label: "Open thread", onClick: () => router.push(`/thread/${shortId}`) })}
               {opt({ label: copied ? "Copied" : "Copy link", onClick: copyLink })}
               {canWrite && opt({ label: "Assign to…", drill: true, onClick: () => setPane("assign") })}
-              {canWrite && opt({ label: "Set status…", drill: true, onClick: () => setPane("status") })}
+              {canWrite && !merged && opt({ label: "Set status…", drill: true, onClick: () => setPane("status") })}
               {canManageInitiatives && initiatives.length > 0 &&
                 opt({ label: "Move to initiative…", drill: true, onClick: () => setPane("initiative") })}
+              {onDelete && opt({ label: "Mark as spam…", onClick: () => remove("spam") })}
+              {onDelete && opt({ label: "Delete…", onClick: () => remove("delete") })}
             </>
           )}
 

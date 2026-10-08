@@ -13,6 +13,7 @@ import { useToast } from "@/components/toast";
 import {
   ReplyComposer, useStatusMove, runAction, firstName, sourceLabel, noEmailNote, statusWillEmail, statusEmailees, reasonNote, type ItemNotifyPlan,
 } from "@/components/ReplyComposer";
+import { useDeleteItems } from "@/components/useDeleteItems";
 import { InitiativePanel, type ThreadInitiativeOption } from "./InitiativePanel";
 import { ThreadSuggestionCard, type ThreadSuggestion } from "./ThreadSuggestionCard";
 import { ExternalTicketTile } from "./ExternalTicketTile";
@@ -188,7 +189,7 @@ type TrailEntry =
   | { kind: "event";   at: string; event: ThreadStatusEvent }
   | { kind: "notice";  at: string; notice: ThreadNotice };
 
-export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boolean }) {
+export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadData; canWrite: boolean; isAdmin?: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const { item, notifyPlan, mergedReach, account, submitter, assignee, messages, events, notices, teammates, initiative, initiativeOptions, canManageInitiatives, suggestion, workspaceIntegrations, aiTicketAvailable, aiReplyAvailable, replay, usageBreadcrumb, merge } = data;
@@ -212,7 +213,9 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
 
   const [tab, setTab] = useState<"customer" | "internal" | "trail">("customer");
   const [pending, startTransition] = useTransition();
-  const [reasonFor, setReasonFor] = useState<VendorStatus | null>(null);
+  // The status waiting for its reason, and which control asked for it (the
+  // Status card, or the compact bar on narrow screens), so the form opens there.
+  const [reasonFor, setReasonFor] = useState<{ status: VendorStatus; at: "bar" | "card" } | null>(null);
   // Kept until the move lands, so an undone one reopens with its reason.
   const [reasonText, setReasonText] = useState("");
   const [showTranslation, setShowTranslation] = useState(false);
@@ -245,8 +248,27 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
     const reason = reasonText.trim();
     if (!reasonFor || !reason) return;
     setReasonFor(null);
-    void statusMove.move(reasonFor, reason);
+    void statusMove.move(reasonFor.status, reason);
   };
+
+  // A status pick from the Status card or the compact bar. Going back to the
+  // saved status is an undo, so it never asks for a reason.
+  function pickStatus(s: VendorStatus, at: "bar" | "card") {
+    if (s === shown) return;
+    if (REASON_REQUIRED.has(s) && s !== item.status) { setReasonFor({ status: s, at }); return; }
+    setReasonFor(null);
+    void statusMove.move(s);
+  }
+
+  // Admins can delete the item or mark it as spam: useDeleteItems asks, then
+  // waits behind an Undo. Once the removal lands there's nothing left here,
+  // so the thread goes to the inbox.
+  // Back to the inbox once it's gone, unless the admin already left this
+  // thread during the Undo window (the commit then runs on unmount).
+  const removeItems = useDeleteItems({
+    onDeleted: () => { if (window.location.pathname === `/thread/${item.shortId}`) router.push("/inbox"); },
+  });
+  const remove = (mode: "delete" | "spam") => removeItems([{ shortId: item.shortId, title: item.title }], mode);
 
   // Details-card property edits (assignee / type) — single-item, in place.
   function onAssign(value: string) {
@@ -259,6 +281,58 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
     startTransition(async () => {
       if (await runAction(toast, () => updateType(item.shortId, value))) router.refresh();
     });
+  }
+
+  // The assignee picker, in the Details card and the compact bar alike.
+  const assigneePicker = (
+    <Dropdown
+      size="sm"
+      ariaLabel="Assignee"
+      placeholder="Unassigned"
+      value={assignee?.id ?? null}
+      disabled={pending}
+      searchable={teammates.length > 8}
+      onChange={onAssign}
+      options={[
+        { value: "__unassign", label: "Unassigned" },
+        ...teammates.map(t => ({ value: t.id, label: t.name })),
+      ]}
+    />
+  );
+
+  // "Say why" for a reason-required status, under whichever control asked.
+  function reasonForm(s: VendorStatus, at: "bar" | "card") {
+    const l = statusLabel(s);
+    const note = statusWillEmail(s, item.status, notifyPlan.status, mergedReach)
+      && reasonNote(first, notifyPlan.status.willEmail, mergedReach);
+    return (
+      <div className="col gap-2" style={{
+        flexBasis: "100%",
+        margin: at === "card" ? "6px 0 10px" : 0,
+        padding: 12,
+        border: "var(--border)",
+        borderRadius: "var(--r-sm)",
+        background: "var(--surface-2)",
+      }}>
+        <textarea
+          className="input"
+          rows={3}
+          aria-label={`Reason for ${l}`}
+          placeholder={REASON_PLACEHOLDER[s]}
+          value={reasonText}
+          onChange={e => setReasonText(e.target.value)}
+          disabled={statusMove.saving}
+          autoFocus
+        />
+        {note && <span className="text-xs muted">{note}</span>}
+        <div className="row gap-2">
+          <Btn sm onClick={() => { setReasonFor(null); setReasonText(""); }} disabled={statusMove.saving}>Cancel</Btn>
+          <Btn sm variant="primary" onClick={submitReason} disabled={statusMove.saving || !reasonText.trim()}>
+            Mark {l}
+          </Btn>
+        </div>
+      </div>
+    );
   }
 
   const visible = tab === "customer" ? customerMsgs : internalMsgs;
@@ -282,9 +356,38 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                 <Btn icon={<Ic.link style={{ width: 12, height: 12 }} />}>{item.externalTicketId}</Btn>
               </a>
             )}
+            {isAdmin && (
+              <>
+                <Btn sm variant="ghost" onClick={() => remove("spam")}>Mark as spam</Btn>
+                <Btn sm variant="ghost" onClick={() => remove("delete")}>Delete</Btn>
+              </>
+            )}
           </>
         }
       />
+
+      {/* Under 1024px the side column drops below the whole conversation, so
+          this bar keeps status and assignee in reach while reading, with the
+          same handlers (globals.css .thread-bar; hidden on wider screens). */}
+      {canWrite && (
+        <div className="thread-bar">
+          <span className="mono text-xs muted">{item.shortId}</span>
+          <span className="row gap-2 center">
+            <StatusDot status={shown as Status} />
+            <Dropdown
+              size="sm"
+              ariaLabel="Status"
+              placeholder={statusLabel(shown)}
+              value={shown}
+              disabled={statusMove.saving}
+              onChange={s => pickStatus(s as VendorStatus, "bar")}
+              options={[...VENDOR_STATUS_OPTIONS]}
+            />
+          </span>
+          {assigneePicker}
+          {reasonFor?.at === "bar" && reasonForm(reasonFor.status, "bar")}
+        </div>
+      )}
 
       <div className="seg" style={{ alignSelf: "flex-start" }}>
         <button aria-selected={tab === "customer"} onClick={() => setTab("customer")}>Customer · {customerMsgs.length}</button>
@@ -476,6 +579,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
               canWrite={canWrite}
               onSent={() => router.refresh()}
               tabMode={tab === "internal" ? "note" : tab === "customer" ? "reply" : undefined}
+              mergedReach={mergedReach}
             />
           </div>
         </Card>
@@ -532,21 +636,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                 </>
               )}
               <span className="eyebrow">Assignee</span>
-              {canWrite ? (
-                <Dropdown
-                  size="sm"
-                  ariaLabel="Assignee"
-                  placeholder="Unassigned"
-                  value={assignee?.id ?? null}
-                  disabled={pending}
-                  searchable={teammates.length > 8}
-                  onChange={onAssign}
-                  options={[
-                    { value: "__unassign", label: "Unassigned" },
-                    ...teammates.map(t => ({ value: t.id, label: t.name })),
-                  ]}
-                />
-              ) : assignee ? (
+              {canWrite ? assigneePicker : assignee ? (
                 <div className="row gap-2 center">
                   <Avatar size="sm" kind="ink">{assignee.initials}</Avatar>
                   <span className="text-sm">{assignee.name}</span>
@@ -608,11 +698,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                 return (
                   <div key={s}>
                     <button
-                      onClick={() => {
-                        if (isCurrent) return;
-                        if (needsReason) setReasonFor(s);
-                        else void statusMove.move(s);
-                      }}
+                      onClick={() => pickStatus(s, "card")}
                       disabled={statusMove.saving || isCurrent || !canWrite}
                       className="nav-item"
                       aria-selected={isCurrent}
@@ -623,35 +709,7 @@ export function ThreadView({ data, canWrite }: { data: ThreadData; canWrite: boo
                       {hint && <span className="text-2xs muted" style={{ marginLeft: "auto" }}>{hint}</span>}
                     </button>
 
-                    {reasonFor === s && (
-                      <div className="col gap-2" style={{
-                        margin: "6px 0 10px",
-                        padding: 12,
-                        border: "var(--border)",
-                        borderRadius: "var(--r-sm)",
-                        background: "var(--surface-2)",
-                      }}>
-                        <textarea
-                          className="input"
-                          rows={3}
-                          aria-label={`Reason for ${l}`}
-                          placeholder={REASON_PLACEHOLDER[s]}
-                          value={reasonText}
-                          onChange={e => setReasonText(e.target.value)}
-                          disabled={statusMove.saving}
-                          autoFocus
-                        />
-                        {emails && reasonNote(first, notifyPlan.status.willEmail, mergedReach) && (
-                          <span className="text-xs muted">{reasonNote(first, notifyPlan.status.willEmail, mergedReach)}</span>
-                        )}
-                        <div className="row gap-2">
-                          <Btn sm onClick={() => { setReasonFor(null); setReasonText(""); }} disabled={statusMove.saving}>Cancel</Btn>
-                          <Btn sm variant="primary" onClick={submitReason} disabled={statusMove.saving || !reasonText.trim()}>
-                            Mark {l}
-                          </Btn>
-                        </div>
-                      </div>
-                    )}
+                    {reasonFor?.status === s && reasonFor.at === "card" && reasonForm(s, "card")}
                   </div>
                 );
               })}

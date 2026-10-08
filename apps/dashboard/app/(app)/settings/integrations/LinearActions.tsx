@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Ic } from "@crumb/ui";
 import { useConfirm } from "@/components/confirm";
+import { errorMessage } from "@/lib/action-error";
 import { startLinearInstall, disconnectLinear } from "./actions";
 import { isRedirectError, connectErrorMessage } from "./connect-shared";
 
@@ -56,7 +57,7 @@ export function DisconnectLinearButton({ teamName }: { teamName: string | null }
             setError(null);
             const r = await disconnectLinear();
             if (r.ok) router.refresh();
-            else setError(r.error);
+            else setError(errorMessage(r.error));
           });
         }}
       >

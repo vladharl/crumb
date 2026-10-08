@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db, initiatives, workspaces, items, accounts, workspaceUsers, initiativeSuggestions } from "@crumb/db";
 import type { Workspace } from "@crumb/db";
 import { headers } from "next/headers";
@@ -360,6 +360,32 @@ export async function reorderInitiatives(
     }
   }
   return { ok: true };
+}
+
+// The edit panel's Column control: puts one initiative at the end of a column
+// (null = Unscheduled) without a drag. It saves through reorderInitiatives, so
+// the webhook and the follower email match a drop on the board. Ties keep the
+// board's order (roadmap order, then short id).
+export async function moveInitiative(
+  id: string,
+  column: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!id || typeof id !== "string") return { ok: false, error: "no_id" };
+  if (column !== null && !ROADMAP_COLUMNS.has(column)) return { ok: false, error: "bad_column" };
+
+  const { workspace, user } = await getActiveSession();
+  if (!canManage(user.role)) return { ok: false, error: "forbidden" };
+
+  const rest = await db
+    .select({ id: initiatives.id })
+    .from(initiatives)
+    .where(and(
+      eq(initiatives.workspaceId, workspace.id),
+      column === null ? isNull(initiatives.roadmapColumn) : eq(initiatives.roadmapColumn, column),
+      ne(initiatives.id, id),
+    ))
+    .orderBy(asc(initiatives.roadmapOrder), asc(initiatives.shortId));
+  return reorderInitiatives(column, [...rest.map(r => r.id), id]);
 }
 
 export async function setInitiativePublic(

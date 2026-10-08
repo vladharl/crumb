@@ -1,5 +1,5 @@
 import {
-  db, items, accounts, accountUsers, workspaceUsers, initiatives, initiativeSuggestions, inboundCaptures,
+  db, items, accounts, accountUsers, workspaceUsers, initiatives, initiativeSuggestions, inboundCaptures, inboxViews,
 } from "@crumb/db";
 import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -17,6 +17,7 @@ import { SetupChecklist } from "@/components/SetupChecklist";
 import { TEST_CUSTOMER_ACCOUNT } from "@/app/(app)/settings/install/test-customer";
 import { InboxTable, type InboxRow, type Assignee, type InitiativeOption } from "./InboxTable";
 import { CaptureTriage } from "./CaptureTriage";
+import type { SavedView } from "./views-actions";
 import type { CaptureRow, AccountOption } from "../captures/CapturesList";
 
 async function loadItems(workspaceId: string): Promise<InboxRow[]> {
@@ -299,6 +300,15 @@ async function loadPendingCaptures(workspaceId: string): Promise<{ captures: Cap
   return { captures, accountOptions };
 }
 
+// This member's saved views (personal, so scoped by membership, not workspace).
+async function loadViews(workspaceUserId: string): Promise<SavedView[]> {
+  return db
+    .select({ id: inboxViews.id, name: inboxViews.name, query: inboxViews.query })
+    .from(inboxViews)
+    .where(eq(inboxViews.workspaceUserId, workspaceUserId))
+    .orderBy(asc(inboxViews.name));
+}
+
 async function loadAssignees(workspaceId: string): Promise<Assignee[]> {
   return db
     .select({ id: workspaceUsers.id, name: workspaceUsers.name, initials: workspaceUsers.initials })
@@ -309,13 +319,14 @@ async function loadAssignees(workspaceId: string): Promise<Assignee[]> {
 
 export async function InboxTableTile() {
   const { workspace, user: me } = await getActiveSession();
-  const [rows, assignees, initiativeOptions, captureData, samples, aiUsage] = await Promise.all([
+  const [rows, assignees, initiativeOptions, captureData, samples, aiUsage, views] = await Promise.all([
     loadItems(workspace.id),
     loadAssignees(workspace.id),
     loadInitiativeOptions(workspace.id),
     loadPendingCaptures(workspace.id),
     hasSampleData(workspace.id),
     getAiUsage(workspace),
+    loadViews(me.id),
   ]);
   // First run: the samples a new Cloud workspace starts with are still there,
   // or nothing but the Install page's Try-it messages has landed. The setup
@@ -342,6 +353,8 @@ export async function InboxTableTile() {
         assignees={assignees}
         meId={me.id}
         canWrite={canWrite}
+        isAdmin={isAdmin}
+        views={views}
         aiEntitled={aiEntitled}
         initiatives={initiativeOptions}
         canManageInitiatives={canManageInitiatives}

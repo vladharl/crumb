@@ -504,5 +504,5 @@ export async function ThreadViewTile({ shortId }: { shortId: string }) {
   }
   if (!data) notFound();
   const canWrite = user.role === "admin" || user.role === "pm";
-  return <ThreadView data={data} canWrite={canWrite} />;
+  return <ThreadView data={data} canWrite={canWrite} isAdmin={user.role === "admin"} />;
 }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Btn, Ic } from "@crumb/ui";
 import { createInitiative } from "./actions";
 import { PRESET_COLORS } from "./presetColors";
@@ -14,6 +14,17 @@ export function NewInitiativeForm({ disabled }: { disabled?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
+  const asked = useSearchParams().get("new") === "1";
+
+  // ⌘K's "New initiative" lands on /initiatives?new=1: open the form, then
+  // drop the param so a reload or Back doesn't open it again.
+  useEffect(() => {
+    if (!asked) return;
+    if (!disabled) setOpen(true);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("new");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  }, [asked, disabled]);
 
   if (!open) {
     return (

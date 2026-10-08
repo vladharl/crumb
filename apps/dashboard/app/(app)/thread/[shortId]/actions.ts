@@ -13,6 +13,7 @@ import { headers } from "next/headers";
 import { getActiveSession } from "@/lib/server";
 import { originFromHeaders } from "@/lib/origin";
 import { integrationsAllowed } from "@/lib/entitlements";
+import { isCloud } from "@/lib/tier";
 import * as Linear from "@/lib/integrations/linear";
 import * as Jira from "@/lib/integrations/jira";
 import * as Github from "@/lib/integrations/github";
@@ -82,13 +83,15 @@ export async function updateStatus(input: {
 
 // Reply and close in one action: posts the reply, sets shipped/declined, and
 // sends the customer one email (the outcome with the reply in it). For
-// declined, the reply is the reason.
+// declined, the reply is the reason. `mergedEmailed` counts the customers whose
+// requests were merged into this one who got the outcome email too, without
+// the reply (updateItemStatus's fan-out).
 export async function replyAndSetStatus(input: {
   itemShortId: string;
   body: string;
   status: "shipped" | "declined";
   attachmentIds?: string[];
-}): Promise<{ ok: true; emailed: boolean } | { ok: false; error: string }> {
+}): Promise<{ ok: true; emailed: boolean; mergedEmailed: number } | { ok: false; error: string }> {
   const { workspace, user } = await getActiveSession();
   const r = await replyAndSetItemStatus(
     { workspaceId: workspace.id, actorWorkspaceUserId: user.id, role: user.role as VendorRole },
@@ -97,7 +100,7 @@ export async function replyAndSetStatus(input: {
   if (!r.ok) return r;
   revalidatePath(`/thread/${input.itemShortId}`);
   revalidatePath("/inbox");
-  return { ok: true, emailed: r.emailed };
+  return { ok: true, emailed: r.emailed, mergedEmailed: r.mergedEmailed };
 }
 
 // ─── single-item properties (assignee / type) ────────────────
@@ -197,7 +200,9 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
   // natively once those clients take label names.
   const description = labels.length ? `${body}\n\nLabels: ${labels.join(", ")}`.trim() : body;
 
-  let ticket: { id: string; url: string; status: string };
+  // id is the key people see (ENG-42); uid the tracker's own id, which the
+  // status webhooks match on so a moved or renamed issue keeps syncing.
+  let ticket: { id: string; uid: string; url: string; status: string };
   try {
     if (input.provider === "linear") {
       const token = workspace.linearAccessToken;
@@ -205,7 +210,7 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
       const teamId = input.target ?? workspace.linearTeamId;
       if (!teamId) return { ok: false, error: "no_team" };
       const issue = await Linear.createIssue(open(token), { teamId, title, description });
-      ticket = { id: issue.identifier, url: issue.url, status: issue.stateName };
+      ticket = { id: issue.identifier, uid: issue.id, url: issue.url, status: issue.stateName };
     } else if (input.provider === "jira") {
       if (!workspace.jiraAccessToken || !workspace.jiraRefreshToken) {
         return { ok: false, error: "jira_not_connected" };
@@ -213,7 +218,7 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
       const projectKey = input.target ?? workspace.jiraDefaultProjectKey;
       if (!projectKey) return { ok: false, error: "no_project" };
       const issue = await Jira.createIssue(workspace, { projectKey, title, description });
-      ticket = { id: issue.key, url: issue.url, status: issue.statusName };
+      ticket = { id: issue.key, uid: issue.id, url: issue.url, status: issue.statusName };
     } else if (input.provider === "github") {
       if (!workspace.githubAppInstallId) return { ok: false, error: "github_not_connected" };
       const repo = input.target ?? workspace.githubDefaultRepo;
@@ -223,7 +228,7 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
         body,
         labels: labels.length ? labels : undefined,
       });
-      ticket = { id: Github.issueTicketRef(repo, issue.number), url: issue.url, status: issue.state };
+      ticket = { id: Github.issueTicketRef(repo, issue.number), uid: issue.nodeId, url: issue.url, status: issue.state };
     } else {
       return { ok: false, error: "provider_not_supported" };
     }
@@ -239,9 +244,12 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
     .set({
       externalProvider:  input.provider,
       externalTicketId:  ticket.id,
+      externalTicketUid: ticket.uid,
       externalTicketUrl: ticket.url,
       externalStatus:    ticket.status,
-      externalSyncedAt:  new Date(),
+      // Stamped by the status webhooks only, so it says when the tracker last
+      // reported (the Engineering tile shows it); null until it first does.
+      externalSyncedAt:  null,
       updatedAt:         new Date(),
     })
     .where(eq(items.id, row.id));
@@ -286,6 +294,7 @@ export async function unlinkExternalTicket(itemShortId: string): Promise<{ ok: t
     .set({
       externalProvider:  null,
       externalTicketId:  null,
+      externalTicketUid: null,
       externalTicketUrl: null,
       externalStatus:    null,
       externalSyncedAt:  null,
@@ -308,9 +317,22 @@ export async function unlinkExternalTicket(itemShortId: string): Promise<{ ok: t
   return { ok: true };
 }
 
-// Used by the modal to populate the team picker for Linear. Returns the
-// connected provider's targets so the UI doesn't need to call the provider
-// API from the client.
+// Whether `provider` can push status updates to this workspace, for the
+// Engineering tile. Linear and GitHub sign theirs with a deployment-wide
+// secret; on Cloud each Jira install registers its own webhook.
+// ponytail: the tile asks on mount; ThreadViewTile could pass this along with
+// workspaceIntegrations and save the round trip.
+export async function externalStatusSetup(provider: Provider): Promise<{ setUp: boolean; cloud: boolean }> {
+  const { workspace } = await getActiveSession();
+  const setUp = provider === "linear" ? !!Linear.LINEAR_WEBHOOK_SECRET()
+    : provider === "github" ? !!Github.GITHUB_WEBHOOK_SECRET()
+    : provider === "jira" && Jira.statusSyncReady(workspace);
+  return { setUp, cloud: isCloud() };
+}
+
+// The modal's target picker and the Integrations cards' default pickers: the
+// connected provider's teams, projects or repos, every page of them, so the UI
+// doesn't need to call the provider API from the client.
 export async function listProviderTargets(provider: Provider): Promise<
   | { ok: true; targets: Array<{ id: string; label: string }>; defaultTarget: string | null }
   | { ok: false; error: string }
@@ -455,14 +477,16 @@ export async function suggestExternalTicket(
   // One metered unit; the entitlement check inside answers not_entitled after
   // a downgrade instead of a misleading "limit reached".
   const budget = await withAiBudget(workspace, async () => {
+    // The repo the issue is going to, else the default repo.
+    const contextRepo = provider === "github" ? providerTarget : workspace.githubDefaultRepo;
     const [recent, repoContext, reach] = await Promise.all([
       recentTickets(workspace, provider, providerTarget),
       // GitHub repo context feeds *all* providers' drafts when a GitHub repo
       // is connected on this workspace — teams often use GitHub for code +
       // Linear/Jira for tickets, and the model gets the project framing from
       // the README + tree regardless of where the ticket lands.
-      workspace.githubAppInstallId && workspace.githubDefaultRepo
-        ? Github.getRepoContext(workspace.githubAppInstallId, workspace.githubDefaultRepo).catch((err) => {
+      workspace.githubAppInstallId && contextRepo
+        ? Github.getRepoContext(workspace.githubAppInstallId, contextRepo).catch((err) => {
             log.warn("getRepoContext failed (non-fatal)", { scope: "crumb/ai", err });
             return undefined;
           })
@@ -511,8 +535,9 @@ export async function suggestExternalTicket(
   };
 }
 
-// Update the workspace-level default target for a provider (e.g. switch
-// Linear team). Stored on workspaces so future creates default to it.
+// Update the workspace-level default target for a provider (the Integrations
+// cards' pickers). Stored on workspaces so future creates default to it; the
+// default GitHub repo also feeds AI drafts and Slack sizing.
 export async function updateProviderDefault(provider: Provider, target: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin") return { ok: false, error: "forbidden" };
@@ -520,13 +545,13 @@ export async function updateProviderDefault(provider: Provider, target: string):
   if (provider === "linear") {
     if (!workspace.linearAccessToken) return { ok: false, error: "linear_not_connected" };
     // Re-fetch the team name to keep the cached label fresh.
-    let teamName: string | null = null;
+    let teams: Awaited<ReturnType<typeof Linear.listTeams>>;
     try {
-      const teams = await Linear.listTeams(open(workspace.linearAccessToken));
-      teamName = teams.find(t => t.id === target)?.name ?? null;
-    } catch {
-      // Non-fatal — we still write the id.
+      teams = await Linear.listTeams(open(workspace.linearAccessToken));
+    } catch (err) {
+      return (await handleRevoke(err, workspace.id)) ?? { ok: false, error: "provider_list_failed" };
     }
+    const teamName = teams.find(t => t.id === target)?.name;
     if (!teamName) return { ok: false, error: "team_not_found" };
 
     await db
@@ -616,23 +641,37 @@ export async function listDuplicateCandidates(
 }
 
 // Who mergeItems would email about folding `sourceShortId` in, and whether it
-// goes out, so MergePanel can say so before the vendor confirms.
+// goes out, so MergePanel can say so before the vendor confirms. `carried`
+// counts the requests already merged into it, which move along with it
+// (absent when there are none).
 export async function mergeNotice(
   sourceShortId: string,
-): Promise<{ ok: true; name: string; accountName: string; source: string | null; plan: NotifyPlan } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; name: string; accountName: string; source: string | null; plan: NotifyPlan; carried?: number }
+  | { ok: false; error: string }
+> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
   const notice = await mergeNoticePlan(workspace.id, sourceShortId);
-  return notice ? { ok: true, ...notice } : { ok: false, error: "not_found" };
+  if (!notice) return { ok: false, error: "not_found" };
+  const [row] = (await db.execute(sql`
+    SELECT COUNT(*)::int AS carried FROM items d
+    JOIN items s ON s.id = d.merged_into_id
+    WHERE s.workspace_id = ${workspace.id} AND s.short_id = ${sourceShortId}
+  `)) as unknown as Array<{ carried: number | string }>;
+  const carried = Number(row?.carried ?? 0);
+  return { ok: true, ...notice, ...(carried > 0 ? { carried } : {}) };
 }
 
 // Fold `source` into `target` (the canonical). Source becomes status=duplicate
 // with merged_into_id set; its replay sessions re-point to the canonical so
-// they surface there, and any pending dedupe suggestion resolves. Its
-// submitter is emailed once (notifyMergedItem); `emailed` says whether a real
-// provider took it. The group's combined ARR/followers are computed at read
-// time (ThreadViewTile), never stored, so they stay correct as ARR changes.
-// Admin/pm only.
+// they surface there, and any pending dedupe suggestion resolves. A source
+// that is itself a canonical brings its duplicates along: they follow the
+// target too, so the group stays one level deep and their customers hear the
+// target's outcome. Its submitter is emailed once (notifyMergedItem);
+// `emailed` says whether a real provider took it. The group's combined
+// ARR/followers are computed at read time (ThreadViewTile), never stored, so
+// they stay correct as ARR changes. Admin/pm only.
 export async function mergeItems(
   sourceShortId: string,
   targetShortId: string,
@@ -650,50 +689,60 @@ export async function mergeItems(
   if (!source || !target) return { ok: false, error: "not_found" };
   // Can't merge into something that's itself a duplicate (would create a chain).
   if (target.mergedIntoId) return { ok: false, error: "target_is_duplicate" };
-  // Source must not already have duplicates folded into it (keep a depth-1 tree).
-  const [dep] = await db
-    .select({ id: items.id })
-    .from(items)
-    .where(and(eq(items.workspaceId, workspace.id), eq(items.mergedIntoId, source.id)))
-    .limit(1);
-  if (dep) return { ok: false, error: "source_has_duplicates" };
 
-  const [folded] = await db
-    .update(items)
-    .set({
-      status: "duplicate",
-      mergedIntoId: target.id,
-      mergedAt: new Date(),
-      mergedByWorkspaceUserId: user.id,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(items.id, source.id), or(isNull(items.mergedIntoId), ne(items.mergedIntoId, target.id))))
-    .returning({ id: items.id });
+  // All or nothing, and at one instant: the source's merged_at, its carried
+  // duplicates' merged_at and its history row all get this transaction's
+  // now(), which is how unmergeItem tells what came along.
+  const carried = await db.transaction(async (tx) => {
+    const [folded] = await tx
+      .update(items)
+      .set({
+        status: "duplicate",
+        mergedIntoId: target.id,
+        mergedAt: sql`now()`,
+        mergedByWorkspaceUserId: user.id,
+        updatedAt: sql`now()`,
+      })
+      .where(and(eq(items.id, source.id), or(isNull(items.mergedIntoId), ne(items.mergedIntoId, target.id))))
+      .returning({ id: items.id });
+    if (!folded) return null;
+    // Its own duplicates come along. Their customers were told once, when
+    // they were first merged, so nobody is emailed for this.
+    const moved = await tx
+      .update(items)
+      .set({ mergedIntoId: target.id, mergedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(eq(items.workspaceId, workspace.id), eq(items.mergedIntoId, source.id)))
+      .returning({ shortId: items.shortId, title: items.title, type: items.type });
+    await tx.insert(statusEvents).values({
+      itemId: source.id,
+      fromStatus: source.status,
+      toStatus: "duplicate",
+      reason: `Merged into ${targetShortId}`,
+      byWorkspaceUserId: user.id,
+    });
+    // Re-point replay sessions to the canonical item: the source's own and
+    // the ones its duplicates brought to it.
+    await tx.update(replaySessions).set({ itemId: target.id }).where(eq(replaySessions.itemId, source.id));
+    // Resolve any pending dedupe suggestion that proposed this merge.
+    await tx
+      .update(dedupeSuggestions)
+      .set({ status: "accepted", decidedAt: new Date() })
+      .where(and(eq(dedupeSuggestions.itemId, source.id), eq(dedupeSuggestions.status, "pending")));
+    return moved;
+  });
   // Already merged into this target (a repeated submit): nothing changed, so
   // no second timeline row and no second email.
-  if (!folded) return { ok: true, emailed: false };
-  await db.insert(statusEvents).values({
-    itemId: source.id,
-    fromStatus: source.status,
-    toStatus: "duplicate",
-    reason: `Merged into ${targetShortId}`,
-    byWorkspaceUserId: user.id,
-  });
-  // Re-point replay sessions to the canonical item.
-  await db.update(replaySessions).set({ itemId: target.id }).where(eq(replaySessions.itemId, source.id));
-  // Resolve any pending dedupe suggestion that proposed this merge.
-  await db
-    .update(dedupeSuggestions)
-    .set({ status: "accepted", decidedAt: new Date() })
-    .where(and(eq(dedupeSuggestions.itemId, source.id), eq(dedupeSuggestions.status, "pending")));
+  if (!carried) return { ok: true, emailed: false };
 
-  void emitEvent(workspace.id, {
-    type: "item.merged",
-    workspace: workspace.slug,
-    item: { short_id: source.shortId, title: source.title, type: source.type },
-    into: { short_id: targetShortId },
-    at: new Date().toISOString(),
-  });
+  for (const m of [source, ...carried]) {
+    void emitEvent(workspace.id, {
+      type: "item.merged",
+      workspace: workspace.slug,
+      item: { short_id: m.shortId, title: m.title, type: m.type },
+      into: { short_id: targetShortId },
+      at: new Date().toISOString(),
+    });
+  }
 
   // Told once: a request moved here from another canonical item was told when
   // it was first merged.
@@ -708,34 +757,95 @@ export async function mergeItems(
   return { ok: true, emailed };
 }
 
-// Reverse a merge: the item returns to the open inbox as a standalone request.
-export async function unmergeItem(shortId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+// Reverse a merge: the item stands alone again with the status it had before
+// it was merged (from its own history; "open" when there is none, as for a
+// duplicate a connector folded in at capture) and takes back its replay
+// sessions. A canonical that was merged with its duplicates takes those back
+// too. Says which status it went back to and how many came back with it.
+export async function unmergeItem(
+  shortId: string,
+): Promise<{ ok: true; status: string; carried: number } | { ok: false; error: string }> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin" && user.role !== "pm") return { ok: false, error: "forbidden" };
 
   const [row] = await db
-    .select({ id: items.id, mergedIntoId: items.mergedIntoId })
+    .select({ id: items.id, status: items.status, mergedIntoId: items.mergedIntoId })
     .from(items)
     .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, shortId)))
     .limit(1);
   if (!row) return { ok: false, error: "not_found" };
   if (!row.mergedIntoId) return { ok: false, error: "not_merged" };
+  const canonicalId = row.mergedIntoId;
+  const [canonical] = await db.select({ shortId: items.shortId }).from(items).where(eq(items.id, canonicalId)).limit(1);
 
-  await db
-    .update(items)
-    .set({ status: "open", mergedIntoId: null, mergedAt: null, mergedByWorkspaceUserId: null, updatedAt: new Date() })
-    .where(eq(items.id, row.id));
-  await db.insert(statusEvents).values({
-    itemId: row.id,
-    fromStatus: "duplicate",
-    toStatus: "open",
-    reason: "Unmerged",
-    byWorkspaceUserId: user.id,
+  // Its moves into Duplicate, newest first: it goes back to where the latest
+  // one from another status started.
+  const merges = await db
+    .select({ fromStatus: statusEvents.fromStatus })
+    .from(statusEvents)
+    .where(and(eq(statusEvents.itemId, row.id), eq(statusEvents.toStatus, "duplicate")))
+    .orderBy(desc(statusEvents.at));
+  const status = merges.find((e) => e.fromStatus && e.fromStatus !== "duplicate")?.fromStatus ?? "open";
+
+  const carried = await db.transaction(async (tx) => {
+    // The duplicates that came along when it was merged share its merged_at,
+    // the instant of its own merge row (mergeItems). One carried along by its
+    // canonical has no merge row at that instant, so brings nothing back.
+    const came = (await tx.execute(sql`
+      SELECT d.id FROM items d
+      JOIN items x ON x.id = ${row.id}
+      WHERE d.merged_into_id = ${canonicalId} AND d.id <> x.id AND d.merged_at = x.merged_at
+        AND EXISTS (
+          SELECT 1 FROM status_events e
+          WHERE e.item_id = x.id AND e.to_status = 'duplicate' AND e.at = x.merged_at
+        )
+    `)) as unknown as Array<{ id: string }>;
+    const cameIds = came.map((c) => c.id);
+
+    // A replay session records only who it belongs to (its account user,
+    // stamped when it was linked at submit), not the item it came in with. So
+    // a session on the canonical belongs to the group item that person filed
+    // first after it started, and the ones belonging to the items leaving
+    // come back here. Runs while those items are still in the group.
+    // ponytail: attribution by person and time can misplace a session when
+    // one person filed two of the group's items from overlapping sessions.
+    // Record the origin item on replay_sessions at merge time if that matters.
+    await tx
+      .update(replaySessions)
+      .set({ itemId: row.id })
+      .where(and(
+        eq(replaySessions.itemId, canonicalId),
+        inArray(sql`(
+          SELECT g.id FROM items g
+          WHERE (g.id = ${canonicalId} OR g.merged_into_id = ${canonicalId})
+            AND g.submitter_id = replay_sessions.account_user_id
+            AND g.created_at >= replay_sessions.started_at
+          ORDER BY g.created_at
+          LIMIT 1
+        )`, [row.id, ...cameIds]),
+      ));
+
+    if (cameIds.length > 0) {
+      await tx.update(items).set({ mergedIntoId: row.id, updatedAt: sql`now()` }).where(inArray(items.id, cameIds));
+    }
+    await tx
+      .update(items)
+      .set({ status, mergedIntoId: null, mergedAt: null, mergedByWorkspaceUserId: null, updatedAt: sql`now()` })
+      .where(eq(items.id, row.id));
+    await tx.insert(statusEvents).values({
+      itemId: row.id,
+      fromStatus: row.status,
+      toStatus: status,
+      reason: canonical ? `Unmerged from ${canonical.shortId}` : "Unmerged",
+      byWorkspaceUserId: user.id,
+    });
+    return cameIds.length;
   });
 
   revalidatePath(`/thread/${shortId}`);
+  if (canonical) revalidatePath(`/thread/${canonical.shortId}`);
   revalidatePath("/inbox");
-  return { ok: true };
+  return { ok: true, status, carried };
 }
 
 // Dismiss a pending dedupe suggestion without merging (the inbox flag clears).

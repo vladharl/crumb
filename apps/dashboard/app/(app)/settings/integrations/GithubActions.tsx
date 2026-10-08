@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Ic } from "@crumb/ui";
 import { useConfirm } from "@/components/confirm";
+import { errorMessage } from "@/lib/action-error";
 import { startGithubInstall, disconnectGithub } from "./actions";
 import { isRedirectError, connectErrorMessage } from "./connect-shared";
 
@@ -56,7 +57,7 @@ export function DisconnectGithubButton({ account }: { account: string | null }) 
             setError(null);
             const r = await disconnectGithub();
             if (r.ok) router.refresh();
-            else setError(r.error);
+            else setError(errorMessage(r.error));
           });
         }}
       >

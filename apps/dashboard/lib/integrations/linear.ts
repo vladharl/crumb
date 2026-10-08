@@ -142,10 +142,23 @@ export async function fetchInstallInfo(token: string): Promise<{
 
 export type LinearTeam = { id: string; name: string; key: string };
 
+// Every team the token can see, a page (Linear's maximum, 250) at a time.
+// ponytail: stops after 10 pages (2,500 teams).
 export async function listTeams(token: string): Promise<LinearTeam[]> {
-  type R = { teams: { nodes: LinearTeam[] } };
-  const data = await gql<R>(token, `query { teams(first: 50) { nodes { id name key } } }`);
-  return data.teams.nodes;
+  type R = { teams: { nodes: LinearTeam[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } };
+  const teams: LinearTeam[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < 10; page++) {
+    const data: R = await gql<R>(
+      token,
+      `query Teams($after: String) { teams(first: 250, after: $after) { nodes { id name key } pageInfo { hasNextPage endCursor } } }`,
+      { after },
+    );
+    teams.push(...data.teams.nodes);
+    if (!data.teams.pageInfo.hasNextPage || !data.teams.pageInfo.endCursor) break;
+    after = data.teams.pageInfo.endCursor;
+  }
+  return teams;
 }
 
 export type LinearIssueRef = {

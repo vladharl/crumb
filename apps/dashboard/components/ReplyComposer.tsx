@@ -67,10 +67,46 @@ export function replyNote(plan: NotifyPlan, first: string, accountName: string, 
   return noEmailNote(plan, "reply", first, source) ?? `Replying to ${first} at ${accountName}. They'll get this by email.`;
 }
 
-export function replySentMessage(emailed: boolean, first: string, closedAs?: string): string {
-  return emailed
+// `othersEmailed`: on a reply-and-close, the customers whose requests were
+// merged in who got the outcome email (never the reply itself).
+export function replySentMessage(emailed: boolean, first: string, closedAs?: string, othersEmailed = 0): string {
+  const told = emailed
     ? `Reply sent to ${first} by email${closedAs ? `, and marked ${statusLabel(closedAs)}` : ""}.`
     : `Reply posted${closedAs ? ` and marked ${statusLabel(closedAs)}` : ""}. ${first} wasn't emailed.`;
+  return closedAs && othersEmailed > 0
+    ? `${told} ${othersWhoAsked(othersEmailed)} also got the ${statusLabel(closedAs)} email, without your reply.`
+    : told;
+}
+
+// The reply-and-close confirm: what this item's customer gets (one email with
+// the reply in it, or why nothing goes out), then the outcome email the
+// customers whose requests were merged in get without the reply (`others`,
+// from mergedReach).
+export function closeConfirmBody(
+  closeAs: "shipped" | "declined", first: string, plan: ItemNotifyPlan, source: string | null, others: number,
+): string {
+  const label = statusLabel(closeAs);
+  const submitter = plan.status.willEmail || plan.replies.willEmail
+    ? `${first} gets one email with your reply${closeAs === "declined" ? " as the reason" : ""}, and this is marked ${label}.`
+    : noEmailNote(plan.status, "status", first, source);
+  const merged = others > 0 && `${othersWhoAsked(others)} ${others === 1 ? "gets" : "get"} the ${label} email, without your reply.`;
+  return [submitter, merged].filter(Boolean).join(" ");
+}
+
+// Cmd/Ctrl+Enter sends (the shortcut the Send button's title names), never
+// mid-composition: with an IME that Enter commits the candidate text. Safari
+// reports the committing keydown with isComposing false but keyCode 229.
+export function isSendShortcut(e: {
+  key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; keyCode: number;
+  nativeEvent: { isComposing?: boolean };
+}): boolean {
+  return e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey
+    && !e.nativeEvent.isComposing && e.keyCode !== 229;
+}
+
+// An AI draft joins the box below what's already written, never over it.
+export function withAiDraft(current: string, draft: string): string {
+  return current.trim() ? `${current.trimEnd()}\n\n${draft}` : draft;
 }
 
 // Will moving the item from `current` to `status` email anyone? The server's
@@ -322,6 +358,7 @@ export function ReplyComposer({
   onDraftChange,
   framed = true,
   tabMode,
+  mergedReach = 0,
 }: {
   itemShortId: string;
   // The item's status as shown; reply-and-close is offered only while open.
@@ -343,6 +380,9 @@ export function ReplyComposer({
   // The mode the conversation's active tab stands for ("note" on Internal,
   // "reply" on Customer, undefined on a tab without a composer).
   tabMode?: Mode;
+  // Customers whose requests were merged into this one that a reply-and-close
+  // outcome email also reaches (mergedReach in lib/items/mutations).
+  mergedReach?: number;
 }) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -418,7 +458,17 @@ export function ReplyComposer({
     setMentionIdx(0);
   }
 
+  // The Undo toast for the last AI draft added below the vendor's text. It
+  // restores that text only while the box still holds what the draft made, so
+  // it goes away as soon as anything else changes the box.
+  const aiUndo = useRef<number | null>(null);
+  function dropAiUndo() {
+    if (aiUndo.current != null) toast.dismiss(aiUndo.current);
+    aiUndo.current = null;
+  }
+
   function onDraftInput(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    dropAiUndo();
     setDraft(e.target.value);
     detectMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
   }
@@ -433,6 +483,11 @@ export function ReplyComposer({
   }
 
   function onComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (isSendShortcut(e)) {
+      e.preventDefault();
+      if (!sendDisabled) void onSend();
+      return;
+    }
     if (!mention || mentionMatches.length === 0) return;
     if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx(i => (i + 1) % mentionMatches.length); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx(i => (i - 1 + mentionMatches.length) % mentionMatches.length); }
@@ -492,6 +547,7 @@ export function ReplyComposer({
   // A failed send keeps the draft and attachments for a retry; only a landed
   // one clears them.
   function landed() {
+    dropAiUndo();
     setDraft("");
     setPendingAttachments([]);
   }
@@ -515,16 +571,17 @@ export function ReplyComposer({
 
   // Reply and close in one go: the customer gets one email (the outcome, with
   // this reply in it). For Won't ship the reply is the reason, so it needs text.
+  // Shipped always asks first; Won't ship asks when it also emails the
+  // customers whose requests were merged in. Either way the confirm says who
+  // gets what.
   const onSendAndClose = async (closeAs: "shipped" | "declined") => {
     const body = draft.trim();
-    if (closeAs === "shipped") {
-      const emails = notifyPlan.status.willEmail || notifyPlan.replies.willEmail;
+    if (closeAs === "shipped" || mergedReach > 0) {
+      const label = statusLabel(closeAs);
       const ok = await confirm({
-        title: "Send and mark Shipped?",
-        body: emails
-          ? `${first} gets one email with your reply, and this is marked Shipped.`
-          : noEmailNote(notifyPlan.status, "status", first, source),
-        confirmLabel: "Send and mark Shipped",
+        title: `Send and mark ${label}?`,
+        body: closeConfirmBody(closeAs, first, notifyPlan, source, mergedReach),
+        confirmLabel: `Send and mark ${label}`,
       });
       if (!ok) return;
     }
@@ -540,16 +597,36 @@ export function ReplyComposer({
     setSending(false);
     if (!res) return;
     landed();
-    toast.show({ message: replySentMessage(res.emailed, first, closeAs) });
+    toast.show({ message: replySentMessage(res.emailed, first, closeAs, res.mergedEmailed) });
     onSent?.(closeAs);
   };
 
-  // AI reply draft — fills the composer; the vendor edits + sends.
+  // AI reply draft: fills an empty composer, or goes below what the vendor
+  // already wrote with an Undo that puts their text back as it was. The
+  // vendor edits and sends.
   const onDraft = async () => {
     setDrafting(true);
     const res = await runAction(toast, () => draftReplyAction(itemShortId));
     setDrafting(false);
-    if (res) setDraft(res.draft);
+    if (!res) return;
+    const before = draft;
+    const next = withAiDraft(before, res.draft);
+    caretAfter.current = next.length;
+    setDraft(next);
+    dropAiUndo();
+    if (!before.trim()) return;
+    const id = toast.show({
+      message: "AI draft added below your text.",
+      action: {
+        label: "Undo",
+        onClick: () => {
+          if (aiUndo.current !== id) return;
+          aiUndo.current = null;
+          setDraft(before);
+        },
+      },
+    });
+    aiUndo.current = id;
   };
 
   const busy = sending || drafting;
@@ -666,7 +743,7 @@ export function ReplyComposer({
         )}
         {uploading && <span className="text-xs muted">Uploading…</span>}
         <div style={{ flex: 1 }} />
-        <Btn sm onClick={() => { setDraft(""); setPendingAttachments([]); }} disabled={busy || (!draft && pendingAttachments.length === 0)}>Clear</Btn>
+        <Btn sm onClick={landed} disabled={busy || (!draft && pendingAttachments.length === 0)}>Clear</Btn>
         {/* Reply-and-close sits beside Send like "Close with comment"; Shipped
             (which asks first) is the one next to it. */}
         {offerClose && (["declined", "shipped"] as const).map(s => (
@@ -688,6 +765,7 @@ export function ReplyComposer({
           icon={isNote ? <Ic.lock style={{ width: 12, height: 12 }} /> : <Ic.send style={{ width: 12, height: 12 }} />}
           onClick={onSend}
           disabled={sendDisabled}
+          title={`${sendLabel} (⌘Enter or Ctrl-Enter)`}
         >
           {sending ? (isNote ? "Adding…" : "Sending…") : sendLabel}
         </Btn>

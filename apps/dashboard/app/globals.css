@@ -1217,6 +1217,26 @@ textarea.input { resize: vertical; min-height: 80px; }
   .cols-aside { grid-template-columns: 1fr; gap: 18px; }
 }
 
+/* Thread: at the width where .cols-2-1 stacks, the side column (status,
+   assignee) lands below the whole conversation. This bar keeps both in reach,
+   stuck under the top bar while the conversation scrolls. Wider screens keep
+   the side column beside the conversation, so the bar stays hidden there. */
+.thread-bar { display: none; }
+@media (max-width: 1024px) {
+  .thread-bar {
+    position: sticky;
+    top: calc(52px + env(safe-area-inset-top));
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    padding: 8px 0;
+    background: var(--bg);
+    border-bottom: var(--border);
+  }
+}
+
 @media (max-width: 900px) {
   .branding-grid {
     grid-template-columns: 1fr !important;
