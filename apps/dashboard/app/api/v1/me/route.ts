@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, accounts, accountUsers, items, initiatives, workspaces } from "@crumb/db";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, notIlike, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { emailConfigured } from "@/lib/email";
@@ -68,7 +68,7 @@ export async function GET(req: Request) {
       })
       .from(accountUsers)
       .leftJoin(items, eq(items.submitterId, accountUsers.id))
-      .where(eq(accountUsers.accountId, account.id))
+      .where(and(eq(accountUsers.accountId, account.id), notIlike(accountUsers.email, "%.invalid")))
       .groupBy(accountUsers.id)
       .orderBy(asc(accountUsers.name));
     members = rows.map(m => ({
@@ -84,7 +84,7 @@ export async function GET(req: Request) {
     const [{ count }] = await db
       .select({ count: sql<number>`COUNT(*)::int` })
       .from(accountUsers)
-      .where(eq(accountUsers.accountId, account.id));
+      .where(and(eq(accountUsers.accountId, account.id), notIlike(accountUsers.email, "%.invalid")));
     memberCount = count ?? 0;
   }
 

@@ -29,16 +29,20 @@ describe("magic-link requests", () => {
   beforeAll(() => vi.stubEnv("CRUMB_APP_URL", "https://crumb.example.test"));
   afterAll(() => vi.unstubAllEnvs());
 
-  it("mail an address five times an hour and serve an IP twenty, answering the same past either limit", async () => {
+  it("mail an address five times an hour; one IP serves a whole team but not a spray, answering the same either way", async () => {
     for (let i = 0; i < 7; i++) expect(await ask("mia@vendor.test", "203.0.113.7")).toEqual({ ok: true });
     expect(h.sent).toEqual(Array(5).fill("mia@vendor.test"));
     // A fresh IP doesn't reset the address.
     expect(await ask("mia@vendor.test", "198.51.100.2")).toEqual({ ok: true });
     expect(h.sent).toHaveLength(5);
 
-    // Spraying addresses from the first IP: its 7 requests above count too.
-    for (let i = 0; i < 20; i++) expect(await ask(`user${i}@vendor.test`, "203.0.113.7")).toEqual({ ok: true });
-    expect(h.sent).toHaveLength(5 + 13);
+    // A 25-person office behind one IP all get their links.
+    for (let i = 0; i < 25; i++) expect(await ask(`team${i}@vendor.test`, "192.0.2.10")).toEqual({ ok: true });
+    expect(h.sent).toHaveLength(5 + 25);
+
+    // Spraying addresses from one IP stops at its 200 an hour, still answering ok.
+    for (let i = 0; i < 210; i++) expect(await ask(`spray${i}@vendor.test`, "203.0.113.99")).toEqual({ ok: true });
+    expect(h.sent).toHaveLength(5 + 25 + 200);
   });
 
   it("with no client IP, never pools everyone into one bucket: each address keeps its own five, and it says so once", async () => {

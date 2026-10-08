@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
-import { db, accounts } from "@crumb/db";
+import { db, accounts, workspaceUsers } from "@crumb/db";
 import { verifySlackSignature } from "@/lib/slack/verify";
 import { workspaceForSlackTeam } from "@/lib/slack/install";
 import { slackTeammate } from "@/lib/slack/notify";
@@ -69,12 +69,20 @@ export async function POST(req: Request) {
   // Only this workspace's teammates create items here (as /crumb only opens the
   // form for them), matched by Slack email even if Crumb never DMed them: the
   // item is their Trail entry, and they get no new-submission alert for it.
-  const teammate = await slackTeammate({
+  const slackUserId = payload.user?.id;
+  const [cached] = slackUserId
+    ? await db
+        .select({ id: workspaceUsers.id })
+        .from(workspaceUsers)
+        .where(and(eq(workspaceUsers.workspaceId, ws.id), eq(workspaceUsers.slackUserId, slackUserId)))
+        .limit(1)
+    : [];
+  const teammate = cached ?? await slackTeammate({
     workspaceId: ws.id,
     installTeamId: teamId,
     botToken: open(ws.slackBotToken),
-    slackUserId: payload.user?.id,
-    userTeamId: payload.user?.team_id ?? teamId,
+    slackUserId,
+    userTeamId: teamId, // the same rule /crumb applies
   });
   if (!teammate) {
     return NextResponse.json({ response_action: "errors", errors: { title: "Only teammates in this Crumb workspace can log feedback from Slack." } });

@@ -38,12 +38,16 @@ export async function requestMagicLink(formData: FormData): Promise<LoginResult>
     warnedNoClientIp = true;
     log.warn("sign-in requests carry no client IP header (CF-Connecting-IP, X-Real-IP or X-Forwarded-For), so they're limited per address only", { scope: "crumb/login" });
   }
-  const limited =
-    (ip !== "anon" && !(await checkRateLimitAsync(`login:ip:${ip}`, { capacity: 20, refillPerSec: 20 / HOUR })).ok) ||
-    !(await checkRateLimitAsync(`login:to:${email}`, { capacity: 5, refillPerSec: 5 / HOUR })).ok;
-  if (limited) {
+  // The address bucket stops inbox flooding; the IP bucket only stops one
+  // source spraying many addresses, so it is wide enough for a whole office
+  // or VPN behind one IP (or IPv6 /64).
+  const by =
+    !(await checkRateLimitAsync(`login:to:${email}`, { capacity: 5, refillPerSec: 5 / HOUR })).ok ? "address"
+    : ip !== "anon" && !(await checkRateLimitAsync(`login:ip:${ip}`, { capacity: 200, refillPerSec: 200 / HOUR })).ok ? "ip"
+    : null;
+  if (by) {
     // Looks sent on purpose (no account probing); the log is the only trace.
-    log.info("sign-in link rate limited", { scope: "crumb/login" });
+    log.info("sign-in link rate limited", { scope: "crumb/login", by });
     return { ok: true };
   }
 
