@@ -59,6 +59,8 @@ export async function POST(req: Request) {
     const r = await resolveCustomer(req, {
       workspaceSlug: form.get("workspace_slug")?.toString() ?? null,
       email: form.get("account_user_email")?.toString() ?? null,
+      accountName: form.get("account_name")?.toString() ?? null,
+      userName: form.get("account_user_name")?.toString() ?? null,
     });
     if (!r.ok) return fail(r.status, r.error);
     uploaderAccountUserId = r.ctx.user.id;

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
-import { db, workspaces, workspaceUsers, items, itemEmbeddings, dedupeSuggestions, replies, statusEvents, replaySessions } from "@crumb/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { db, workspaces, workspaceUsers, items, itemEmbeddings, dedupeSuggestions, replies, statusEvents, replaySessions, attachments } from "@crumb/db";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { clusterConfigured } from "@/lib/ai/cluster";
@@ -89,6 +89,19 @@ export async function GET(req: Request) {
         FROM status_events se
         WHERE se.item_id = items.id AND se.from_status IS NOT NULL
       )`,
+      // Vendor-only signal for the launcher's unread badge. reply_count and
+      // last_event include the customer's own messages (the item body is
+      // stored as the first reply), so they can't say "someone answered you".
+      // Vendor = the thread payload's kind "vendor": a workspace user wrote it.
+      vendorReplyCount: sql<number>`(
+        SELECT COUNT(*)::int FROM replies r
+        WHERE r.item_id = items.id AND r.internal = false AND r.workspace_user_id IS NOT NULL
+      )`,
+      lastVendorReplyAtMs: sql<number | null>`(
+        SELECT (EXTRACT(EPOCH FROM MAX(r.created_at)) * 1000)::double precision
+        FROM replies r
+        WHERE r.item_id = items.id AND r.internal = false AND r.workspace_user_id IS NOT NULL
+      )`,
     })
     .from(items)
     .where(and(
@@ -121,6 +134,10 @@ export async function GET(req: Request) {
         last_reply_side: row.lastReplySide,
         turn: loopTurn({ status: row.status, lastReplySide: row.lastReplySide }),
         last_event: lastEvent,
+        vendor_reply_count: row.vendorReplyCount,
+        // Same ms rounding as last_event.at, so the two are equal exactly when
+        // the latest event is a vendor reply.
+        last_vendor_reply_at: row.lastVendorReplyAtMs !== null ? new Date(row.lastVendorReplyAtMs).toISOString() : null,
       };
     }),
   }));
@@ -138,7 +155,7 @@ export async function POST(req: Request) {
 
   const parsed = await parseJsonBody(req, createItemSchema);
   if (!parsed.ok) return fail(parsed.status, parsed.error);
-  const { workspace_slug, account_user_email, account_user_name, account_name, type, title, body, session_token } = parsed.data;
+  const { workspace_slug, account_user_email, account_user_name, account_name, type, title, body, session_token, context, attachment_ids } = parsed.data;
 
   const r = await resolveCustomer(req, {
     workspaceSlug: workspace_slug ?? null,
@@ -175,6 +192,8 @@ export async function POST(req: Request) {
     // Widget-origin: the customer raised this through the embed widget, so they
     // opted into Crumb's loop and may be auto-notified (see lib/feedback/source).
     source: "widget",
+    // Page / browser / app build; capped and redacted by createItemSchema.
+    context: context ?? null,
   }).returning();
 
   // Initial status event so the timeline always starts with "Submitted".
@@ -184,14 +203,27 @@ export async function POST(req: Request) {
     toStatus: "open",
   });
 
-  // Seed the first message in the thread so the customer's own words appear in the reply feed.
-  if (body && body.trim()) {
-    await db.insert(replies).values({
+  // Seed the first message in the thread so the customer's own words appear in
+  // the reply feed, with the files they attached in compose: their own uploads
+  // not yet on a message, as the reply route links them.
+  const attachmentIds = attachment_ids ?? [];
+  if ((body && body.trim()) || attachmentIds.length) {
+    const [first] = await db.insert(replies).values({
       itemId: created!.id,
       accountUserId: user.id,
-      body: body.trim(),
+      body: (body ?? "").trim(),
       internal: false,
-    });
+    }).returning({ id: replies.id });
+    if (attachmentIds.length) {
+      await db
+        .update(attachments)
+        .set({ replyId: first!.id })
+        .where(and(
+          inArray(attachments.id, attachmentIds),
+          isNull(attachments.replyId),
+          eq(attachments.uploadedByAccountUserId, user.id),
+        ));
+    }
   }
 
   // Link a replay session if the widget passed a token. Best-effort: the

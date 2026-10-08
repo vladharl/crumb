@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { db, items, accounts, accountUsers, workspaceUsers, replies, statusEvents, attachments, initiatives, initiativeSuggestions, dedupeSuggestions, replaySummaries, customerNotifications } from "@crumb/db";
+import { db, items, accounts, accountUsers, workspaceUsers, replies, statusEvents, attachments, initiatives, initiativeSuggestions, dedupeSuggestions, replaySummaries, customerNotifications, type ItemContext } from "@crumb/db";
 import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getActiveSession } from "@/lib/server";
@@ -8,6 +8,7 @@ import { embeddingsConfigured } from "@/lib/ai/embeddings";
 import { replyConfigured } from "@/lib/ai/reply";
 import { replaySummaryConfigured } from "@/lib/ai/replay-summary";
 import { getReplayForItem } from "@/lib/replay/read";
+import { parseUserAgent } from "@/lib/replay/ua";
 import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { eventsBefore } from "@/lib/usage/signals";
 import { emailConfigured } from "@/lib/email";
@@ -41,6 +42,40 @@ async function loadMergeGroup(itemId: string): Promise<{ combinedArrCents: numbe
     combinedArrCents: Number(arrRows[0]?.arr ?? 0),
     accountCount: Number(arrRows[0]?.accts ?? 0),
     followerCount: Number(followerRows[0]?.followers ?? 0),
+  };
+}
+
+// The Details card's "Submitted from": a link to the page the customer was on,
+// one device line, e.g. "Chrome 129 · macOS 14.5 · 1440×900 · en-GB · App 4.2.1",
+// and the host that sent them there.
+function contextView(c: ItemContext | null): ThreadData["item"]["context"] {
+  if (!c) return null;
+  let page: { url: string; label: string } | null = null;
+  let referrerHost: string | null = null;
+  try {
+    // http(s) and redacted at write; re-checked here because it renders as a link.
+    if (c.page_url && /^https?:\/\//i.test(c.page_url)) {
+      const u = new URL(c.page_url);
+      page = { url: c.page_url, label: `${u.host}${u.pathname}` };
+    }
+  } catch { /* unparseable: no link */ }
+  try { referrerHost = c.referrer ? new URL(c.referrer).host || null : null; } catch { /* unparseable: none */ }
+  const ua = parseUserAgent(c.user_agent);
+  const device = [
+    ua.browserName && (ua.browserVersion ? `${ua.browserName} ${ua.browserVersion.split(".")[0]}` : ua.browserName),
+    ua.osName && (ua.osVersion ? `${ua.osName} ${ua.osVersion}` : ua.osName),
+    c.viewport && `${c.viewport.w}×${c.viewport.h}`,
+    c.locale,
+    c.app_version && `App ${c.app_version}`,
+  ].filter(Boolean).join(" · ");
+  if (!page && !c.page_title && !device && !referrerHost) return null;
+  return {
+    pageUrl: page?.url ?? null,
+    pageLabel: page?.label ?? null,
+    pageTitle: c.page_title ?? null,
+    device: device || null,
+    userAgent: c.user_agent ?? null,
+    referrerHost,
   };
 }
 
@@ -94,6 +129,7 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       // the submitter is emailed.
       source: items.source,
       sourceUrl: items.sourceUrl,
+      context: items.context,
       submitterEmail: accountUsers.email,
       submitterUnsub: accountUsers.unsubscribedAll,
       submitterNotifyReplies: accountUsers.notifyReplies,
@@ -374,6 +410,7 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       // A deep link back to the call/ticket, from connector data: only an
       // http(s) URL is ever rendered as a link.
       sourceUrl: head.sourceUrl && /^https?:\/\//i.test(head.sourceUrl) ? head.sourceUrl : null,
+      context: contextView(head.context),
     },
     // Whether a reply / status change will actually email the submitter: the
     // same plan the send paths gate on, so the composer's copy can't drift.

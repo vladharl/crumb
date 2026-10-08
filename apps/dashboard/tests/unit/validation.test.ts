@@ -38,6 +38,14 @@ describe("lib/validation — createItemSchema", () => {
     if (!r.success) expect(r.error.issues[0].message).toBe("invalid_session_token");
   });
 
+  it("takes compose's upload ids, refusing a non-uuid before anything is created", () => {
+    const id = "0b9f7c1e-3a4d-4c2b-9e8f-1a2b3c4d5e6f";
+    expect(createItemSchema.safeParse({ type: "bug", title: "ok", attachment_ids: [id] }).success).toBe(true);
+    const r = createItemSchema.safeParse({ type: "bug", title: "ok", attachment_ids: ["nope"] });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0].message).toBe("invalid_attachment_id");
+  });
+
   it("strips unknown keys", () => {
     const r = createItemSchema.safeParse({ type: "bug", title: "ok", evil: "<script>", extra: 1 });
     expect(r.success).toBe(true);

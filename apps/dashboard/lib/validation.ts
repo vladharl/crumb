@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ItemContext } from "@crumb/db";
 
 // Shared request-validation schemas for the public API (/api/v1/*). Zod
 // gives us length caps + shape checks in one place, so a hostile or buggy
@@ -28,6 +29,62 @@ const optSlug = z.string().trim().min(1).max(LIMITS.slug).optional();
 // ultimately resolved/authorized in resolveCustomer; this just bounds it.
 const optEmail = z.string().trim().max(LIMITS.email).regex(/.+@.+/, "invalid_email").optional();
 
+// ── Submission context (where the widget was when the customer wrote in) ──
+// Best-effort metadata, so it never costs the customer their feedback: text is
+// trimmed and truncated rather than rejected, a malformed field is dropped,
+// and a context that isn't an object is ignored. URLs render as links in the
+// dashboard, so only http(s) is kept, without user:pass@ or secret-looking
+// query/fragment values.
+export const CONTEXT_LIMITS = { url: 2_048, title: 300, userAgent: 512, locale: 35, appVersion: 64 } as const;
+
+// The names the widget and its recorder redact before sending
+// (apps/widget/src/redact.ts; a unit test holds the two together). Matched
+// lowercased with separators stripped, so access_token, accessToken and
+// X-Api-Key all hit.
+// ponytail: errs toward redacting (author, zipcode); an innocently named secret still lands.
+const SECRET_PARAM = /pass|pwd|secret|token|auth|key$|code$|credential|signature|session|cookie|jwt|csrf|xsrf|otp|verifier|cvv|cvc|ssn|cardnumber|^(sig|sid|pin)$/;
+
+function isSecretParam(k: string): boolean {
+  let name = k;
+  try { name = decodeURIComponent(k.replace(/\+/g, " ")); } catch { /* malformed escape: match it raw */ }
+  return SECRET_PARAM.test(name.toLowerCase().replace(/[^a-z0-9]/g, ""));
+}
+
+// http(s) only, capped, without user:pass@ and with secret-looking key=value
+// pairs (query, fragment, ;matrix) redacted. Truncating first is safe: any
+// value that survives the cut still has its whole key in front of it.
+export function redactContextUrl(raw: string): string | undefined {
+  const s = raw.trim().slice(0, CONTEXT_LIMITS.url);
+  if (!/^https?:\/\/\S/i.test(s)) return undefined;
+  return s
+    .replace(/^(https?:\/\/)[^/?#@]*@/i, "$1")
+    .replace(/(^|[?#&;])([^=&#;?]*)=([^&#;?]*)/g, (m, sep: string, k: string) => (isSecretParam(k) ? `${sep}${k}=[redacted]` : m));
+}
+
+const ctxText = (max: number) =>
+  z.string().transform(s => s.trim().slice(0, max) || undefined).optional().catch(undefined);
+const ctxUrl = z.string().transform(redactContextUrl).optional().catch(undefined);
+const ctxPx = z.number().min(0).max(100_000).transform(Math.round);
+
+export const submissionContextSchema = z
+  .object({
+    page_url: ctxUrl,
+    page_title: ctxText(CONTEXT_LIMITS.title),
+    referrer: ctxUrl,
+    user_agent: ctxText(CONTEXT_LIMITS.userAgent),
+    viewport: z.object({ w: ctxPx, h: ctxPx }).strip().optional().catch(undefined),
+    locale: ctxText(CONTEXT_LIMITS.locale),
+    app_version: ctxText(CONTEXT_LIMITS.appVersion),
+  })
+  .strip()
+  // Dropped fields come back as undefined keys: keep what survived, or nothing.
+  .transform(c => {
+    const kept = Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined));
+    return Object.keys(kept).length ? (kept as ItemContext) : undefined;
+  })
+  .optional()
+  .catch(undefined);
+
 export const createItemSchema = z
   .object({
     workspace_slug: optSlug,
@@ -38,6 +95,10 @@ export const createItemSchema = z
     title: z.string().trim().min(1, "missing_title").max(LIMITS.title, "title_too_long"),
     body: z.string().max(LIMITS.body, "body_too_long").optional(),
     session_token: z.string().regex(/^[0-9a-f]{32}$/, "invalid_session_token").optional(),
+    context: submissionContextSchema,
+    // Files from the compose form, linked to the first message. Upload ids are
+    // uuids; checked here so a bad one fails before the item exists, not after.
+    attachment_ids: z.array(z.string().uuid("invalid_attachment_id")).max(50).optional(),
   })
   .strip();
 
@@ -79,7 +140,8 @@ const usageEventSchema = z.object({
   name: z.string().trim().min(1, "missing_event_name").max(64, "event_name_too_long"),
   props: z.record(z.string(), z.unknown()).optional(),
   ts: z.string().datetime({ offset: true }).optional(),
-  page_url: z.string().max(2_048).optional(),
+  // Capped and redacted like a submission's page (an OAuth ?code= must not land).
+  page_url: ctxUrl,
 });
 
 export const createUsageEventsSchema = z

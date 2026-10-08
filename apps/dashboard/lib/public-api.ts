@@ -7,7 +7,9 @@ import { isCloud } from "./tier";
 
 export const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  // Every verb a public route takes: the widget's Admin tab PATCHes and DELETEs
+  // cross-origin. A route that doesn't export one still answers 405.
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Access-Control-Max-Age": "86400",
 };

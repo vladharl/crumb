@@ -62,7 +62,7 @@ describe("replay network capture", () => {
   });
 
   it("redacts URL credentials, fragments and matrix params", () => {
-    expect(rec.redactUrl("https://pat:pw@api.test/x;jsessionid=abc?q=shoes#id_token=xyz"))
+    expect(rec.toNetEvent({ ...request, url: "https://pat:pw@api.test/x;jsessionid=abc?q=shoes#id_token=xyz" }, false).url)
       .toBe("https://api.test/x;jsessionid=[redacted]?q=shoes#id_token=[redacted]");
   });
 });
