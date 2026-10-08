@@ -1,23 +1,12 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "node:crypto";
+import { secretMatches } from "@/lib/secret-match";
 import { sweepOrphanSessions, sweepAgedSessions } from "@/lib/replay/sweep";
 import { sweepOrphanAttachments } from "@/lib/attachments/sweep";
 import { sweepAgedUsageEvents } from "@/lib/usage/sweep";
+import { refreshWebhooks as refreshJiraWebhooks } from "@/lib/integrations/jira";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-// Constant-time secret compare. Avoids leaking the secret one byte at a
-// time via response-timing. Length-guard first because timingSafeEqual
-// throws on unequal-length buffers (and that length check is itself a
-// negligible, intended leak).
-function secretMatches(provided: string | null, expected: string): boolean {
-  if (provided === null) return false;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
 
 // Operator-facing endpoint for pruning orphans: replay sessions that never
 // linked to an item AND attachments uploaded but never linked to a reply.
@@ -63,5 +52,7 @@ export async function POST(req: Request) {
   const retention = await sweepAgedSessions(opts);
   const attachments = await sweepOrphanAttachments(opts);
   const usageEvents = await sweepAgedUsageEvents(opts);
-  return NextResponse.json({ ...result, retention, attachments, usageEvents });
+  // Cloud's per-install Jira status webhooks lapse after 30 days unrefreshed.
+  const jiraWebhooks = await refreshJiraWebhooks();
+  return NextResponse.json({ ...result, retention, attachments, usageEvents, jiraWebhooks });
 }

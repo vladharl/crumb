@@ -82,6 +82,10 @@ async function postJson(url: string, payload: unknown): Promise<{ ok: boolean; e
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
+      // Never follow: the guard vetted this URL only, and an allowlisted host
+      // (a Logic App can answer any 3xx) could bounce the POST to an internal
+      // address. A 3xx fails below as http_30x.
+      redirect: "manual",
       signal: ctrl.signal,
     });
     return resp.ok ? { ok: true } : { ok: false, error: `http_${resp.status}` };

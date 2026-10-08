@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { and, eq, sql } from "drizzle-orm";
-import { db, workspaces, accounts, accountUsers } from "@crumb/db";
+import { db, accounts, accountUsers, workspaceUsers } from "@crumb/db";
 import { CLOSED_STATUSES } from "@crumb/ui";
 import { verifySlackSignature } from "@/lib/slack/verify";
 import { sendDirectMessage, getSlackUserEmail, escapeSlackText } from "@/lib/slack/notify";
+import { workspaceForSlackTeam } from "@/lib/slack/install";
 import { open } from "@/lib/crypto-at-rest";
 import { withAiBudget } from "@/lib/ai/run";
 import { embedText } from "@/lib/ai/embeddings";
@@ -18,7 +19,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // POST /api/integrations/slack/events — the Slack Events API endpoint. Phase-0
-// sizing bot: when someone @mentions the Crumb bot on a message in a feedback
+// sizing bot: when a teammate @mentions the Crumb bot on a message in a feedback
 // channel, we post a threaded reply sizing the request (what it is, revenue at
 // stake, T-shirt scope). Reply-only — nothing is written to items/captures.
 //
@@ -54,7 +55,7 @@ export async function POST(req: Request) {
 
   const event = body.event;
   if (body.type === "event_callback" && event?.type === "app_mention" && !event.bot_id) {
-    void processAppMention(body.team_id, event);
+    void processAppMention(body.team_id, event, body.is_ext_shared_channel === true);
   }
 
   return new NextResponse("", { status: 200 });
@@ -63,6 +64,10 @@ export async function POST(req: Request) {
 type SlackMentionEvent = {
   type: string;
   user?: string;
+  // The poster's Slack team: user_team in shared (Slack Connect) channels,
+  // team on user messages generally.
+  user_team?: string;
+  team?: string;
   text?: string;
   channel?: string;
   ts?: string;
@@ -74,26 +79,16 @@ type SlackEnvelope = {
   type?: string;
   challenge?: string;
   team_id?: string;
+  // A Slack Connect channel, shared with another organization.
+  is_ext_shared_channel?: boolean;
   event?: SlackMentionEvent;
 };
 
-async function processAppMention(teamId: string | undefined, event: SlackMentionEvent) {
+async function processAppMention(teamId: string | undefined, event: SlackMentionEvent, extShared: boolean) {
   try {
     if (!teamId) return;
 
-    const [ws] = await db
-      .select({
-        id: workspaces.id,
-        planId: workspaces.planId,
-        subscriptionStatus: workspaces.subscriptionStatus,
-        slackBotToken: workspaces.slackBotToken,
-        slackBotUserId: workspaces.slackBotUserId,
-        githubAppInstallId: workspaces.githubAppInstallId,
-        githubDefaultRepo: workspaces.githubDefaultRepo,
-      })
-      .from(workspaces)
-      .where(eq(workspaces.slackTeamId, teamId))
-      .limit(1);
+    const ws = await workspaceForSlackTeam(teamId);
     if (!ws || !ws.slackBotToken) return; // Slack workspace not connected to Crumb
 
     const botToken = open(ws.slackBotToken);
@@ -105,8 +100,21 @@ async function processAppMention(teamId: string | undefined, event: SlackMention
     const threadTs = event.thread_ts ?? event.ts;
     if (!channel || !threadTs) return;
 
+    // A shared channel can hold the customer, who'd read the sizing (requester
+    // ARR, other accounts' requests) when a teammate mentions us there. So
+    // there every reply goes to the mentioner only. Slack shows an ephemeral
+    // thread reply only in an existing thread, so a top-level mention gets its
+    // reply in the channel.
     const post = (text: string, blocks?: SlackBlock[]) =>
-      sendDirectMessage({ botToken, slackUserId: channel, text, blocks, threadTs });
+      sendDirectMessage(extShared
+        ? { botToken, slackUserId: channel, text, blocks, threadTs: event.thread_ts, ephemeralTo: event.user }
+        : { botToken, slackUserId: channel, text, blocks, threadTs });
+
+    const email = await memberEmail(ws.id, teamId, botToken, event);
+    if (!email) {
+      await post("Request sizing is only available to members of this Crumb workspace.");
+      return;
+    }
 
     const requestText = stripMentions(event.text ?? "").slice(0, 1500);
     if (!requestText) {
@@ -114,7 +122,7 @@ async function processAppMention(teamId: string | undefined, event: SlackMention
       return;
     }
 
-    const gated = await withAiBudget(ws, () => analyzeAndSize(ws, botToken, event.user, requestText));
+    const gated = await withAiBudget(ws, () => analyzeAndSize(ws, email, requestText));
     if (!gated.ok) {
       await post(
         gated.error === "ai_cap_reached"
@@ -137,6 +145,27 @@ async function processAppMention(teamId: string | undefined, event: SlackMention
   }
 }
 
+// The mentioner's email when they may see a sizing reply, else null. The reply
+// carries requester ARR and other accounts' request titles, and a Slack Connect
+// channel can hold the customer, so the mentioner must belong to the installing
+// Slack team and match a teammate of this Crumb workspace by their Slack email.
+async function memberEmail(
+  workspaceId: string,
+  installTeamId: string,
+  botToken: string,
+  event: SlackMentionEvent,
+): Promise<string | null> {
+  if (!event.user || (event.user_team ?? event.team) !== installTeamId) return null;
+  const email = await getSlackUserEmail(botToken, event.user);
+  if (!email) return null;
+  const [member] = await db
+    .select({ id: workspaceUsers.id })
+    .from(workspaceUsers)
+    .where(and(eq(workspaceUsers.workspaceId, workspaceId), sql`lower(${workspaceUsers.email}) = ${email.toLowerCase()}`))
+    .limit(1);
+  return member ? email : null;
+}
+
 type WsForSizing = {
   id: string;
   githubAppInstallId: string | null;
@@ -152,12 +181,11 @@ type Analysis = {
 
 async function analyzeAndSize(
   ws: WsForSizing,
-  botToken: string,
-  slackUserId: string | undefined,
+  email: string,
   requestText: string,
 ): Promise<Analysis> {
   const [account, similar, repoContext] = await Promise.all([
-    resolveAccount(ws.id, botToken, slackUserId, requestText),
+    resolveAccount(ws.id, email, requestText),
     findSimilar(ws.id, requestText),
     ws.githubAppInstallId && ws.githubDefaultRepo
       ? getRepoContext(ws.githubAppInstallId, ws.githubDefaultRepo).catch(() => null)
@@ -175,24 +203,20 @@ async function analyzeAndSize(
   return { account, similar, sizing, repoConnected };
 }
 
-// Slack user → customer account. Exact email match first; fall back to the
+// Mentioner → customer account. Exact email match first; fall back to the
 // inbound-capture matcher for internal relays ("Acme wants SSO").
 async function resolveAccount(
   workspaceId: string,
-  botToken: string,
-  slackUserId: string | undefined,
+  email: string,
   requestText: string,
 ): Promise<{ name: string; arrCents: number } | null> {
-  const email = slackUserId ? await getSlackUserEmail(botToken, slackUserId) : null;
-  if (email) {
-    const [row] = await db
-      .select({ name: accounts.name, arrCents: accounts.arrCents })
-      .from(accountUsers)
-      .innerJoin(accounts, eq(accounts.id, accountUsers.accountId))
-      .where(and(eq(accountUsers.workspaceId, workspaceId), sql`lower(${accountUsers.email}) = ${email.toLowerCase()}`))
-      .limit(1);
-    if (row) return { name: row.name, arrCents: row.arrCents };
-  }
+  const [row] = await db
+    .select({ name: accounts.name, arrCents: accounts.arrCents })
+    .from(accountUsers)
+    .innerJoin(accounts, eq(accounts.id, accountUsers.accountId))
+    .where(and(eq(accountUsers.workspaceId, workspaceId), sql`lower(${accountUsers.email}) = ${email.toLowerCase()}`))
+    .limit(1);
+  if (row) return { name: row.name, arrCents: row.arrCents };
 
   const accountRows = await db
     .select({ id: accounts.id, name: accounts.name, arrCents: accounts.arrCents })

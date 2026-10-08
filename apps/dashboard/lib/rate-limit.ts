@@ -16,9 +16,16 @@ import "server-only";
 // bucket rather than 500 the request — a limiter outage must not take down
 // the API. The local bucket still bounds a single instance in the meantime.
 
-type Bucket = { tokens: number; lastRefill: number };
+// fullAt: when the bucket will have refilled to capacity. From then on it is
+// indistinguishable from a fresh one, so the sweep in checkRateLimit drops it
+// without changing any answer; the Map stays bounded by recently active keys.
+type Bucket = { tokens: number; lastRefill: number; fullAt: number };
 
 const buckets = new Map<string, Bucket>();
+// ponytail: a full scan every SWEEP_EVERY calls. A unique-key flood stays
+// bounded too (a fresh bucket idles after 1/refill s); add a size cap if not.
+const SWEEP_EVERY = 1000;
+let callsSinceSweep = 0;
 // Defaults: 60 requests / minute. Override per call site if a path needs
 // a tighter limit (e.g. uploads can be slower than submits).
 const DEFAULT_CAPACITY = parseInt(process.env.CRUMB_RATE_LIMIT_CAPACITY ?? "60", 10);
@@ -36,9 +43,14 @@ export function checkRateLimit(
   const refill = opts.refillPerSec ?? DEFAULT_REFILL_PER_SEC;
   const now = Date.now();
 
+  if (++callsSinceSweep >= SWEEP_EVERY) {
+    callsSinceSweep = 0;
+    for (const [k, b] of buckets) if (b.fullAt <= now) buckets.delete(k);
+  }
+
   const existing = buckets.get(key);
   if (!existing) {
-    buckets.set(key, { tokens: capacity - 1, lastRefill: now });
+    buckets.set(key, { tokens: capacity - 1, lastRefill: now, fullAt: now + 1000 / refill });
     return { ok: true, remaining: capacity - 1 };
   }
   // Refill based on elapsed time.
@@ -47,6 +59,7 @@ export function checkRateLimit(
   if (refilled >= 1) {
     existing.tokens = refilled - 1;
     existing.lastRefill = now;
+    existing.fullAt = now + ((capacity - existing.tokens) / refill) * 1000;
     return { ok: true, remaining: Math.floor(existing.tokens) };
   }
   // No tokens — caller must wait this long for the next one.
@@ -126,6 +139,11 @@ export function __resetRedisForTests(): void {
   redisClient = undefined;
 }
 
+// Test-only: how many in-memory buckets are live (eviction check).
+export function __bucketCountForTests(): number {
+  return buckets.size;
+}
+
 // Async entry point. Uses Redis when configured + reachable; otherwise the
 // in-memory bucket. This is what request handlers should call.
 export async function checkRateLimitAsync(
@@ -151,13 +169,27 @@ export async function checkRateLimitAsync(
   }
 }
 
-// Best-effort caller fingerprint from headers a proxy is likely to set.
-// Falls back to "anon" so the limiter still applies (whole population
-// shares the bucket — fine for tiny self-host instances).
+// Best-effort caller fingerprint, preferring what the client can't forge past
+// our proxy: CF-Connecting-IP (Cloudflare overwrites it; Cloud and the DEPLOY.md
+// self-host sit behind a Cloudflare Tunnel), then X-Real-IP, then the LAST
+// X-Forwarded-For hop (the one the nearest proxy appended; earlier entries are
+// whatever the client sent). Falls back to "anon" so the limiter still applies
+// (whole population shares the bucket — fine for tiny self-host instances).
+// ponytail: the first two are trusted as sent, so the app must only be
+// reachable through Cloudflare or a proxy that overwrites both (README "Rate
+// limiting"). Gate them behind an opt-in env if that ever can't hold.
 export function callerIpFromRequest(req: Request): string {
-  const fwd = req.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]!.trim();
-  return req.headers.get("x-real-ip")?.trim() || "anon";
+  return callerIpFromHeaders(req.headers);
+}
+
+// Same, for server actions (next/headers) that have no Request.
+export function callerIpFromHeaders(h: { get(name: string): string | null }): string {
+  return (
+    h.get("cf-connecting-ip")?.trim() ||
+    h.get("x-real-ip")?.trim() ||
+    h.get("x-forwarded-for")?.split(",").pop()?.trim() ||
+    "anon"
+  );
 }
 
 // Helper that produces the standard 429 NextResponse shape used by the

@@ -3,12 +3,15 @@
 // `build:record` esbuild entry; exposed on `window.__crumbRecord__` and
 // driven by the main widget after `/me` confirms `session_record_enabled`.
 
-import { record, type eventWithTime } from "rrweb";
+import { record, EventType, type eventWithTime } from "rrweb";
 
 type StartOpts = {
   apiBase: string;
   workspaceSlug: string;
   sessionToken: string;
+  /** Host opted in with data-record-network-bodies="true" on the widget
+   *  script tag. Off by default: requests record without bodies. */
+  captureBodies?: boolean;
 };
 
 // Hard caps. Match the server in `lib/replay/ingest.ts` — when the server
@@ -93,7 +96,9 @@ async function flush(final = false): Promise<void> {
     sequence,
     started_at: startedAt,
     ended_at: endedAt,
-    page_url: location.href,
+    // The page URL can carry a reset ?token= or an OAuth #access_token, and it
+    // lands in the manifest and the AI summary: same redaction as requests.
+    page_url: redactUrl(location.href),
     user_agent: navigator.userAgent,
     viewport_w: window.innerWidth,
     viewport_h: window.innerHeight,
@@ -138,6 +143,8 @@ async function flush(final = false): Promise<void> {
 
 function emit(e: eventWithTime) {
   if (!state || state.stopped) return;
+  // rrweb's Meta event records the page URL too (see page_url in flush).
+  if (e.type === EventType.Meta) e.data.href = redactUrl(e.data.href);
   if (state.buffer.length === 0) state.bufferStartedAt = nowIso();
   state.buffer.push(e);
   // Approximate the new bytes without re-summing the whole buffer each time.
@@ -162,10 +169,15 @@ function emit(e: eventWithTime) {
 }
 
 // ─── network capture ─────────────────────────────────────
-// Patches fetch + XHR to record one rrweb custom event per request (method,
-// url, status, timing, and truncated+redacted req/resp bodies). Events ride
-// the same rrweb stream via addCustomEvent, so they chunk/store/align on the
-// timeline for free. The player extracts them by `data.tag === "network"`.
+// Patches fetch + XHR to record one rrweb custom event per request. Events
+// ride the same rrweb stream via addCustomEvent, so they chunk/store/align on
+// the timeline for free. The player extracts them by `data.tag === "network"`.
+//
+// Privacy: a request records as method, URL (secret-looking query values
+// redacted), status and timing. Bodies are recorded only when the host opts in
+// (StartOpts.captureBodies), and even then secret-looking form, query and JSON
+// values are redacted. Headers and cookies are never recorded. toNetEvent is the
+// one place that policy lives; both wrappers route through it.
 
 type NetEvent = {
   method: string;
@@ -179,39 +191,101 @@ type NetEvent = {
   error?: string;
 };
 
+// What a wrapper saw, before the policy is applied.
+type RawNet = {
+  method: string;
+  url: string;
+  status: number;
+  durationMs: number;
+  error?: string;
+  reqBody?: unknown;  // whatever was handed to fetch / XHR.send
+  respText?: string;  // only read when bodies are on
+};
+
 function clip(s: string): string {
   return s.length > MAX_NET_BODY ? s.slice(0, MAX_NET_BODY) + "…[truncated]" : s;
 }
 
-// Redact obvious secret-looking JSON fields. Bodies are the main exposure
-// (headers aren't captured); this catches the common credential shapes.
-function redact(s: string): string {
-  return s.replace(
-    /("(?:password|token|secret|authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|cookie)"\s*:\s*)"[^"]*"/gi,
-    '$1"[redacted]"',
-  );
+// Names whose values are redacted wherever they show up (query string, form
+// body, JSON key), matched on the lowercased name with separators stripped so
+// access_token, accessToken and X-Amz-Signature all hit.
+// ponytail: name heuristic that errs toward redacting (author, sessions); a
+// secret under an innocent name still records when bodies are on.
+const SECRET_KEY = /pass|pwd|secret|token|auth|key$|credential|signature|session|cookie|jwt|csrf|xsrf|otp|verifier|cvv|cvc|ssn|cardnumber|^(code|sig|sid|pin)$/;
+
+function isSecretKey(k: string): boolean {
+  let name = k;
+  try { name = decodeURIComponent(k.replace(/\+/g, " ")); } catch { /* malformed escape: match it raw */ }
+  return SECRET_KEY.test(name.toLowerCase().replace(/[^a-z0-9]/g, ""));
+}
+
+// key=value pairs in a query string, #fragment, ;matrix param or form body.
+const PAIR = /(^|[?#&;])([^=&#;?]*)=([^&#;?]*)/g;
+function redactPairs(s: string): string {
+  return s.replace(PAIR, (m, sep: string, k: string) => (isSecretKey(k) ? `${sep}${k}=[redacted]` : m));
+}
+
+export function redactUrl(url: string): string {
+  return redactPairs(url.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#@]*@/i, "$1")); // drops user:pass@ too
+}
+
+// Parsed JSON: secret-keyed values go, strings get the pair pass (a presigned
+// URL inside a response, say).
+function scrub(v: unknown, key = ""): unknown {
+  if (isSecretKey(key)) return "[redacted]";
+  if (typeof v === "string") return redactPairs(v);
+  if (Array.isArray(v)) return v.map(x => scrub(x));
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(v)) out[k] = scrub((v as Record<string, unknown>)[k], k);
+    return out;
+  }
+  return v;
+}
+
+// "key": value pairs in text that isn't one JSON document (NDJSON, JSONP).
+const JSON_PAIR = /("([^"\\]*)"\s*:\s*)("(?:[^"\\]|\\.)*"|[^\s,}\]]+)/g;
+
+export function redactBody(s: string): string {
+  try { return JSON.stringify(scrub(JSON.parse(s))); } catch { /* not a JSON document */ }
+  return redactPairs(s.replace(JSON_PAIR, (m, head: string, k: string) => (isSecretKey(k) ? `${head}"[redacted]"` : m)));
 }
 
 function bodyToText(body: unknown): { text?: string; bytes?: number } {
   if (body == null) return {};
-  if (typeof body === "string") return { text: clip(redact(body)), bytes: body.length };
-  if (body instanceof URLSearchParams) { const s = body.toString(); return { text: clip(redact(s)), bytes: s.length }; }
+  if (typeof body === "string" || body instanceof URLSearchParams) {
+    const s = String(body);
+    return { text: clip(redactBody(s)), bytes: s.length };
+  }
   const name = (body as { constructor?: { name?: string } })?.constructor?.name;
   return { text: `[${name ?? "binary"}]` };
+}
+
+// What one captured request becomes on the recording.
+export function toNetEvent(r: RawNet, withBodies: boolean): NetEvent {
+  const ev: NetEvent = { method: r.method, url: redactUrl(r.url), status: r.status, durationMs: r.durationMs };
+  if (r.error) ev.error = r.error;
+  if (!withBodies) return ev;
+  const req = bodyToText(r.reqBody);
+  if (req.text !== undefined) { ev.reqBody = req.text; ev.reqBytes = req.bytes; }
+  if (r.respText !== undefined) { ev.respBody = clip(redactBody(r.respText)); ev.respBytes = r.respText.length; }
+  return ev;
 }
 
 function isTextContentType(ct: string): boolean {
   return /json|text|xml|form-urlencoded|javascript/i.test(ct);
 }
 
-function recordNet(p: NetEvent): void {
+const bodiesOn = (): boolean => state?.opts.captureBodies === true;
+
+function recordNet(r: RawNet): void {
   if (!state || state.stopped) return;
   if (state.netCount >= MAX_NET_EVENTS) return;
   state.netCount += 1;
-  try { record.addCustomEvent("network", p); } catch { /* recorder gone */ }
+  try { record.addCustomEvent("network", toNetEvent(r, bodiesOn())); } catch { /* recorder gone */ }
 }
 
-type XhrMeta = { method: string; url: string; started: number; req: { text?: string; bytes?: number } };
+type XhrMeta = { method: string; url: string; started: number; body?: unknown };
 interface XhrWithMeta extends XMLHttpRequest { __crumbNet?: XhrMeta }
 
 function patchNetwork(apiBase: string): () => void {
@@ -228,24 +302,21 @@ function patchNetwork(apiBase: string): () => void {
     } catch { /* leave defaults */ }
     if (skip(url)) return origFetch.apply(this, args);
     const started = Date.now();
-    const req = bodyToText(init?.body);
+    const reqBody = init?.body;
     return origFetch.apply(this, args).then(
       (res) => {
-        const durationMs = Date.now() - started;
-        // Read a clone in the background so we never delay the caller's response.
-        const ct = res.headers.get("content-type") ?? "";
-        if (isTextContentType(ct)) {
-          res.clone().text().then(
-            t => recordNet({ method, url, status: res.status, durationMs, reqBody: req.text, reqBytes: req.bytes, respBody: clip(redact(t)), respBytes: t.length }),
-            () => recordNet({ method, url, status: res.status, durationMs, reqBody: req.text, reqBytes: req.bytes }),
-          );
+        const r: RawNet = { method, url, status: res.status, durationMs: Date.now() - started, reqBody };
+        // Response text only when the host opted into bodies; read from a
+        // clone in the background so we never delay the caller's response.
+        if (bodiesOn() && isTextContentType(res.headers.get("content-type") ?? "")) {
+          res.clone().text().then(t => recordNet({ ...r, respText: t }), () => recordNet(r));
         } else {
-          recordNet({ method, url, status: res.status, durationMs, reqBody: req.text, reqBytes: req.bytes });
+          recordNet(r);
         }
         return res;
       },
       (err: unknown) => {
-        recordNet({ method, url, status: 0, durationMs: Date.now() - started, reqBody: req.text, reqBytes: req.bytes, error: err instanceof Error ? err.message : String(err) });
+        recordNet({ method, url, status: 0, durationMs: Date.now() - started, reqBody, error: err instanceof Error ? err.message : String(err) });
         throw err;
       },
     );
@@ -262,26 +333,25 @@ function patchNetwork(apiBase: string): () => void {
       method: String(args[0] ?? "GET").toUpperCase(),
       url: typeof url === "string" ? url : url instanceof URL ? url.href : String(url),
       started: 0,
-      req: {},
     };
     return origOpen.apply(this, args);
   } as typeof XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.send = function (this: XhrWithMeta, ...args: unknown[]) {
-    const body = args[0] as Document | XMLHttpRequestBodyInit | null | undefined;
     const meta = this.__crumbNet;
     if (meta && !skip(meta.url)) {
       meta.started = Date.now();
-      meta.req = bodyToText(body);
+      meta.body = args[0];
       this.addEventListener("loadend", () => {
-        let respBody: string | undefined; let respBytes: number | undefined;
-        try {
-          const ct = this.getResponseHeader("content-type") ?? "";
-          if ((this.responseType === "" || this.responseType === "text") && isTextContentType(ct)) {
-            const t = String(this.responseText ?? "");
-            respBody = clip(redact(t)); respBytes = t.length;
-          }
-        } catch { /* cross-origin response text may throw */ }
-        recordNet({ method: meta.method, url: meta.url, status: this.status, durationMs: Date.now() - meta.started, reqBody: meta.req.text, reqBytes: meta.req.bytes, respBody, respBytes });
+        let respText: string | undefined;
+        if (bodiesOn()) {
+          try {
+            const ct = this.getResponseHeader("content-type") ?? "";
+            if ((this.responseType === "" || this.responseType === "text") && isTextContentType(ct)) {
+              respText = String(this.responseText ?? "");
+            }
+          } catch { /* cross-origin response text may throw */ }
+        }
+        recordNet({ method: meta.method, url: meta.url, status: this.status, durationMs: Date.now() - meta.started, reqBody: meta.body, respText });
       });
     }
     return origSend.apply(this, args);

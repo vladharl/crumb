@@ -98,12 +98,12 @@ export async function sweepOrphanSessions(opts: SweepOptions = {}): Promise<Swee
 // window. This is the cost-control counterpart to the orphan sweep above —
 // it bounds how long replay bytes live, not just whether they ever linked.
 //
-// OPT-IN by design: returns immediately unless a retention window is
-// configured, so existing deployments never silently delete linked replays.
+// Defaults to 30 days: a replay holds whatever the customer had on screen, so
+// it shouldn't live forever just because nobody configured a window.
 // Configure via env:
-//   CRUMB_REPLAY_RETENTION_DAYS            global default (all plans)
+//   CRUMB_REPLAY_RETENTION_DAYS            global window (all plans)
 //   CRUMB_REPLAY_RETENTION_DAYS_GROWTH     per-plan override (also _TEAM/_FREE)
-// Per-plan takes precedence over the global; 0/unset = keep forever.
+// Per-plan takes precedence over the global; unset = 30 days; 0 = keep forever.
 
 export type RetentionResult = {
   workspacesScanned: number;
@@ -113,18 +113,21 @@ export type RetentionResult = {
   storageFailures: number;
 };
 
-function retentionDaysForPlan(plan: Plan): number {
-  const perPlan = parseInt(process.env[`CRUMB_REPLAY_RETENTION_DAYS_${plan.toUpperCase()}`] ?? "", 10);
-  if (Number.isFinite(perPlan) && perPlan > 0) return perPlan;
-  const global = parseInt(process.env.CRUMB_REPLAY_RETENTION_DAYS ?? "", 10);
-  return Number.isFinite(global) && global > 0 ? global : 0;
+const DEFAULT_REPLAY_RETENTION_DAYS = 30;
+
+export function retentionDaysForPlan(plan: Plan): number {
+  for (const name of [`CRUMB_REPLAY_RETENTION_DAYS_${plan.toUpperCase()}`, "CRUMB_REPLAY_RETENTION_DAYS"]) {
+    const days = parseInt(process.env[name] ?? "", 10); // "" (compose passthrough) → NaN → next
+    if (Number.isFinite(days) && days >= 0) return days;
+  }
+  return DEFAULT_REPLAY_RETENTION_DAYS;
 }
 
 export async function sweepAgedSessions(opts: { limit?: number } = {}): Promise<RetentionResult> {
   const limit = opts.limit ?? 500;
   const empty: RetentionResult = { workspacesScanned: 0, deletedSessions: 0, deletedChunks: 0, releasedBytes: 0, storageFailures: 0 };
 
-  // Fast path: nothing configured → no-op, no DB work.
+  // Fast path: every plan explicitly set to keep forever → no-op, no DB work.
   if (retentionDaysForPlan("free") === 0 && retentionDaysForPlan("team") === 0 && retentionDaysForPlan("growth") === 0) {
     return empty;
   }

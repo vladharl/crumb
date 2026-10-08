@@ -1,21 +1,19 @@
-import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
-import { fetchInstallationMeta, listInstallationRepos, verifyGithubState } from "@/lib/integrations/github";
+import { fetchInstallationMeta, listInstallationRepos, verifyInstallOwnership } from "@/lib/integrations/github";
+import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // GitHub App callback. Triggered after the admin completes the install on
-// GitHub. Unlike OAuth, there's no code exchange — installation_id IS the
-// credential. We persist it + the account login.
+// GitHub. installation_id arrives as a plain query parameter, so before it is
+// persisted (with the account login) it must not belong to another workspace
+// and the person finishing the install must own it (verifyInstallOwnership).
 
 function redirectBack(req: Request, slug: string): Response {
-  const url = new URL(req.url);
-  url.pathname = "/settings/integrations";
-  url.search = `?github=${slug}`;
-  return NextResponse.redirect(url);
+  return redirectToSettings(req, "github", slug);
 }
 
 export async function GET(req: Request) {
@@ -29,10 +27,12 @@ export async function GET(req: Request) {
 
   const installationId = url.searchParams.get("installation_id");
   const state = url.searchParams.get("state");
-  if (!installationId || !state) return redirectBack(req, "error_missing_params");
+  // Canonical digits only (no leading zeros): the id is interpolated into
+  // App-JWT API paths and string-compared with the stored install id below.
+  if (!installationId || !/^[1-9]\d*$/.test(installationId) || !state) return redirectBack(req, "error_missing_params");
 
-  const v = verifyGithubState(state);
-  if (!v.ok) return redirectBack(req, "error_bad_state");
+  const v = await verifyCallback(req, "github", state);
+  if (!v.ok) return v.redirect;
 
   const [ws] = await db
     .select({ id: workspaces.id })
@@ -41,6 +41,14 @@ export async function GET(req: Request) {
     .limit(1);
   if (!ws) return redirectBack(req, "error_workspace_gone");
 
+  // An installation is never re-pointed away from the workspace holding it.
+  const [taken] = await db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(and(eq(workspaces.githubAppInstallId, installationId), ne(workspaces.id, ws.id)))
+    .limit(1);
+  if (taken) return redirectBack(req, "error_install_taken");
+
   let meta;
   try {
     meta = await fetchInstallationMeta(installationId);
@@ -48,6 +56,12 @@ export async function GET(req: Request) {
     log.error("github fetchInstallationMeta failed", { scope: "crumb/github", err });
     return redirectBack(req, "error_meta_failed");
   }
+
+  const owned = await verifyInstallOwnership(installationId, meta, {
+    code: url.searchParams.get("code"),
+    setupAction,
+  });
+  if (!owned) return redirectBack(req, "error_not_owner");
 
   // Convenience: if the install grants access to exactly one repo, pre-select
   // it as the default so the admin can create issues immediately. Best-effort.

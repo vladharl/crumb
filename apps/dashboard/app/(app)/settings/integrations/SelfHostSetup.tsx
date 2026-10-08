@@ -47,11 +47,12 @@ function setupFor(provider: Provider, origin: string): { rows: Row[]; env: strin
       return {
         rows: [
           { label: "Callback URL", value: cb("github"), mono: true },
+          { label: "Request user authorization (OAuth) during installation", value: "On. With the App's client ID and a client secret set below, Crumb confirms the person installing can access the installation.", mono: false },
           { label: "Webhook URL", value: wh("github"), mono: true },
           { label: "Permissions", value: "Issues: R/W · Contents: R · Metadata: R", mono: false },
           { label: "Subscribe to events", value: "Issues, Installation", mono: true },
         ],
-        env: ["GITHUB_APP_ID", "GITHUB_APP_SLUG", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET"],
+        env: ["GITHUB_APP_ID", "GITHUB_APP_SLUG", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET", "GITHUB_APP_CLIENT_ID", "GITHUB_APP_CLIENT_SECRET"],
         docs: "https://github.com/settings/apps/new",
       };
     case "hubspot":

@@ -1,12 +1,11 @@
-import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import {
   exchangeCode,
-  verifyLinearState,
   fetchDefaultTeam,
   LINEAR_REDIRECT_URL,
 } from "@/lib/integrations/linear";
+import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
 import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
 import { seal } from "@/lib/crypto-at-rest";
 import { log } from "@/lib/log";
@@ -20,10 +19,7 @@ export const runtime = "nodejs";
 // default team so the workspace lands in a usable state.
 
 function redirectBack(req: Request, slug: string): Response {
-  const url = new URL(req.url);
-  url.pathname = "/settings/integrations";
-  url.search = `?linear=${slug}`;
-  return NextResponse.redirect(url);
+  return redirectToSettings(req, "linear", slug);
 }
 
 export async function GET(req: Request) {
@@ -37,8 +33,8 @@ export async function GET(req: Request) {
   const state = url.searchParams.get("state");
   if (!code || !state) return redirectBack(req, "error_missing_params");
 
-  const v = verifyLinearState(state);
-  if (!v.ok) return redirectBack(req, "error_bad_state");
+  const v = await verifyCallback(req, "linear", state);
+  if (!v.ok) return v.redirect;
 
   const [ws] = await db
     .select({ id: workspaces.id })

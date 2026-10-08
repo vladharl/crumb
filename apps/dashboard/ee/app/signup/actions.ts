@@ -7,6 +7,7 @@ import { originFromHeaders } from "@/lib/origin";
 import { ensureUniqueSlug } from "@/lib/provision";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { sendSignupVerify } from "@/lib/email";
+import { callerIpFromHeaders } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -44,7 +45,10 @@ export async function startSignup(formData: FormData): Promise<SignupResult> {
   // client — a forged POST without the checkbox must not create a workspace.
   if (!formData.get("acceptedTerms")) return { ok: false, error: "Please accept the Terms of Service and Privacy Policy." };
 
-  const ip = h.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
+  // Not the first X-Forwarded-For entry: behind Cloudflare that's whatever the
+  // client sent, so rotating it would dodge the per-IP cap below.
+  const caller = callerIpFromHeaders(h);
+  const ip = caller === "anon" ? null : caller;
 
   if (!(await verifyTurnstile(turnstile, ip))) {
     return { ok: false, error: "Couldn't verify you're human. Please try again." };

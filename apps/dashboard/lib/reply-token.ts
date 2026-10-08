@@ -10,8 +10,10 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 //     (base64url, no padding), proving the address wasn't forged
 //
 // The same secret already protects widget JWTs (workspaces.signing_secret),
-// so a single rotation invalidates both vectors. The shortId is per-workspace
-// unique, so collisions across workspaces aren't possible.
+// so a single rotation invalidates both vectors. The shortId is only unique
+// per workspace (on Cloud many workspaces have an FB-42), so the shortId alone
+// doesn't name an item: the token does, since only the secret of the
+// workspace that sent the address verifies it. See pickReplyTarget.
 
 const HMAC_LEN = 16;
 
@@ -37,6 +39,17 @@ export function verifyReplyToken(itemShortId: string, token: string, signingSecr
   const got = fromB64url(token);
   if (!got || got.length !== expected.length) return false;
   return timingSafeEqual(expected, got);
+}
+
+// Of the items sharing an address's shortId (one per workspace that has
+// reached that number), the one whose workspace secret signed the token.
+// Null when none did: a forged token, or one minted before a secret rotation.
+export function pickReplyTarget<T extends { signingSecret: string }>(
+  itemShortId: string,
+  token: string,
+  candidates: readonly T[],
+): T | null {
+  return candidates.find((c) => verifyReplyToken(itemShortId, token, c.signingSecret)) ?? null;
 }
 
 export function buildReplyAddress(itemShortId: string, signingSecret: string, inboundDomain: string): string {

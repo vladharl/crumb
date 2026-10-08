@@ -1,6 +1,7 @@
 import "server-only";
 import { createSign, createHmac, timingSafeEqual } from "node:crypto";
-import { signState, verifyState } from "./state";
+import { signState } from "./state";
+import { log } from "@/lib/log";
 
 // GitHub App (not OAuth App). Docs:
 //   https://docs.github.com/en/apps/creating-github-apps
@@ -10,9 +11,11 @@ import { signState, verifyState } from "./state";
 //   1. Admin clicks Connect → we redirect to /apps/{slug}/installations/new?state=<signed>.
 //   2. Admin picks org + repos on GitHub.
 //   3. GitHub redirects to /api/integrations/github/callback?installation_id=N&setup_action=install&state=...
-//   4. We persist installation_id + account login. No code exchange — the
-//      installation_id IS the credential. Per-request, we mint a fresh
-//      installation token by signing an App JWT and trading it.
+//      (plus &code=... when the App requests user authorization during install).
+//   4. We check the installation belongs to whoever finished the install
+//      (verifyInstallOwnership), then persist installation_id + account login.
+//      Per-request, we mint a fresh installation token by signing an App JWT
+//      and trading it.
 //
 // Installation tokens expire in 1h; we cache them per installation_id in
 // module memory for 50 minutes. Multi-instance Next deploys each mint
@@ -46,10 +49,6 @@ export function buildAuthUrl(workspaceId: string): string {
   if (!slug) throw new Error("GITHUB_APP_SLUG is not configured");
   const params = new URLSearchParams({ state: signState("github", workspaceId) });
   return `https://github.com/apps/${slug}/installations/new?${params.toString()}`;
-}
-
-export function verifyGithubState(state: string): { ok: true; workspaceId: string } | { ok: false } {
-  return verifyState("github", state);
 }
 
 // ─── App JWT + installation token ───────────────────────────
@@ -106,6 +105,8 @@ export async function mintInstallationToken(installationId: string): Promise<str
 export type InstallationMeta = {
   account: { login: string; type: "User" | "Organization" };
   repositorySelection: "all" | "selected";
+  created_at: string;
+  updated_at: string;
 };
 
 export async function fetchInstallationMeta(installationId: string): Promise<InstallationMeta> {
@@ -122,6 +123,71 @@ export async function fetchInstallationMeta(installationId: string): Promise<Ins
     throw new Error(`github_installation_meta_failed: ${resp.status} ${text.slice(0, 200)}`);
   }
   return (await resp.json()) as InstallationMeta;
+}
+
+// The callback's installation_id is a bare query parameter and the App JWT
+// reads every installation of the App, so on its own it proves nothing about
+// who finished the install: a workspace admin could replay their own state
+// with another company's id. When the App's OAuth credentials are set (and
+// "Request user authorization (OAuth) during installation" is on), GitHub
+// adds a `code` to the callback; we trade it for a user-to-server token and
+// require the installation in that user's GET /user/installations, as
+// GitHub's setup-URL docs advise. Without them, only an install or update
+// GitHub recorded in the last 10 minutes passes, which narrows a replay to
+// that window but cannot rule it out.
+const INSTALL_FRESH_MS = 10 * 60 * 1000;
+let warnedWeakOwnership = false;
+
+export async function verifyInstallOwnership(
+  installationId: string,
+  meta: InstallationMeta,
+  callback: { code: string | null; setupAction: string | null },
+): Promise<boolean> {
+  const clientId = process.env.GITHUB_APP_CLIENT_ID?.trim();
+  const clientSecret = process.env.GITHUB_APP_CLIENT_SECRET?.trim();
+  if (clientId && clientSecret) {
+    // No fallback once configured: dropping `code` must not downgrade the check.
+    if (!callback.code) {
+      log.warn("github install callback carried no OAuth code; enable \"Request user authorization (OAuth) during installation\" on the App", { scope: "crumb/github" });
+      return false;
+    }
+    try {
+      const tokenResp = await fetch("https://github.com/login/oauth/access_token", {
+        method: "POST",
+        headers: { accept: "application/json" },
+        body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, code: callback.code }),
+      });
+      const token = (await tokenResp.json()) as { access_token?: string; error?: string };
+      if (!token.access_token) {
+        log.warn("github user token exchange failed", { scope: "crumb/github", error: token.error ?? tokenResp.status });
+        return false;
+      }
+      // ponytail: first page only; a user who can reach over 100 installations
+      // of this App fails closed. Follow the Link header if that ever bites.
+      const resp = await fetch("https://api.github.com/user/installations?per_page=100", {
+        headers: {
+          authorization: `Bearer ${token.access_token}`,
+          accept: "application/vnd.github+json",
+          "x-github-api-version": "2022-11-28",
+        },
+      });
+      if (!resp.ok) return false;
+      const data = (await resp.json()) as { installations: Array<{ id: number }> };
+      return data.installations.some(i => String(i.id) === installationId);
+    } catch (err) {
+      log.warn("github install ownership check failed", { scope: "crumb/github", err });
+      return false;
+    }
+  }
+
+  if (!warnedWeakOwnership) {
+    warnedWeakOwnership = true;
+    log.warn("GITHUB_APP_CLIENT_ID/GITHUB_APP_CLIENT_SECRET not set: GitHub install ownership is only checked by install recency (10 min). Set them and enable \"Request user authorization (OAuth) during installation\" on the App.", { scope: "crumb/github" });
+  }
+  if (callback.setupAction !== "install" && callback.setupAction !== "update") return false;
+  const now = Date.now();
+  // A missing stamp parses to NaN and fails the comparison.
+  return [meta.created_at, meta.updated_at].some(t => Math.abs(now - Date.parse(t)) <= INSTALL_FRESH_MS);
 }
 
 // ─── REST API ────────────────────────────────────────────────

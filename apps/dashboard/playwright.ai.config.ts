@@ -46,6 +46,7 @@ export default defineConfig({
         AISTACK_BASE_URL: `${AI_STUB}/v1`,
         EMBEDDINGS_BASE_URL: `${AI_STUB}/v1`,
         AISTACK_EMBEDDINGS_MODEL: "stub-embed",
+        CRUMB_APP_URL: baseURL,
         CRUMB_INBOUND_SECRET: "e2e-inbound",
         CRUMB_INBOUND_DOMAIN: "crumb.test",
         CRUMB_WEBHOOK_ALLOW_ANY: "1",

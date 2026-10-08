@@ -2,7 +2,7 @@ import "server-only";
 import type { IntegrationConnection } from "@crumb/db";
 import { open } from "@/lib/crypto-at-rest";
 import { log } from "@/lib/log";
-import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfig, lookbackStart } from "./types";
+import { type FeedbackAdapter, type FeedbackPage, type FeedbackRecord, readConfig, lookbackStart, vendorSubdomain } from "./types";
 
 // Zendesk Support — Incremental Ticket Export.
 //   https://developer.zendesk.com/api-reference/ticketing/ticket-management/incremental_exports/
@@ -43,15 +43,17 @@ export const zendesk: FeedbackAdapter = {
       log.error("zendesk connection incomplete", { scope: "crumb/zendesk", workspaceId: conn.workspaceId });
       return { records: [], nextCursor: cursor, done: true };
     }
+    const sub = vendorSubdomain(cfg.subdomain);
+    if (!sub) throw new Error('Invalid Zendesk subdomain. Enter just the "acme" of acme.zendesk.com.');
 
     const startTime = cursor ? Number(cursor) : Math.floor(lookbackStart().getTime() / 1000);
-    const url = new URL(`https://${cfg.subdomain}.zendesk.com/api/v2/incremental/tickets.json`);
+    const url = new URL(`https://${sub}.zendesk.com/api/v2/incremental/tickets.json`);
     url.searchParams.set("start_time", String(startTime));
     url.searchParams.set("include", "users");
     url.searchParams.set("per_page", String(PAGE_LIMIT));
 
     const auth = Buffer.from(`${cfg.email}/token:${token}`).toString("base64");
-    const resp = await fetch(url, { headers: { authorization: `Basic ${auth}`, accept: "application/json" } });
+    const resp = await fetch(url, { headers: { authorization: `Basic ${auth}`, accept: "application/json" }, redirect: "manual" });
     if (!resp.ok) {
       log.error("zendesk incremental export failed", { scope: "crumb/zendesk", status: resp.status });
       return { records: [], nextCursor: cursor, done: true };
@@ -72,7 +74,7 @@ export const zendesk: FeedbackAdapter = {
         authorName: requester?.name ?? null,
         subject: t.subject ?? null,
         text,
-        url: `https://${cfg.subdomain}.zendesk.com/agent/tickets/${t.id}`,
+        url: `https://${sub}.zendesk.com/agent/tickets/${t.id}`,
         occurredAt: t.updated_at ? new Date(t.updated_at) : null,
         raw: { status: t.status ?? null },
       });

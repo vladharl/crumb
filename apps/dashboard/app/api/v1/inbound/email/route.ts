@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { secretMatches } from "@/lib/secret-match";
 import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import { parseInboxAddress, verifyInboxToken } from "@/lib/inbound-address";
@@ -33,7 +34,7 @@ function authorized(req: Request): boolean {
   if (!required) return true; // dev: skip
   const auth = req.headers.get("authorization");
   if (!auth || !auth.startsWith("Bearer ")) return false;
-  return auth.slice(7).trim() === required;
+  return secretMatches(auth.slice(7).trim(), required);
 }
 
 function pickInboxAddress(to: InboundPayload["to"]): { slug: string; token: string } | null {
