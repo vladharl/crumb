@@ -6,7 +6,7 @@ import { POST as linearWebhook } from "@/app/api/integrations/linear/webhook/rou
 import { POST as jiraWebhook } from "@/app/api/integrations/jira/webhook/route";
 import { GET as jiraCallback } from "@/app/api/integrations/jira/callback/route";
 import { POST as githubWebhook } from "@/app/api/integrations/github/webhook/route";
-import { webhookUrl } from "@/lib/integrations/jira";
+import { issueUid, webhookUrl } from "@/lib/integrations/jira";
 import { signState } from "@/lib/integrations/state";
 import { setJiraSite } from "@/app/(app)/settings/integrations/actions";
 
@@ -15,7 +15,8 @@ import { setJiraSite } from "@/app/(app)/settings/integrations/actions";
 // current key and URL: ENG-42 moved to another Linear team, PROJ-7 moved to
 // another Jira project, an issue in a renamed or transferred GitHub repo. Rows
 // linked before the id was stored match on their key once and get it then.
-// Also the Jira site a login with several sites gets to pick.
+// A Jira issue id is only unique on its site, so it matches links made there
+// alone. Also the Jira site a login with several sites gets to pick.
 //
 // Runs the real handlers against Postgres (DATABASE_URL); skipped locally when
 // no database answers, like tracker-webhook-scope.test.ts.
@@ -113,8 +114,9 @@ describe.skipIf(!reachable && !process.env.CI)("tracker webhooks follow a ticket
 
   it("jira: a moved issue takes its new key and browse URL", async () => {
     const site = `https://acme-${tag}.atlassian.net`;
-    const { ws, link } = await workspace({ jiraSiteUrl: site });
-    const item = await link("jira", "PROJ-7", "10002", `${site}/browse/PROJ-7`);
+    const cloud = `cloud-acme-${tag}`;
+    const { ws, link } = await workspace({ jiraSiteUrl: site, jiraCloudId: cloud });
+    const item = await link("jira", "PROJ-7", issueUid(cloud, "10002"), `${site}/browse/PROJ-7`);
     const token = new URL(webhookUrl(APP, ws.id)!).searchParams.get("t");
 
     const res = await post(jiraWebhook, `http://0.0.0.0:3000/api/integrations/jira/webhook?ws=${ws.id}&t=${token}`, {
@@ -124,7 +126,46 @@ describe.skipIf(!reachable && !process.env.CI)("tracker webhooks follow a ticket
     }, () => ({}));
 
     expect(res.status).toBe(200);
-    expect(await ticketOf(item)).toEqual({ status: "In Progress", key: "NEW-3", uid: "10002", url: `${site}/browse/NEW-3` });
+    expect(await ticketOf(item)).toEqual({ status: "In Progress", key: "NEW-3", uid: issueUid(cloud, "10002"), url: `${site}/browse/NEW-3` });
+  });
+
+  it("jira: an issue id matches only links made on its own site, and a site the workspace left is ignored", async () => {
+    // Every site numbers its issues from 10000. The workspace linked these on
+    // site A, then moved to site B, whose issues reuse A's ids and keys.
+    const [siteA, siteB] = [`https://a-${tag}.atlassian.net`, `https://b-${tag}.atlassian.net`];
+    const [cloudA, cloudB] = [`cloud-a-${tag}`, `cloud-b-${tag}`];
+    const { ws, link } = await workspace({ jiraSiteUrl: siteA, jiraCloudId: cloudA });
+    const onA = await link("jira", "PROJ-7", issueUid(cloudA, "10050"), `${siteA}/browse/PROJ-7`);
+    // Stored bare, before uids named the site.
+    const bareUpgraded = await link("jira", "PROJ-8", "10051", `${siteA}/browse/PROJ-8`);
+    const bareLeft = await link("jira", "PROJ-9", "10052", `${siteA}/browse/PROJ-9`);
+    // Linked before ids were stored.
+    const keyOnly = await link("jira", "OPS-3", null, `${siteA}/browse/OPS-3`);
+    const token = new URL(webhookUrl(APP, ws.id)!).searchParams.get("t");
+    const deliver = (site: string, id: string, key: string, status: string) => post(
+      jiraWebhook, `http://0.0.0.0:3000/api/integrations/jira/webhook?ws=${ws.id}&t=${token}`, {
+        webhookEvent: "jira:issue_updated",
+        issue: { id, key, self: `${site}/rest/api/2/issue/${id}` },
+        changelog: { items: [{ field: "status", toString: status }] },
+      }, () => ({}));
+
+    // On its own site a bare id still matches, and gets the full uid.
+    expect((await deliver(siteA, "10051", "PROJ-8", "In Progress")).status).toBe(200);
+    expect(await ticketOf(bareUpgraded)).toMatchObject({ status: "In Progress", uid: issueUid(cloudA, "10051") });
+
+    await db.update(workspaces).set({ jiraSiteUrl: siteB, jiraCloudId: cloudB }).where(eq(workspaces.id, ws.id));
+    const onB = await link("jira", "NEW-1", issueUid(cloudB, "10050"), `${siteB}/browse/NEW-1`);
+    for (const [id, key] of [["10050", "OPS-1"], ["10051", "PROJ-8"], ["10052", "OPS-2"], ["10099", "OPS-3"]]) {
+      expect((await deliver(siteB, id!, key!, "Done")).status).toBe(200);
+    }
+    // A's own webhook, still posting until it lapses, now changes nothing.
+    expect((await deliver(siteA, "10050", "PROJ-7", "Done")).status).toBe(200);
+
+    expect(await ticketOf(onB)).toEqual({ status: "Done", key: "OPS-1", uid: issueUid(cloudB, "10050"), url: `${siteB}/browse/OPS-1` });
+    expect(await ticketOf(onA)).toEqual({ status: "untouched", key: "PROJ-7", uid: issueUid(cloudA, "10050"), url: `${siteA}/browse/PROJ-7` });
+    expect(await ticketOf(bareUpgraded)).toMatchObject({ status: "In Progress", key: "PROJ-8" });
+    expect(await ticketOf(bareLeft)).toEqual({ status: "untouched", key: "PROJ-9", uid: "10052", url: `${siteA}/browse/PROJ-9` });
+    expect(await ticketOf(keyOnly)).toEqual({ status: "untouched", key: "OPS-3", uid: null, url: `${siteA}/browse/OPS-3` });
   });
 
   it("github: follows a repo rename and an issue transfer, and keeps a non-https URL out", async () => {

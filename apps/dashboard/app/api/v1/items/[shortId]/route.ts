@@ -180,6 +180,8 @@ export async function POST(req: Request, { params }: { params: { shortId: string
     email: payload.account_user_email ?? null,
   });
   if (!r.ok) return fail(r.status, r.error);
+  // Marked as spam: turned away like their new requests (POST /api/v1/items).
+  if (r.ctx.user.blockedAt) return fail(403, "submitter_blocked");
 
   // Per-workspace bucket — both must pass; looser cap than the per-IP one.
   const wsRl = await checkRateLimitAsync(`reply:ws:${r.ctx.workspace.id}`, { capacity: 600, refillPerSec: 10 });
@@ -232,17 +234,16 @@ export async function POST(req: Request, { params }: { params: { shortId: string
     });
   }
 
-  // Notify the vendor team — best-effort, never blocks the response.
-  try {
-    await notifyVendorsOfCustomerReply({
-      itemId: item.id,
-      customerName: r.ctx.user.name,
-      replyBody: body,
-      dashboardOrigin: dashboardOriginFromHeaders(req),
-    });
-  } catch (err) {
+  // Notify the vendor team, best-effort and not awaited: lib/email paces
+  // sends, so a few admins' emails would hold the customer's reply open.
+  void notifyVendorsOfCustomerReply({
+    itemId: item.id,
+    customerName: r.ctx.user.name,
+    replyBody: body,
+    dashboardOrigin: dashboardOriginFromHeaders(req),
+  }).catch((err) => {
     log.error("widget-reply notify failed", { scope: "crumb/widget-reply", err });
-  }
+  });
 
   return cors(NextResponse.json({
     id: created!.id,

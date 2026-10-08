@@ -284,20 +284,17 @@ export async function notifyPublicFollowers(input: {
   }
 }
 
-// Maintenance sweep (api/v1/internal/replay-sweep): forgets the addresses whose
-// confirmation link lapsed unclicked and the ones that unsubscribed, so an
-// address isn't kept once it can't be mailed.
+// Maintenance sweep (api/v1/internal/replay-sweep): forgets the addresses that
+// can't be mailed, never confirmed or unsubscribed (following again needs a
+// fresh confirmation), once no confirmation link they were sent still works.
+// Each link resets created_at (requestPublicFollow), so a follow renewed after
+// an unsubscribe keeps its row until that link lapses too.
 export async function sweepUnconfirmedFollows(): Promise<{ unconfirmedFollowsDeleted: number }> {
   const gone = await db
     .delete(publicFollows)
-    .where(or(
-      and(
-        isNull(publicFollows.confirmedAt),
-        lt(publicFollows.createdAt, new Date(Date.now() - CONFIRM_TTL_DAYS * 24 * HOUR * 1000)),
-      ),
-      // An unsubscribed address has no further use (following again needs a
-      // fresh confirmation), so it isn't kept either.
-      isNotNull(publicFollows.unsubscribedAt),
+    .where(and(
+      lt(publicFollows.createdAt, new Date(Date.now() - CONFIRM_TTL_DAYS * 24 * HOUR * 1000)),
+      or(isNull(publicFollows.confirmedAt), isNotNull(publicFollows.unsubscribedAt)),
     ))
     .returning({ id: publicFollows.id });
   return { unconfirmedFollowsDeleted: gone.length };

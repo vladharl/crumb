@@ -137,6 +137,31 @@ describe.skipIf(!reachable && !process.env.CI)("public follows", () => {
     expect(left.map(r => r.email).sort()).toEqual([who("again"), who("kept")]);
   });
 
+  it("forgets an unsubscribed address, but not one that followed again and hasn't clicked yet", async () => {
+    const [ws] = await db.insert(workspaces)
+      .values({ slug: `refollow-${tag}`, name: "Acme", publicPagesEnabled: true })
+      .returning({ id: workspaces.id, slug: workspaces.slug });
+    created.push(ws!.id);
+    const old = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+    const who = (name: string) => `${name}-${tag}@example.com`;
+    await db.insert(publicFollows).values([
+      { email: who("gone"), createdAt: old, confirmedAt: old, unsubscribedAt: old },
+      { email: who("back"), createdAt: old, confirmedAt: old, unsubscribedAt: new Date() },
+    ].map((f, i) => ({ ...f, workspaceId: ws!.id, tokenHash: `${ws!.id}-${i}` })));
+    // Unsubscribed within the hour, then follows again: a fresh link, still unsubscribed until it's clicked.
+    h.sent.length = 0;
+    await requestPublicFollow({ slug: ws!.slug, initiativeId: null, email: who("back"), ip: `ip-refollow-${tag}`, origin: "https://crumb.test" });
+    const link = h.sent[0]!.link!;
+
+    await sweepUnconfirmedFollows();
+    const left = await db.select({ email: publicFollows.email }).from(publicFollows).where(eq(publicFollows.workspaceId, ws!.id));
+    expect(left.map(r => r.email)).toEqual([who("back")]);
+    // The link outlives the sweep, and its click follows again.
+    expect((await confirmPost(post(link))).status).toBe(200);
+    const [back] = await db.select({ unsubscribedAt: publicFollows.unsubscribedAt }).from(publicFollows).where(eq(publicFollows.workspaceId, ws!.id));
+    expect(back!.unsubscribedAt).toBeNull();
+  });
+
   it("refuses an expired or mangled confirmation link", async () => {
     for (const t of [`1000000000.${"a".repeat(43)}`, "nope"]) {
       expect((await confirmGet(new Request(`https://crumb.test/acme/confirm?t=${t}`))).status).toBe(400);

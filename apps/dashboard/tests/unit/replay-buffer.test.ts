@@ -7,7 +7,7 @@ import type { Stretch } from "../../../widget/src/widget-record";
 // couldn't restart once unticked. Now it loads with the page and keeps the
 // last two minutes in memory, sending nothing; consent sends those first and
 // records on; unticking stops and drops what wasn't sent; ticking again starts
-// a fresh session.
+// a fresh session, as does each report the recording is linked to.
 
 // rrweb needs a DOM; the fake hands its emit callback to the test and keeps
 // the options each start used.
@@ -28,14 +28,21 @@ const listeners: Record<string, () => void> = {};
 const store = new Map<string, string>();
 const sent = vi.fn(async (_url: string, _init: RequestInit) => new Response(null, { status: 201 }));
 let rec: typeof import("../../../widget/src/widget-record");
+let widget: typeof import("../../../widget/src/widget");
 beforeAll(async () => {
   vi.stubGlobal("window", { addEventListener: (type: string, fn: () => void) => { listeners[type] = fn; } });
-  vi.stubGlobal("document", { visibilityState: "visible", addEventListener: () => {} });
+  // No <script> tag for widget.ts to find, so it stops after its API stub.
+  vi.stubGlobal("document", { visibilityState: "visible", addEventListener: () => {}, currentScript: null, scripts: [] });
   vi.stubGlobal("location", { href: "https://app.test/billing" });
   vi.stubGlobal("screen", { width: 1440, height: 900 });
-  vi.stubGlobal("sessionStorage", { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } });
+  vi.stubGlobal("sessionStorage", {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => { store.set(k, v); },
+    removeItem: (k: string) => { store.delete(k); },
+  });
   vi.stubGlobal("fetch", sent);
   rec = await import("../../../widget/src/widget-record");
+  widget = await import("../../../widget/src/widget");
 });
 
 const META = 4, FULL = 2, INC = 3;
@@ -130,5 +137,34 @@ describe("consent", () => {
     rr.emit(ev(META, now + 4, { href: "https://app.test/billing" }));
     await api.flush!();
     expect(chunks()[3]).toMatchObject({ sequence: 1 });
+  });
+
+  it("leaves a report the recording it was sent with, so the next report gets a session of its own", () => {
+    const api = window.__crumbRecord__!;
+    api.stop();
+    sent.mockClear();
+    const c = "c".repeat(32);
+    store.set("crumb_replay_token", c);
+    api.start({ ...opts, sessionToken: c });
+    rr.emit(ev(META, Date.now(), { href: "https://app.test/billing" }));
+
+    // Not Maya's consented session (she said no, someone else's, another token): left alone.
+    for (const consent of ["off:maya", "on:lee"]) {
+      store.set("crumb_replay_consent", consent);
+      expect(widget.endLinkedSession("maya", c)).toBe(false);
+    }
+    store.set("crumb_replay_consent", "on:maya");
+    expect(widget.endLinkedSession("maya", "d".repeat(32))).toBe(false);
+    expect(api.getSessionToken()).toBe(c);
+    expect(sent).not.toHaveBeenCalled();
+
+    // Her report went in with it: what the recorder held still goes to it, then
+    // it stops and the token goes, so the next start is a new session. Her
+    // consent stands for that one.
+    expect(widget.endLinkedSession("maya", c)).toBe(true);
+    expect(chunks()).toEqual([expect.objectContaining({ url: `https://crumb.test/api/v1/replay-sessions/${c}/chunks`, sequence: 0 })]);
+    expect(api.getSessionToken()).toBeNull();
+    expect(store.has("crumb_replay_token")).toBe(false);
+    expect(store.get("crumb_replay_consent")).toBe("on:maya");
   });
 });

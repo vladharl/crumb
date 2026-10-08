@@ -161,6 +161,8 @@ CRUMB_EMAIL_FROM="Crumb <crumb@yourdomain.com>"
 
 Any sender domain you use must have SPF/DKIM set up at the provider first or messages won't deliver.
 
+Crumb starts at most `CRUMB_EMAIL_SENDS_PER_SEC` emails a second (default 2, Resend's default limit), shared by digests, alerts and announcements, and retries a Resend 429 after its `Retry-After`. Raise it to match your provider's limit; with several dashboard processes on one account, split the limit between them.
+
 ### Inbound email replies
 
 When a vendor replies to a thread, the customer gets an email sent as `<Workspace> via Crumb`. Without inbound wiring, it goes out from `noreply@` on your `CRUMB_EMAIL_FROM` domain. To let customers reply by email and land back on the thread:

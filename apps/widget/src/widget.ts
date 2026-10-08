@@ -578,6 +578,19 @@ function clearRecordChoice(): void {
   try { sessionStorage.removeItem(CONSENT_KEY); sessionStorage.removeItem(SESSION_TOKEN_KEY); } catch { /* ignore */ }
 }
 
+// A report just went in linked to this tab's recording (`linked`), so the
+// recording stays that report's: the recorder sends it what it still holds and
+// stops, and the token goes. Only while it's still the owner's consented
+// session. True when it ended it: the caller restarts the recorder, which
+// starts the next report's session on that same consent.
+export function endLinkedSession(owner: string, linked: string): boolean {
+  if (recordChoice(owner) !== "on" || storedSessionToken() !== linked) return false;
+  const rec = window.__crumbRecord__;
+  try { void rec?.flush?.(); rec?.stop(); } catch { /* ignore */ }
+  try { sessionStorage.removeItem(SESSION_TOKEN_KEY); } catch { /* ignore */ }
+  return true;
+}
+
 // The recorder is its own bundle, loaded once /me says the workspace records.
 // `ready` runs when it's there (and again on each later call).
 let recorderInjected = false;
@@ -1387,7 +1400,8 @@ function init(config: Config) {
       // join it. Files ride on the first message.
       if (replayToken()) await Promise.race([window.__crumbRecord__?.flush?.(), new Promise(r => setTimeout(r, 3000))]);
       if (gen !== epoch) return; // the customer changed while it sent: forgetUser reset the form
-      const data = await call("items", "POST", authBody({ type: v.type, title: v.title.trim(), body: v.body.trim(), session_token: replayToken(), context: submissionContext(), attachment_ids: pendingAttachments.map(a => a.id) }));
+      const token = replayToken();
+      const data = await call("items", "POST", authBody({ type: v.type, title: v.title.trim(), body: v.body.trim(), session_token: token, context: submissionContext(), attachment_ids: pendingAttachments.map(a => a.id) }));
       const sid: string = data.short_id;
       pendingAttachments = [];
       attachmentError = null;
@@ -1400,6 +1414,8 @@ function init(config: Config) {
       submitState = { kind: "idle" };
       setView({ kind: "confirm", shortId: sid });
       void fetchList();
+      // The server links a token to one report: the next one records anew.
+      if (token && endLinkedSession(userKey(), token)) syncRecorder();
     } catch (err) {
       submitState = failed(err);
       render();

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, inArray, isNotNull, isNull, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, notIlike, notInArray, sql } from "drizzle-orm";
 import { db, items, accountUsers, attachments, replies, replayChunks, replaySessions, statusEvents } from "@crumb/db";
 import { deleteBytes } from "@/lib/storage";
 import { log } from "@/lib/log";
@@ -18,9 +18,11 @@ import type { VendorActor } from "@/lib/items/mutations";
 // re-ingests the record), and items.merged_into_id, which would strand every
 // request merged into a deleted one as Duplicate of nothing. Those are
 // restored first: back to the status they had before the merge, unmerged.
-// Spam also blocks each item's submitter (account_users.blocked_at): createItem
-// then refuses their new requests, and their email replies and forwarded
-// emails are dropped. Nobody is emailed.
+// Spam also blocks each item's submitter (account_users.blocked_at): their new
+// requests, widget replies, email replies and forwarded emails are turned
+// away. Not a reserved .invalid placeholder, which stands for a teammate (their
+// email-less Slack captures, their Install preview) or a sample customer
+// rather than whoever sent it. Nobody is emailed.
 
 export type DeleteMode = "delete" | "spam";
 
@@ -42,7 +44,7 @@ export async function deleteItems(
 
   const done = await db.transaction(async (tx) => {
     const targets = await tx
-      .select({ id: items.id, shortId: items.shortId, submitterId: items.submitterId })
+      .select({ id: items.id, shortId: items.shortId, submitterId: items.submitterId, mergedIntoId: items.mergedIntoId })
       .from(items)
       .where(and(eq(items.workspaceId, actor.workspaceId), inArray(items.shortId, wanted)));
     if (targets.length === 0) return null;
@@ -72,9 +74,13 @@ export async function deleteItems(
     // unmergeItem does (thread actions): to the group item its person filed
     // first after it started. One that rule can't place (it started after all
     // their items, as when the browser's clock runs ahead) goes to the last one
-    // they filed, where unmerge would leave it on the canonical. Runs while
-    // the groups are still whole.
-    if (merged.length > 0) {
+    // they filed, where unmerge would leave it on the canonical. A deleted
+    // duplicate takes its own back from its canonical the same way, so they
+    // go with it, bytes too, instead of staying on the canonical's thread.
+    // Runs while the groups are still whole.
+    const homes = [...merged, ...targets.filter(t => t.mergedIntoId)].map(m => m.id);
+    if (homes.length > 0) {
+      const groups = [...ids, ...targets.flatMap(t => t.mergedIntoId ? [t.mergedIntoId] : [])];
       const owner = sql`COALESCE(
         (SELECT g.id FROM items g
           WHERE (g.id = replay_sessions.item_id OR g.merged_into_id = replay_sessions.item_id)
@@ -88,7 +94,7 @@ export async function deleteItems(
       )`;
       await tx.update(replaySessions)
         .set({ itemId: owner })
-        .where(and(inArray(replaySessions.itemId, ids), inArray(owner, merged.map(m => m.id))));
+        .where(and(inArray(replaySessions.itemId, groups), inArray(owner, homes)));
     }
 
     for (const m of merged) {
@@ -110,6 +116,7 @@ export async function deleteItems(
           eq(accountUsers.workspaceId, actor.workspaceId),
           inArray(accountUsers.id, [...new Set(targets.map(t => t.submitterId))]),
           isNull(accountUsers.blockedAt),
+          notIlike(accountUsers.email, "%.invalid"),
         ))
         .returning({ id: accountUsers.id })
       : [];
