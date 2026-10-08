@@ -161,9 +161,10 @@ export async function announcementAudience(workspaceId: string, initiativeId: st
   return { reach: recipients.length, skipped, emailOn: emailConfigured(), openItems: open?.n ?? 0 };
 }
 
-// ponytail: four at a time keeps a publish inside one request without bursting
-// the email provider's rate limit (inbox bulk status does the same). Move the
-// sends to the sweep cron if audiences grow into the thousands.
+// ponytail: four at a time, inside the publish request. lib/email paces the
+// sends to the provider's rate (2 a second by default), so N recipients take
+// about N/2 seconds. Move the sends to the sweep cron before audiences reach
+// the hundreds (a request through Cloudflare gets 100 seconds).
 async function fewAtATime<T>(list: T[], fn: (t: T) => Promise<void>): Promise<void> {
   const queue = [...list];
   await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {

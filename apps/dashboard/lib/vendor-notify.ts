@@ -10,6 +10,7 @@ import { escapeSlackText, resolveSlackUserId, sendDirectMessage } from "./slack/
 import { openNullable } from "./crypto-at-rest";
 import { clearProviderInstall, isSlackRevokedError } from "./integrations/revoke";
 import { originFromHeaders } from "./origin";
+import { checkRateLimitAsync } from "./rate-limit";
 import { lastTurnSideSql, loopOpenSql, notMergedSql } from "./loop-sql";
 import { loopTurn, waitingDays, waitingSince } from "./loop";
 import { byPriorityDesc, formatArr, priority } from "./priority";
@@ -149,9 +150,15 @@ const slackLink = (url: string | null) => (url ? `\n<${url}|Open thread →>` : 
 
 // ─── new submission ──────────────────────────────────────────
 // One alert per item (createItem calls this once, for items it announces) to
-// each teammate who takes them, never the teammate who created it.
+// each teammate who takes them, never the teammate who created it. At most 30
+// at once per workspace, then one every two minutes: the widget endpoint is
+// public, so a flood of submissions must not become a flood of email (or spend
+// the provider's quota). The rest still reach the inbox and the digest.
+const NEW_SUBMISSION_ALERTS = { capacity: 30, refillPerSec: 30 / 3600 };
+
 export async function notifyNewSubmission(input: { workspaceId: string; itemId: string }): Promise<void> {
   try {
+    if (!(await checkRateLimitAsync(`new-alert:ws:${input.workspaceId}`, NEW_SUBMISSION_ALERTS)).ok) return;
     const [it] = await db
       .select({
         shortId: items.shortId,
@@ -565,10 +572,9 @@ export async function sendDigests(now = Date.now(), scope?: SQL): Promise<
             counts.empty++;
             continue;
           }
-          // ponytail: one at a time, half a second apart, stays under Resend's
-          // default 2 requests a second (about 7,000 digests an hour). Use the
-          // provider's batch API if a deployment outgrows that.
-          if (counts.sent + counts.unsent > 0) await new Promise(r => setTimeout(r, 500));
+          // ponytail: one at a time, paced with every other send by lib/email
+          // (2 a second by default, Resend's limit: about 7,000 digests an
+          // hour). Use the provider's batch API if a deployment outgrows that.
           const waiting = data.waiting.length;
           const sent = await sendDigest({
             to: m.email,

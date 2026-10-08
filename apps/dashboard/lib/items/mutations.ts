@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import {
   db, items, replies, replyMentions, attachments, statusEvents,
   accounts, accountUsers, workspaceUsers, workspaces, customerNotifications, type Workspace,
@@ -182,6 +182,25 @@ async function emailStatus(
 
 const addressOf = (email: string) => email.trim().toLowerCase();
 
+// The requests merged into `itemId` that still follow it: those reading
+// Duplicate. One a teammate moved on its own (its thread, the bulk bar) has its
+// own status, and got its own email for it.
+const followersOf = (itemId: string) => and(eq(items.mergedIntoId, itemId), eq(items.status, "duplicate"));
+
+// Whether moving a merged request to `status` would only repeat what its
+// canonical's fan-out last told its customer. An email that carries a reason
+// or a message of its own still goes.
+async function repeatsFanOut(row: ItemRow, status: string, message: string | null): Promise<boolean> {
+  if (!row.mergedIntoId || message) return false;
+  const [last] = await db
+    .select({ toStatus: customerNotifications.toStatus })
+    .from(customerNotifications)
+    .where(and(eq(customerNotifications.itemId, row.id), eq(customerNotifications.kind, "status")))
+    .orderBy(desc(customerNotifications.sentAt))
+    .limit(1);
+  return last?.toStatus === status;
+}
+
 // ─── status change ───────────────────────────────────────────
 // `emailed` is true only when a real provider accepted the customer email (the
 // same fact the loop ledger records); `mergedEmailed` counts the customers
@@ -262,23 +281,27 @@ export async function updateItemStatus(
   let mergedEmailed = 0;
   const toldElsewhere = (r: ItemRow) => !!opts.alreadyTold?.has(addressOf(r.submitterEmail));
   if (statusEmailsCustomer(input.status)) {
-    if (opts.customerEmail !== false && !toldElsewhere(row) && shouldSend(notifyPlanFor(row).status)) {
+    const message = opts.customerMessage || reason;
+    if (
+      opts.customerEmail !== false && !toldElsewhere(row) && shouldSend(notifyPlanFor(row).status)
+      && !(await repeatsFanOut(row, input.status, message))
+    ) {
       emailed = await emailStatus(workspace, user.name, row, {
-        fromStatus, toStatus: input.status, reason: opts.customerMessage || reason, origin,
+        fromStatus, toStatus: input.status, reason: message, origin,
       });
     }
-    // Customers whose requests were merged into this one hear it too, each
-    // about their own item (its status reads Duplicate, hence no "from") under
-    // their own plan, and once per person: whoever was just told is skipped.
-    // They get the status and its standard wording, never the typed reason or
-    // a reply-and-close message: those were written while looking at this
-    // item's customer and can name them or their account. mergedReach (below)
-    // previews this set.
+    // Customers whose requests were merged into this one and still follow it
+    // hear it too, each about their own item (its status reads Duplicate, hence
+    // no "from") under their own plan, and once per person: whoever was just
+    // told is skipped. They get the status and its standard wording, never the
+    // typed reason or a reply-and-close message: those were written while
+    // looking at this item's customer and can name them or their account.
+    // mergedReach (below) previews this set.
     // ponytail: sequential sends in the request; move them to the sweep cron
     // if canonicals start gathering dozens of widget duplicates.
     const told = new Set(emailed ? [row.submitterId] : []);
     const merged = await selectItemsWithSubmitter()
-      .where(and(eq(items.workspaceId, workspace.id), eq(items.mergedIntoId, row.id)));
+      .where(and(eq(items.workspaceId, workspace.id), followersOf(row.id)));
     for (const dup of merged) {
       if (told.has(dup.submitterId) || toldElsewhere(dup) || !shouldSend(notifyPlanFor(dup).status)) continue;
       if (await emailStatus(workspace, user.name, dup, {
@@ -294,13 +317,13 @@ export async function updateItemStatus(
 }
 
 // How many more customers an outcome email on this item reaches: the people
-// whose requests were merged into it and whose own plan emails them, each
-// once, besides its own submitter when they're emailed. The same set
-// updateItemStatus's fan-out sends to, so the status controls can say who
-// gets the email (and the reason) before the vendor commits.
+// whose requests were merged into it (and still follow it) and whose own plan
+// emails them, each once, besides its own submitter when they're emailed. The
+// same set updateItemStatus's fan-out sends to, so the status controls can say
+// who gets the email (and the reason) before the vendor commits.
 export async function mergedReach(workspaceId: string, itemId: string): Promise<number> {
   const group = await selectItemsWithSubmitter()
-    .where(and(eq(items.workspaceId, workspaceId), or(eq(items.id, itemId), eq(items.mergedIntoId, itemId))));
+    .where(and(eq(items.workspaceId, workspaceId), or(eq(items.id, itemId), followersOf(itemId))));
   const head = group.find(r => r.id === itemId);
   const reached = new Set(group.filter(r => r !== head && notifyPlanFor(r).status.willEmail).map(r => r.submitterId));
   if (head && notifyPlanFor(head).status.willEmail) reached.delete(head.submitterId);
