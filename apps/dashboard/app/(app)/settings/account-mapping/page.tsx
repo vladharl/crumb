@@ -5,6 +5,7 @@ import { getActiveSession } from "@/lib/server";
 import { AccountMappingPanel, type AccountView } from "./AccountMappingPanel";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Account mapping · Settings" };
 
 export default async function AccountMappingPage() {
   const { workspace: ws, user } = await getActiveSession();

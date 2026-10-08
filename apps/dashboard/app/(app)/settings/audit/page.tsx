@@ -7,6 +7,7 @@ import { desc, eq } from "drizzle-orm";
 import { ageFrom, getActiveSession } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Audit log · Settings" };
 
 type FeedEntry = {
   id: string;

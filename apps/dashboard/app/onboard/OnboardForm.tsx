@@ -50,8 +50,9 @@ export function OnboardForm({ token }: { token: string }) {
     >
       <input type="hidden" name="token" value={token} />
 
-      <Field label="Workspace name" help="Shown to your customers and on outbound emails.">
+      <Field htmlFor="onboard-workspace-name" label="Workspace name" help="Shown to your customers and on outbound emails.">
         <input
+          id="onboard-workspace-name"
           name="workspaceName"
           required
           autoFocus
@@ -63,8 +64,9 @@ export function OnboardForm({ token }: { token: string }) {
         />
       </Field>
 
-      <Field label="Slug" help="Used as the widget's workspace identifier. Lowercase letters, numbers, hyphens.">
+      <Field htmlFor="onboard-slug" label="Slug" help="Used as the widget's workspace identifier. Lowercase letters, numbers, hyphens.">
         <input
+          id="onboard-slug"
           name="slug"
           required
           className="input mono"
@@ -77,8 +79,9 @@ export function OnboardForm({ token }: { token: string }) {
 
       <hr className="divider" />
 
-      <Field label="Your name">
+      <Field htmlFor="onboard-admin-name" label="Your name">
         <input
+          id="onboard-admin-name"
           name="adminName"
           required
           className="input"
@@ -89,8 +92,9 @@ export function OnboardForm({ token }: { token: string }) {
         />
       </Field>
 
-      <Field label="Your email" help="You can sign in with this via magic link later.">
+      <Field htmlFor="onboard-admin-email" label="Your email" help="You can sign in with this via magic link later.">
         <input
+          id="onboard-admin-email"
           name="adminEmail"
           type="email"
           required

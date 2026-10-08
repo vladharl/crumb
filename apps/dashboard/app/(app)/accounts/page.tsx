@@ -4,6 +4,7 @@ import { AccountsTableTile } from "./AccountsTableTile";
 import { AccountsTableSkeleton } from "./AccountsTableSkeleton";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Accounts" };
 
 export default function AccountsListPage() {
   return (

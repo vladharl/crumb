@@ -5,6 +5,7 @@ import { getActiveSession } from "@/lib/server";
 import { InvitePanel, RemoveButton, ResendButton, RoleSelect } from "./InvitePanel";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Team & roles · Settings" };
 
 export default async function SettingsTeamPage() {
   const { workspace, user: me } = await getActiveSession();

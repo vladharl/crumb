@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Avatar, Card, Pill } from "@crumb/ui";
+import { Avatar, Card, Ic, Pill } from "@crumb/ui";
 import { db, accounts } from "@crumb/db";
 import { eq, sql } from "drizzle-orm";
 import { getActiveWorkspace } from "@/lib/server";
@@ -112,6 +112,31 @@ export async function AccountsTableTile() {
     accountRiskSignals(ws.id),
     showUsage ? accountUsageSignals(ws.id) : Promise.resolve(new Map()),
   ]);
+
+  // No accounts yet: point at the two ways they arrive, not a row of $0 KPIs
+  // over a header-only table. (The .inbox-empty styles are the app's empty state.)
+  if (rows.length === 0) {
+    return (
+      <Card>
+        <div className="inbox-empty">
+          <p className="inbox-empty-head">No accounts yet</p>
+          <p className="inbox-empty-sub">
+            Accounts show up as customers send feedback through the widget.
+            Already have a customer list? Import it as a CSV.
+          </p>
+          <div className="row gap-5" style={{ flexWrap: "wrap", justifyContent: "center" }}>
+            <Link href="/settings/install" className="inbox-empty-link">
+              Install the widget <Ic.chevR style={{ width: 11, height: 11 }} />
+            </Link>
+            <Link href="/settings/account-mapping" className="inbox-empty-link">
+              Import a CSV <Ic.chevR style={{ width: 11, height: 11 }} />
+            </Link>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
   const riskByAccount = new Map(signals.map(s => [s.accountId, s]));
   // Only show the column if the workspace is entitled AND at least one account
   // has activity — otherwise it's a column of dashes.

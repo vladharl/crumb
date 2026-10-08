@@ -1,0 +1,1 @@
+ALTER TABLE "workspaces" ADD COLUMN "widget_first_ping_at" timestamp with time zone;

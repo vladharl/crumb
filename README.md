@@ -71,8 +71,8 @@ cp apps/dashboard/.env.local.example apps/dashboard/.env.local
 pnpm dev           # → http://localhost:3000
 ```
 
-The dashboard requires login — there are two distinct first-run paths, pick one:
-- **Fresh / empty DB** (skip `pnpm db:seed`): open **http://localhost:3000**; with no users yet you're sent to `/onboard` to create the first workspace + admin.
+The dashboard requires login, and sign-in is invite-only. There are two first-run paths, pick one:
+- **Fresh / empty DB** (skip `pnpm db:seed`): mint a one-time setup link with `CRUMB_APP_URL=http://localhost:3000 pnpm --filter @crumb/db cli setup-link`, open it, and create the first workspace and its admin. The link works once and expires after 60 minutes. Opening `/onboard` without a link explains how to get one.
 - **Seeded demo** (`pnpm db:seed`): log in at **http://localhost:3000/login** as a seeded admin (e.g. `lina@southbeam.io`) — the seed creates the `southbeam` workspace + sample data. Magic links go to whichever email provider is configured — by default that's stdout (read from the dev terminal or `docker compose logs dashboard`); set `CRUMB_EMAIL_PROVIDER=resend` for real delivery, see [Email delivery](#email-delivery). A 7-day session cookie is set; sign out clears it.
 
 ### Self-host vs. Crumb Cloud
@@ -404,7 +404,15 @@ The whole stack — Postgres + the dashboard + the widget bundle it serves — r
 docker compose up -d --build
 ```
 
-This builds the dashboard image, brings Postgres up, waits for it to be healthy, then starts the dashboard. The container runs SQL migrations on each startup before booting the server. Visit `http://localhost:3000`.
+This builds the dashboard image, brings Postgres up, waits for it to be healthy, then starts the dashboard. The container runs SQL migrations on each startup before booting the server.
+
+**First run.** Sign-in is invite-only, so the first admin comes from a one-time setup link:
+
+1. While the database has no workspace, the dashboard prints a setup link to its logs on every start, in a box headed "Crumb first run". Read it with `docker compose logs dashboard`.
+2. Open the link and create your workspace and admin account. You're signed in when you finish. The link works once and expires after 60 minutes. For a fresh one, run `docker compose exec dashboard node packages/db/dist/cli.mjs setup-link`.
+3. Invite teammates from **Settings → Team**.
+
+The link is built from `CRUMB_APP_URL`. When that's unset (the default for a local run) you get only the `/onboard?token=…` path, so open it on your dashboard's address, e.g. `http://localhost:3000/onboard?token=…`. Once a workspace exists, nothing more is printed and `/onboard` without a link sends visitors to sign in.
 
 Override anything via env or a `.env` file at the repo root:
 

@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 // them in step:
 //   mintWidgetJwt      lib/jwt.ts sign (verified by lib/public-api.ts)
 //   mintMagicLink      lib/auth.ts issueMagicLink
+//   mintSetupLink      packages/db/src/setup-tokens.ts createSetupToken + setupLinkFor
 //   signReplyAddress   lib/reply-token.ts buildReplyAddress
 //   signAttachmentPath lib/attachments/signed-url.ts signedAttachmentPath
 
@@ -54,8 +55,9 @@ export function mintWidgetJwt(slug: string, claims: WidgetClaims): string {
 }
 
 // A sign-in path for a dashboard user, minted like issueMagicLink: a 20-minute
-// token on the first workspace_users row with that email.
-export function mintMagicLink(email: string): string {
+// token on the first workspace_users row with that email, carrying `next` (the
+// page to land on) when given. The app sanitizes `next`; this passes it as is.
+export function mintMagicLink(email: string, next?: string): string {
   const token = randomBytes(24).toString("base64url");
   const id = psql(
     `INSERT INTO magic_tokens (workspace_id, workspace_user_id, token, expires_at)
@@ -64,7 +66,17 @@ export function mintMagicLink(email: string): string {
      RETURNING id`,
   );
   if (!id) throw new Error(`no workspace user "${email}"`);
-  return `/login/verify?token=${token}`;
+  const query = new URLSearchParams({ token });
+  if (next) query.set("next", next);
+  return `/login/verify?${query}`;
+}
+
+// A one-time /onboard path, minted like `cli setup-link`: a 60-minute setup
+// token that lets whoever opens it create a new workspace and its admin.
+export function mintSetupLink(): string {
+  const token = randomBytes(24).toString("base64url");
+  psql(`INSERT INTO setup_tokens (token, expires_at) VALUES ('${token}', now() + interval '60 minutes')`);
+  return `/onboard?token=${token}`;
 }
 
 // The reply-to address on the workspace's notification emails for an item. The

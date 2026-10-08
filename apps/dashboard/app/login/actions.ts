@@ -1,7 +1,7 @@
 "use server";
 
 import { headers } from "next/headers";
-import { issueMagicLink } from "@/lib/auth";
+import { issueMagicLink, safeNextPath } from "@/lib/auth";
 import { originFromHeaders } from "@/lib/origin";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -21,6 +21,6 @@ export async function requestMagicLink(formData: FormData): Promise<LoginResult>
   const origin = originFromHeaders(headers());
   if (!origin) return { ok: false, error: "Could not determine host." };
 
-  await issueMagicLink(email, origin);
+  await issueMagicLink(email, origin, safeNextPath(formData.get("next")));
   return { ok: true };
 }

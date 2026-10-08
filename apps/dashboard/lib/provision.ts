@@ -2,6 +2,9 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, workspaceUsers, workspaces, type Workspace, type WorkspaceUser } from "@crumb/db";
+import { isCloud } from "@/lib/tier";
+import { seedSampleData } from "@/lib/samples";
+import { log } from "@/lib/log";
 
 // Shared workspace-provisioning core. Both the operator onboarding flow
 // (/onboard) and self-serve signup (/signup) create a workspace + its first
@@ -60,6 +63,17 @@ export async function createWorkspaceWithAdmin(
     initials: initialsFrom(input.adminName).slice(0, 4),
   }).returning();
   if (!user) return null;
+
+  // Cloud: seed a small sample set so the inbox, the tour and Insights aren't
+  // empty on day one (lib/samples). Best-effort: a failed seed never blocks
+  // signup. Self-host stays empty; operators run `pnpm db:seed` for demo data.
+  if (isCloud()) {
+    try {
+      await seedSampleData(ws.id, user.id);
+    } catch (err) {
+      log.error("sample data seed failed", { scope: "crumb/provision", err });
+    }
+  }
 
   return { workspace: ws, user };
 }

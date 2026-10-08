@@ -8,6 +8,7 @@ import { loopOpenSql } from "@/lib/loop-sql";
 import { PrintButton } from "./PrintButton";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "QBR" };
 
 // Standalone, print-optimized Quarterly Business Review. Lives OUTSIDE the
 // (app) group so it has no dashboard chrome — clean for "Cmd-P → Save as PDF".

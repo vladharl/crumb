@@ -115,8 +115,21 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
   return (
     <div className="col gap-3">
       {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
+      {/* Empty board: name the next step (the .inbox-empty styles are the app's empty state). */}
       {items.length === 0 && (
-        <Card><div className="card-body"><p className="text-sm muted" style={{ margin: 0 }}>No initiatives yet. Create one above to start grouping feedback and shaping your roadmap.</p></div></Card>
+        <Card>
+          <div className="inbox-empty quiet">
+            <p className="inbox-empty-head">No initiatives yet</p>
+            <p className="inbox-empty-sub">
+              {canManage ? (
+                <>
+                  Start one with <strong style={{ fontWeight: 600 }}>New initiative</strong> to group related
+                  feedback. Drag it into Now, Next or Later, then switch on Public to put it on your roadmap.
+                </>
+              ) : "Admins and PMs create initiatives here to group related feedback and shape the roadmap."}
+            </p>
+          </div>
+        </Card>
       )}
       {canManage && items.length > 0 && (
         <span className="board-drag-hint text-xs muted">Drag cards to schedule and reorder them. Toggle <strong style={{ fontWeight: 600 }}>Public</strong> to show an initiative on the customer roadmap.</span>

@@ -7,11 +7,15 @@ import { originFromHeaders } from "@/lib/origin";
 import { ensureUniqueSlug } from "@/lib/provision";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { sendSignupVerify } from "@/lib/email";
-import { callerIpFromHeaders } from "@/lib/rate-limit";
+import { callerIpFromHeaders, checkRateLimitAsync } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
+import { billingParams, findOpenPendingSignup } from "./pending";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SIGNUP_TTL_MIN = 30;
+// A resend reuses a link that still has this long to live; past that it mints a
+// fresh one, so the email never lands with a minute left on the clock.
+const REUSE_MIN = 10;
 
 // Per-window abuse caps: generous for legit retries, tight enough to stop a
 // single email/IP spraying pending workspaces.
@@ -28,7 +32,7 @@ export type SignupResult = { ok: true } | { ok: false; error: string };
 // Self-serve signup (Cloud, free-first). Validates input, checks Turnstile +
 // the per-window throttle, then mints an email-verification token carrying the
 // pending workspace details and emails the confirm link. The workspace is NOT
-// created here — only when the visitor clicks the link (signup/verify).
+// created here — only when the visitor confirms from the link (signup/verify).
 export async function startSignup(formData: FormData): Promise<SignupResult> {
   if (!isCloud()) return { ok: false, error: "Self-serve signup isn't available on this deployment." };
 
@@ -69,14 +73,76 @@ export async function startSignup(formData: FormData): Promise<SignupResult> {
 
   const slug = await ensureUniqueSlug(slugify(workspaceName));
   const token = await createPendingSignup({ workspaceName, slug, adminName, adminEmail, ip });
-  const link = `${origin}/signup/verify?token=${encodeURIComponent(token)}`;
+  const billing = billingParams(formData.get("plan"), formData.get("interval"));
+  return sendLink(origin, token, { to: adminEmail, workspaceName, ttlMinutes: SIGNUP_TTL_MIN }, billing);
+}
 
-  try {
-    await sendSignupVerify({ to: adminEmail, link, ttlMinutes: SIGNUP_TTL_MIN, workspaceName });
-  } catch (err) {
-    // The pending row exists; the user can retry. Don't surface send internals.
-    log.error("signup verify send threw", { scope: "crumb/signup", err });
+// "Resend the link" after signing up, and "Send a new link" from an expired
+// one: the same pending signup, found by its email + workspace name. No
+// Turnstile, since it only ever mails an address that passed it at signup, and
+// each address gets the same hourly cap as signing up.
+export async function resendSignup(input: {
+  workspaceName: string;
+  adminEmail: string;
+  plan?: string;
+  interval?: string;
+}): Promise<SignupResult> {
+  if (!isCloud()) return { ok: false, error: "Self-serve signup isn't available on this deployment." };
+
+  const workspaceName = String(input?.workspaceName ?? "").trim();
+  const adminEmail = String(input?.adminEmail ?? "").trim().toLowerCase();
+  if (!EMAIL_RE.test(adminEmail)) return { ok: false, error: "Enter a valid email." };
+
+  const limit = await checkRateLimitAsync(`signup-resend:${adminEmail}`, {
+    capacity: MAX_PER_EMAIL,
+    refillPerSec: MAX_PER_EMAIL / (WINDOW_MS / 1000),
+  });
+  if (!limit.ok) {
+    return { ok: false, error: "We've sent a few links already. Check your spam folder, or try again in a little while." };
   }
 
-  return { ok: true };
+  const pending = await findOpenPendingSignup({ email: adminEmail, workspaceName });
+  if (!pending) {
+    return { ok: false, error: "We couldn't find that signup. If you already confirmed it, sign in. If not, fill in the form again." };
+  }
+
+  const origin = originFromHeaders(headers());
+  if (!origin) return { ok: false, error: "Could not determine host." };
+
+  // Same link while it still has time on it. Otherwise a fresh token: an
+  // expired one is never revived, so a stale link stays dead wherever it ended up.
+  const minutesLeft = Math.floor((pending.expiresAt.getTime() - Date.now()) / 60_000);
+  const reuse = minutesLeft >= REUSE_MIN;
+  const token = reuse ? pending.token : await createPendingSignup({
+    workspaceName: pending.workspaceName,
+    slug: pending.slug,
+    adminName: pending.adminName,
+    adminEmail: pending.adminEmail,
+    ip: pending.ip,
+  });
+  return sendLink(
+    origin,
+    token,
+    { to: pending.adminEmail, workspaceName: pending.workspaceName, ttlMinutes: reuse ? minutesLeft : SIGNUP_TTL_MIN },
+    billingParams(input?.plan, input?.interval),
+  );
+}
+
+async function sendLink(
+  origin: string,
+  token: string,
+  mail: { to: string; workspaceName: string; ttlMinutes: number },
+  billing: Record<string, string>,
+): Promise<SignupResult> {
+  // Lands on /signup, which shows a Create button. Only that button's POST
+  // spends the token, so a mail scanner opening the link changes nothing.
+  const link = `${origin}/signup?${new URLSearchParams({ token, ...billing })}`;
+  // A refused send (bad address, unverified domain, rate limit) or a thrown one
+  // both land on the same error, never on "Check your email".
+  try {
+    if (await sendSignupVerify({ ...mail, link })) return { ok: true };
+  } catch (err) {
+    log.error("signup verify send threw", { scope: "crumb/signup", err });
+  }
+  return { ok: false, error: `We couldn't send the email to ${mail.to}. Check the address, or try again in a minute.` };
 }

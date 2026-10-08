@@ -2,7 +2,7 @@
 
 import { cookies } from "next/headers";
 import { eq } from "drizzle-orm";
-import { db, workspaces, findValidSetupToken, consumeSetupToken } from "@crumb/db";
+import { db, workspaces, findValidSetupToken, claimSetupToken, releaseSetupToken } from "@crumb/db";
 import { SESSION_COOKIE, createSession } from "@/lib/auth";
 import { createWorkspaceWithAdmin } from "@/lib/provision";
 
@@ -17,7 +17,7 @@ export async function bootstrapWorkspace(formData: FormData): Promise<OnboardRes
   // gate, so this works for the first use of any NEW workspace, not just the
   // first workspace on the instance.
   const setup = await findValidSetupToken(String(formData.get("token") ?? ""));
-  if (!setup) return { ok: false, error: "This setup link is invalid or expired. Generate a new one on the server." };
+  if (!setup) return { ok: false, error: "This setup link has expired. Reload the page to see how to get a fresh one." };
 
   const workspaceName = String(formData.get("workspaceName") ?? "").trim();
   const slugRaw       = String(formData.get("slug") ?? "").trim().toLowerCase();
@@ -32,13 +32,21 @@ export async function bootstrapWorkspace(formData: FormData): Promise<OnboardRes
   const [slugTaken] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.slug, slugRaw)).limit(1);
   if (slugTaken) return { ok: false, error: "That workspace slug is already taken." };
 
+  // Claim the link before creating anything; a racing second submission loses here.
+  if (!(await claimSetupToken(setup.id))) {
+    return { ok: false, error: "This setup link has expired. Reload the page to see how to get a fresh one." };
+  }
+
   const created = await createWorkspaceWithAdmin({
     name: workspaceName,
     slug: slugRaw,
     adminName,
     adminEmail,
-  });
-  if (!created) return { ok: false, error: "Could not create workspace." };
+  }).catch(() => null);
+  if (!created) {
+    await releaseSetupToken(setup.id);
+    return { ok: false, error: "Could not create workspace." };
+  }
   const { workspace: ws, user } = created;
 
   const { cookieValue, expiresAt } = await createSession(ws.id, user.id);
@@ -49,9 +57,6 @@ export async function bootstrapWorkspace(formData: FormData): Promise<OnboardRes
     expires: expiresAt,
     path: "/",
   });
-
-  // Burn the setup link now that the workspace exists — it's single-use.
-  await consumeSetupToken(setup.id);
 
   // Don't redirect server-side; let the client navigate so the Set-Cookie on
   // this action's response has actually settled in the browser before

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 // Cloudflare Turnstile widget for the signup form. Turnstile injects a hidden
 // input named "cf-turnstile-response" into the surrounding <form>, which the
@@ -12,7 +12,11 @@ import { useEffect } from "react";
 // works with zero config until both keys are set in production.
 const SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js";
 
-export function TurnstileWidget({ siteKey }: { siteKey?: string | null }) {
+type TurnstileApi = { reset(container?: string | HTMLElement): void };
+
+export function TurnstileWidget({ siteKey, resetKey = 0 }: { siteKey?: string | null; resetKey?: number }) {
+  const box = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!siteKey) return;
     if (document.querySelector(`script[src="${SCRIPT_SRC}"]`)) return;
@@ -23,6 +27,13 @@ export function TurnstileWidget({ siteKey }: { siteKey?: string | null }) {
     document.head.appendChild(s);
   }, [siteKey]);
 
+  // A token is spent once the server checks it, so each change of resetKey
+  // (a new attempt) asks the widget for a fresh one.
+  useEffect(() => {
+    if (!resetKey || !box.current) return;
+    (window as Window & { turnstile?: TurnstileApi }).turnstile?.reset(box.current);
+  }, [resetKey]);
+
   if (!siteKey) return null;
-  return <div className="cf-turnstile" data-sitekey={siteKey} data-theme="light" />;
+  return <div ref={box} className="cf-turnstile" data-sitekey={siteKey} data-theme="light" />;
 }

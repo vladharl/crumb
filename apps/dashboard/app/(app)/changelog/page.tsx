@@ -3,6 +3,7 @@ import { PageHead, SkeletonPill } from "@crumb/ui";
 import { ChangelogTile } from "./ChangelogTile";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Changelog" };
 
 export default function ChangelogPage() {
   return (
@@ -10,7 +11,7 @@ export default function ChangelogPage() {
       <PageHead
         crumb="Changelog"
         title="Changelog"
-        lede="Announce what shipped. When an initiative ships, Crumb drafts an entry here — publish it and everyone who asked hears the outcome."
+        lede="Announce what shipped. When an initiative ships, Crumb drafts an entry here. Publish it and everyone who asked hears the outcome."
       />
       <Suspense fallback={<SkeletonPill width={120} />}>
         <ChangelogTile />

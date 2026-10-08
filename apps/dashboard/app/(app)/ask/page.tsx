@@ -5,6 +5,7 @@ import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { AskBox } from "./AskBox";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Ask" };
 
 // "Ask your feedback" (feature 5). Semantic Q&A over the corpus with cited
 // answers. AI-gated (Cloud + plan); self-host sees an upsell/disabled state.

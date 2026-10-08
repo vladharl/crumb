@@ -176,7 +176,9 @@ export type SignupVerify = {
   workspaceName: string;
 };
 
-export async function sendSignupVerify(m: SignupVerify): Promise<void> {
+// Returns whether the provider accepted the send, so signup can say it failed
+// instead of "Check your email".
+export async function sendSignupVerify(m: SignupVerify): Promise<boolean> {
   const { provider } = selectProvider();
   const result = await provider.send({
     to: m.to,
@@ -190,6 +192,7 @@ export async function sendSignupVerify(m: SignupVerify): Promise<void> {
   if (!result.ok) {
     log.error("signup-verify send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
+  return result.ok;
 }
 
 export type ReplyNotification = {

@@ -17,7 +17,7 @@ vi.mock("@crumb/db", async (importOriginal) => ({
   createPendingSignup: async (p: { ip?: string | null }) => { signup.ips.push(p.ip); return "token"; },
 }));
 vi.mock("@/lib/provision", () => ({ ensureUniqueSlug: async (slug: string) => slug }));
-vi.mock("@/lib/email", () => ({ sendSignupVerify: async () => undefined }));
+vi.mock("@/lib/email", () => ({ sendSignupVerify: async () => true }));
 
 const ip = (headers: Record<string, string>) =>
   callerIpFromRequest(new Request("https://crumb.test/api/v1/items", { headers }));

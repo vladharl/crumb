@@ -2,6 +2,10 @@ import "server-only";
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+// Next 14 has no public API for the request URL in server code. This is the
+// per-request store its own headers()/redirect() read; `urlPathname` is the
+// requested path plus query.
+import { staticGenerationAsyncStorage } from "next/dist/client/components/static-generation-async-storage.external";
 import { randomBytes, createHash } from "node:crypto";
 import { and, eq, gt, isNull, lt } from "drizzle-orm";
 import {
@@ -60,12 +64,37 @@ export const getSession = cache(async function getSession(): Promise<Session | n
 
 export async function requireSession(): Promise<Session> {
   const s = await getSession();
-  if (!s) redirect("/login");
+  if (!s) {
+    // Come back to the page that was asked for once signed in.
+    // ponytail: reads a Next 14 internal; if an upgrade drops it, this falls
+    // back to plain /login. Switch to a middleware-set request header then.
+    const next = safeNextPath(staticGenerationAsyncStorage.getStore()?.urlPathname);
+    redirect(next ? `/login?next=${encodeURIComponent(next)}` : "/login");
+  }
   return s;
 }
 
+// Where sign-in may send someone afterwards: a path on this origin, or null
+// (the inbox). Refuses "//host", "/\host", schemes, and control characters
+// (browsers drop tabs and newlines, so "/\t/host" reads as "//host"), checks
+// the path again once "." and ".." are resolved, and never lands back on the
+// sign-in pages. Next's RSC cache-buster (_rsc) is dropped.
+export function safeNextPath(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.startsWith("/") || raw.startsWith("//") || /[\\\x00-\x1f\x7f]/.test(raw)) {
+    return null;
+  }
+  const url = new URL(raw, "http://n");
+  if (url.pathname.startsWith("//") || /^\/log(in|out)(\/|$)/.test(url.pathname)) return null;
+  url.searchParams.delete("_rsc");
+  return url.pathname + url.search + url.hash;
+}
+
 // ─── magic link issue + consume ────────────────────────────
-export async function issueMagicLink(email: string, origin: string): Promise<{ delivered: boolean }> {
+export async function issueMagicLink(
+  email: string,
+  origin: string,
+  next: string | null = null,
+): Promise<{ delivered: boolean }> {
   const [user] = await db
     .select()
     .from(workspaceUsers)
@@ -97,7 +126,11 @@ export async function issueMagicLink(email: string, origin: string): Promise<{ d
     expiresAt: new Date(Date.now() + TOKEN_TTL_MIN * 60 * 1000),
   });
 
-  const link = `${origin}/login/verify?token=${encodeURIComponent(token)}`;
+  // Opening the link only shows a Continue page (GET /login/verify spends
+  // nothing); `next` rides along so sign-in lands where they were headed.
+  const query = new URLSearchParams({ token });
+  if (next) query.set("next", next);
+  const link = `${origin}/login/verify?${query}`;
   await sendMagicLink({
     to: user.email,
     link,
@@ -126,11 +159,14 @@ export async function consumeMagicToken(token: string): Promise<ConsumeResult> {
   if (row.expiresAt.getTime() < Date.now()) return { ok: false, error: "expired" };
 
   // Mark consumed first; if anything below fails we'd rather fail-closed than
-  // leave a re-usable token in the wild.
-  await db
+  // leave a re-usable token in the wild. Claimed in one statement, so of two
+  // requests racing on the same link only one gets a session.
+  const [claimed] = await db
     .update(magicTokens)
     .set({ consumedAt: new Date() })
-    .where(eq(magicTokens.id, row.id));
+    .where(and(eq(magicTokens.id, row.id), isNull(magicTokens.consumedAt)))
+    .returning({ id: magicTokens.id });
+  if (!claimed) return { ok: false, error: "consumed" };
 
   const cookieValue = randomToken(32);
   const tokenHash = hashCookie(cookieValue);
