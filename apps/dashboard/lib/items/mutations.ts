@@ -12,6 +12,7 @@ import { customerNotifyPlan, statusEmailsCustomer, type NotifyPlan } from "@/lib
 import { emailConfigured, sendReplyNotification, sendStatusChangeNotification } from "@/lib/email";
 import { notifyMentioned, parseMentionIds } from "@/lib/mention-notify";
 import { buildReplyAddress } from "@/lib/reply-token";
+import { hostedThreadPath } from "@/lib/hosted-thread";
 import { log } from "@/lib/log";
 
 // Session-free cores of the vendor-side item mutations (status / reply /
@@ -201,6 +202,8 @@ export async function updateItemStatus(
         toStatus: input.status,
         reason: opts.customerMessage || reason,
         productUrl: workspace.productUrl,
+        viewUrl: origin ? origin + hostedThreadPath(input.itemShortId, workspace.signingSecret) : null,
+        accent: workspace.accent,
         inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
         unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=status` : null,
       });
@@ -318,6 +321,8 @@ export async function createItemReply(
         replyBody: body,
         statusLabel: statusLabel(opts.shownStatus ?? row.status),
         productUrl: workspace.productUrl,
+        viewUrl: origin ? origin + hostedThreadPath(input.itemShortId, workspace.signingSecret) : null,
+        accent: workspace.accent,
         inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
         unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=replies` : null,
       });

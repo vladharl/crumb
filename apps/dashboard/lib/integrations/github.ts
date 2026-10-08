@@ -12,6 +12,10 @@ import { log } from "@/lib/log";
 //   2. Admin picks org + repos on GitHub.
 //   3. GitHub redirects to /api/integrations/github/callback?installation_id=N&setup_action=install&state=...
 //      (plus &code=... when the App requests user authorization during install).
+//      With the App's OAuth credentials set, a callback without a code (the
+//      App was already installed: setup_action=update, or none) first goes
+//      through GitHub's user authorization (userAuthorizeUrl), which comes
+//      back to the callback with a code.
 //   4. We check the installation belongs to whoever finished the install
 //      (verifyInstallOwnership), then persist installation_id + account login.
 //      Per-request, we mint a fresh installation token by signing an App JWT
@@ -49,6 +53,21 @@ export function buildAuthUrl(workspaceId: string): string {
   if (!slug) throw new Error("GITHUB_APP_SLUG is not configured");
   const params = new URLSearchParams({ state: signState("github", workspaceId) });
   return `https://github.com/apps/${slug}/installations/new?${params.toString()}`;
+}
+
+// GitHub's user authorization for the App, back to the callback with a code
+// for verifyInstallOwnership. GitHub returns only code + state, so the
+// installation id rides in the signed state. Null without the App's OAuth
+// credentials, where ownership falls back to install recency.
+export function userAuthorizeUrl(workspaceId: string, installationId: string, redirectUri: string): string | null {
+  const clientId = process.env.GITHUB_APP_CLIENT_ID?.trim();
+  if (!clientId || !process.env.GITHUB_APP_CLIENT_SECRET?.trim()) return null;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    state: signState("github", workspaceId, installationId),
+  });
+  return `https://github.com/login/oauth/authorize?${params.toString()}`;
 }
 
 // ─── App JWT + installation token ───────────────────────────
@@ -128,13 +147,14 @@ export async function fetchInstallationMeta(installationId: string): Promise<Ins
 // The callback's installation_id is a bare query parameter and the App JWT
 // reads every installation of the App, so on its own it proves nothing about
 // who finished the install: a workspace admin could replay their own state
-// with another company's id. When the App's OAuth credentials are set (and
-// "Request user authorization (OAuth) during installation" is on), GitHub
-// adds a `code` to the callback; we trade it for a user-to-server token and
-// require the installation in that user's GET /user/installations, as
-// GitHub's setup-URL docs advise. Without them, only an install or update
-// GitHub recorded in the last 10 minutes passes, which narrows a replay to
-// that window but cannot rule it out.
+// with another company's id. When the App's OAuth credentials are set, the
+// callback carries a `code` (added by GitHub on a fresh install with "Request
+// user authorization (OAuth) during installation" on, or by the user
+// authorization the callback sends a codeless reconnect through); we trade it
+// for a user-to-server token and require the installation in that user's GET
+// /user/installations, as GitHub's setup-URL docs advise. Without them, only
+// an install or update GitHub recorded in the last 10 minutes passes, which
+// narrows a replay to that window but cannot rule it out.
 const INSTALL_FRESH_MS = 10 * 60 * 1000;
 let warnedWeakOwnership = false;
 
@@ -148,7 +168,7 @@ export async function verifyInstallOwnership(
   if (clientId && clientSecret) {
     // No fallback once configured: dropping `code` must not downgrade the check.
     if (!callback.code) {
-      log.warn("github install callback carried no OAuth code; enable \"Request user authorization (OAuth) during installation\" on the App", { scope: "crumb/github" });
+      log.warn("github install callback carried no OAuth code (user authorization declined or skipped)", { scope: "crumb/github" });
       return false;
     }
     try {

@@ -51,6 +51,18 @@ export function currentPeriod(now: Date = new Date()): string {
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
+// When this month's counters reset: the first instant of next UTC month, the
+// moment currentPeriod() rolls over.
+export function usageResetsAt(now: Date = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+}
+
+// Whole percent of `cap` used, for the in-app banners. Floored so "80%" never
+// shows early, capped at 100; no cap reads as used up.
+export function usagePercent(used: number, cap: number): number {
+  return cap > 0 ? Math.min(100, Math.floor((used / cap) * 100)) : 100;
+}
+
 export async function getUsage(workspaceId: string, metric: UsageMetric, period = currentPeriod()): Promise<number> {
   const [row] = await db
     .select({ count: usageCounters.count })
@@ -136,6 +148,17 @@ export async function checkUsageEventsCap(
   const cap = usageEventsCap(ws);
   const used = await getUsage(ws.id, "usage_events");
   return { allowed: used + addCount <= cap, used, cap };
+}
+
+export type AiUsage = { used: number; cap: number; percent: number; resetsAt: Date };
+
+// This month's AI budget for the in-app banners (Ask, the inbox). Null when the
+// plan has no AI, so there's nothing to meter and no query runs.
+export async function getAiUsage(ws: Pick<Workspace, "id" | "planId" | "subscriptionStatus">): Promise<AiUsage | null> {
+  const cap = aiCap(ws);
+  if (cap <= 0) return null;
+  const used = await getUsage(ws.id, "ai");
+  return { used, cap, percent: usagePercent(used, cap), resetsAt: usageResetsAt() };
 }
 
 export type UsageLine = { metric: UsageMetric; used: number; cap: number };

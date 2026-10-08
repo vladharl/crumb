@@ -9,7 +9,7 @@ import {
   roadmapFollows,
   type Workspace,
 } from "@crumb/db";
-import { sendRoadmapUpdateNotification } from "@/lib/email";
+import { sendShippedAnnouncement } from "@/lib/email";
 import { WIDGET_SOURCE } from "@/lib/feedback/source";
 import { log } from "@/lib/log";
 
@@ -52,10 +52,11 @@ export async function draftChangelogForInitiative(ws: Workspace, initiativeId: s
   }
 }
 
-type Recipient = { id: string; email: string; unsubToken: string };
+type Recipient = { id: string; email: string; unsubToken: string; reason: "asked" | "follow" };
 
 // Distinct recipients for an initiative's announcement: item submitters on that
-// initiative + explicit roadmap followers, minus anyone muted. Deduped by email.
+// initiative + explicit roadmap followers, minus anyone muted. Deduped by email;
+// someone who both asked and follows hears it as the one who asked.
 // (notifyRoadmapFollowers covers followers-only on roadmap *moves*; a changelog
 // announcement additionally reaches everyone who asked.)
 async function announcementRecipients(workspaceId: string, initiativeId: string): Promise<Recipient[]> {
@@ -88,7 +89,10 @@ async function announcementRecipients(workspaceId: string, initiativeId: string)
     );
 
   const byEmail = new Map<string, Recipient>();
-  for (const r of [...submitters, ...followers]) byEmail.set(r.email.toLowerCase(), r);
+  for (const r of [
+    ...followers.map(f => ({ ...f, reason: "follow" as const })),
+    ...submitters.map(s => ({ ...s, reason: "asked" as const })),
+  ]) byEmail.set(r.email.toLowerCase(), r);
   return [...byEmail.values()];
 }
 
@@ -112,15 +116,24 @@ export async function publishChangelogEntry(ws: Workspace, entryId: string): Pro
     .where(eq(changelogEntries.id, entryId));
 
   if (!entry.initiativeId) return { ok: true, notified: 0 };
+  const [ini] = await db
+    .select({ name: initiatives.name })
+    .from(initiatives)
+    .where(and(eq(initiatives.workspaceId, ws.id), eq(initiatives.id, entry.initiativeId)))
+    .limit(1);
   const recipients = await announcementRecipients(ws.id, entry.initiativeId);
   const base = process.env.CRUMB_APP_URL?.replace(/\/+$/, "") ?? "";
   for (const r of recipients) {
-    void sendRoadmapUpdateNotification({
+    void sendShippedAnnouncement({
       to: r.email,
       workspaceName: ws.name,
-      initiativeName: entry.title,
-      change: entry.body || "Shipped 🎉",
+      // The thread key the initiative's roadmap moves use (lib/roadmap-notify).
+      initiativeName: ini?.name ?? entry.title,
+      title: entry.title,
+      body: entry.body,
+      reason: r.reason,
       productUrl: ws.productUrl,
+      accent: ws.accent,
       // Same one-click unsubscribe shape as lib/roadmap-notify.ts.
       unsubscribeUrl: base ? `${base}/api/v1/unsubscribe?u=${r.id}&t=${r.unsubToken}&scope=roadmap` : null,
     });

@@ -1,4 +1,6 @@
 import "server-only";
+import { createHash, randomUUID } from "node:crypto";
+import { statusLabel } from "@crumb/ui";
 import type { EmailProvider, SendResult } from "./email/provider";
 import { stdoutProvider } from "./email/stdout";
 import { makeResendProvider } from "./email/resend";
@@ -6,12 +8,14 @@ import { makeSmtpProvider } from "./email/smtp";
 import {
   renderMagicLinkHtml, renderMagicLinkText,
   renderSignupVerifyHtml, renderSignupVerifyText,
+  renderInviteHtml, renderInviteText,
   renderReplyNotificationHtml, renderReplyNotificationText,
   renderStatusChangeHtml, renderStatusChangeText,
   renderCustomerReplyNotificationHtml, renderCustomerReplyNotificationText,
   renderMentionHtml, renderMentionText,
   renderDunningHtml, renderDunningText,
   renderRoadmapUpdateHtml, renderRoadmapUpdateText,
+  renderShippedAnnouncementHtml, renderShippedAnnouncementText,
   renderSignupNotificationHtml, renderSignupNotificationText,
   renderSupportRequestHtml, renderSupportRequestText,
 } from "./email/template";
@@ -101,9 +105,8 @@ export function supportContactEnabled(): boolean {
 }
 
 // Derive a noreply variant of the configured From — same domain, fixed local
-// part. We use this for vendor reply + status-change notifications: until
-// inbound mail is wired, customer replies to those emails would be lost, so
-// the From itself should signal "don't reply here."
+// part. Used for one-way notices (signup, support, dunning, and customer
+// emails nobody can reply to) so the From itself signals "don't reply here."
 //
 // Inputs we handle:
 //   "Crumb <crumb@yourdomain.com>"  →  "Crumb (noreply) <noreply@yourdomain.com>"
@@ -139,6 +142,49 @@ function buildThreadUrl(productUrl: string | null | undefined, shortId: string):
   }
 }
 
+// ─── Customer-facing sender + headers ────────────────────────
+// What a vendor's customers get reads as the vendor's: "<Workspace> via Crumb"
+// on the verified CRUMB_EMAIL_FROM address, or its noreply@ twin when no
+// reply-by-email address rides along (a reply would land in no thread).
+// Quotes, backslashes and line breaks are dropped from the name rather than
+// escaped, which every provider accepts.
+
+const senderAddress = (from: string) => from.match(/<([^>]+)>/)?.[1]?.trim() ?? from.trim();
+
+function customerFrom(workspaceName: string, from: string): string {
+  const name = `${workspaceName} via Crumb`.replace(/\s+/g, " ").replace(/["\\]/g, "");
+  return `"${name}" <${senderAddress(from)}>`;
+}
+
+// One-click unsubscribe (RFC 8058) on the footer's own per-customer link.
+// Threading: every email about one item (or initiative) points at one root id
+// derived from the workspace and the item, while its own Message-ID stays
+// unique (Gmail drops a repeated Message-ID as a duplicate).
+// ponytail: keyed on the workspace name (senders don't get its id), so a rename
+// starts a new thread.
+// ponytail: https only. A mailto twin needs an inbound handler that applies it
+// (none yet); without one, mail apps that prefer mailto would report an
+// unsubscribe that never happened.
+function customerHeaders(
+  from: string,
+  workspaceName: string,
+  threadKey: string,
+  unsubscribeUrl?: string | null,
+): Record<string, string> {
+  const domain = senderAddress(from).split("@")[1] || "localhost";
+  const root = `<${createHash("sha256").update(`${workspaceName}\n${threadKey}`).digest("hex").slice(0, 32)}@${domain}>`;
+  const headers: Record<string, string> = {
+    "Message-ID": `<${randomUUID()}@${domain}>`,
+    "In-Reply-To": root,
+    References: root,
+  };
+  if (unsubscribeUrl) {
+    headers["List-Unsubscribe"] = `<${unsubscribeUrl}>`;
+    headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+  }
+  return headers;
+}
+
 export type MagicLink = {
   to: string;
   link: string;
@@ -157,12 +203,45 @@ export async function sendMagicLink(m: MagicLink): Promise<void> {
     subject,
     html: renderMagicLinkHtml({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
     text: renderMagicLinkText({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
-    previewLine: `expires in ${m.ttlMinutes} minutes`,
+    previewLine: `expires in ${ttlText(m.ttlMinutes)}`,
     link: m.link,
   });
 
   if (!result.ok) {
     log.error("magic-link send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
+  }
+}
+
+// Team invite: its own email (not the bare sign-in one), carrying a regular
+// magic-link token as its single button.
+export type Invite = {
+  to: string;
+  link: string;
+  ttlMinutes: number;
+  workspaceName: string;
+  inviterName: string;
+};
+
+// "15 minutes", "24 hours", "7 days" for the stdout preview operators read.
+function ttlText(minutes: number): string {
+  if (minutes % 1440 === 0) return `${minutes / 1440} day${minutes === 1440 ? "" : "s"}`;
+  if (minutes % 60 === 0) return `${minutes / 60} hour${minutes === 60 ? "" : "s"}`;
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
+export async function sendInvite(m: Invite): Promise<void> {
+  const { provider } = selectProvider();
+  const result = await provider.send({
+    to: m.to,
+    subject: `${m.inviterName} invited you to ${m.workspaceName} on Crumb`,
+    html: renderInviteHtml(m),
+    text: renderInviteText(m),
+    previewLine: `invite to ${m.workspaceName}, expires in ${ttlText(m.ttlMinutes)}`,
+    link: m.link,
+  });
+
+  if (!result.ok) {
+    log.error("invite send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
 }
 
@@ -185,7 +264,7 @@ export async function sendSignupVerify(m: SignupVerify): Promise<boolean> {
     subject: `Confirm your email · ${m.workspaceName}`,
     html: renderSignupVerifyHtml({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
     text: renderSignupVerifyText({ workspaceName: m.workspaceName, link: m.link, ttlMinutes: m.ttlMinutes }),
-    previewLine: `confirm to create ${m.workspaceName} — expires in ${m.ttlMinutes} minutes`,
+    previewLine: `confirm to create ${m.workspaceName}, expires in ${ttlText(m.ttlMinutes)}`,
     link: m.link,
   });
 
@@ -204,10 +283,14 @@ export type ReplyNotification = {
   replyBody: string;
   statusLabel?: string;
   productUrl?: string | null;
+  /** Hosted read-only copy of the thread; the link when there's no Product URL. */
+  viewUrl?: string | null;
   /** When set, used as Reply-To so the customer can reply via email. */
   inboundReplyAddress?: string | null;
   /** One-click unsubscribe link (per-customer token). Omitted ⇒ no footer link. */
   unsubscribeUrl?: string | null;
+  /** The workspace's Branding dot color, shown beside its name. */
+  accent?: string | null;
 };
 
 // Returns whether a real provider accepted the send, so callers can record the
@@ -215,40 +298,20 @@ export type ReplyNotification = {
 // prints the email (dev) but never counts: nothing reached the customer.
 export async function sendReplyNotification(m: ReplyNotification): Promise<boolean> {
   const { provider, from } = selectProvider();
-  const subject = `${m.vendorName} replied · ${m.itemShortId} ${m.itemTitle}`;
-  const threadUrl = buildThreadUrl(m.productUrl, m.itemShortId);
-
-  // If inbound is wired, use the signed reply address so customer replies
-  // land back on the thread. Otherwise fall back to a true noreply From.
-  const fromAddr = m.inboundReplyAddress ? from : noreplyFrom(from);
+  // With inbound wired, Reply-To is the signed reply address, so the customer's
+  // answer lands back on the thread (and the email says they can reply).
+  const vars = { ...m, threadUrl: buildThreadUrl(m.productUrl, m.itemShortId), replyByEmail: !!m.inboundReplyAddress };
 
   const result = await provider.send({
     to: m.to,
-    from: fromAddr,
+    from: customerFrom(m.workspaceName, m.inboundReplyAddress ? from : noreplyFrom(from)),
     ...(m.inboundReplyAddress ? { replyTo: m.inboundReplyAddress } : {}),
-    subject,
-    html: renderReplyNotificationHtml({
-      workspaceName: m.workspaceName,
-      vendorName: m.vendorName,
-      itemShortId: m.itemShortId,
-      itemTitle: m.itemTitle,
-      replyBody: m.replyBody,
-      statusLabel: m.statusLabel,
-      threadUrl,
-      unsubscribeUrl: m.unsubscribeUrl,
-    }),
-    text: renderReplyNotificationText({
-      workspaceName: m.workspaceName,
-      vendorName: m.vendorName,
-      itemShortId: m.itemShortId,
-      itemTitle: m.itemTitle,
-      replyBody: m.replyBody,
-      statusLabel: m.statusLabel,
-      threadUrl,
-      unsubscribeUrl: m.unsubscribeUrl,
-    }),
+    subject: `${m.vendorName} replied: ${m.itemTitle}`,
+    html: renderReplyNotificationHtml(vars),
+    text: renderReplyNotificationText(vars),
+    headers: customerHeaders(from, m.workspaceName, `item:${m.itemShortId}`, m.unsubscribeUrl),
     previewLine: `${m.vendorName} on ${m.itemShortId}`,
-    link: threadUrl ?? undefined,
+    link: vars.threadUrl ?? m.viewUrl ?? undefined,
   });
 
   if (!result.ok) {
@@ -267,28 +330,30 @@ export type StatusChangeNotification = {
   toStatus: string;
   reason?: string | null;
   productUrl?: string | null;
+  /** Hosted read-only copy of the thread; the link when there's no Product URL. */
+  viewUrl?: string | null;
   inboundReplyAddress?: string | null;
   unsubscribeUrl?: string | null;
+  /** The workspace's Branding dot color, shown beside its name. */
+  accent?: string | null;
 };
 
 // Returns whether a real provider accepted the send; never true for stdout
-// (see sendReplyNotification).
+// (see sendReplyNotification). The subject leads with the outcome.
 export async function sendStatusChangeNotification(m: StatusChangeNotification): Promise<boolean> {
   const { provider, from } = selectProvider();
-  const subject = `Status update · ${m.itemShortId} ${m.itemTitle}`;
-  const threadUrl = buildThreadUrl(m.productUrl, m.itemShortId);
-
-  const fromAddr = m.inboundReplyAddress ? from : noreplyFrom(from);
+  const vars = { ...m, threadUrl: buildThreadUrl(m.productUrl, m.itemShortId), replyByEmail: !!m.inboundReplyAddress };
 
   const result = await provider.send({
     to: m.to,
-    from: fromAddr,
+    from: customerFrom(m.workspaceName, m.inboundReplyAddress ? from : noreplyFrom(from)),
     ...(m.inboundReplyAddress ? { replyTo: m.inboundReplyAddress } : {}),
-    subject,
-    html: renderStatusChangeHtml({ ...m, threadUrl }),
-    text: renderStatusChangeText({ ...m, threadUrl }),
+    subject: `${statusLabel(m.toStatus)}: ${m.itemTitle}`,
+    html: renderStatusChangeHtml(vars),
+    text: renderStatusChangeText(vars),
+    headers: customerHeaders(from, m.workspaceName, `item:${m.itemShortId}`, m.unsubscribeUrl),
     previewLine: `${m.fromStatus ?? "—"} → ${m.toStatus}`,
-    link: threadUrl ?? undefined,
+    link: vars.threadUrl ?? m.viewUrl ?? undefined,
   });
 
   if (!result.ok) {
@@ -471,20 +536,58 @@ export type RoadmapUpdateNotification = {
   change: string;
   productUrl?: string | null;
   unsubscribeUrl?: string | null;
+  /** The workspace's Branding dot color, shown beside its name. */
+  accent?: string | null;
 };
 
+// The subject leads with the move ("Moved to Now: Dark mode").
 export async function sendRoadmapUpdateNotification(m: RoadmapUpdateNotification): Promise<void> {
   const { provider, from } = selectProvider();
   const result = await provider.send({
     to: m.to,
-    from: noreplyFrom(from),
-    subject: `Roadmap update · ${m.initiativeName}`,
+    from: customerFrom(m.workspaceName, noreplyFrom(from)),
+    subject: `${m.change.charAt(0).toUpperCase()}${m.change.slice(1)}: ${m.initiativeName}`,
     html: renderRoadmapUpdateHtml(m),
     text: renderRoadmapUpdateText(m),
+    headers: customerHeaders(from, m.workspaceName, `initiative:${m.initiativeName}`, m.unsubscribeUrl),
     previewLine: m.change,
     link: m.productUrl ?? undefined,
   });
   if (!result.ok) {
     log.error("roadmap-update send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
+  }
+}
+
+// ─── Shipped announcement (published changelog entry) ────────
+// To everyone who asked for the initiative or follows it; `reason` picks the
+// footer line. Threads with that initiative's roadmap updates, so it keys on
+// the initiative's name, not the entry's (editable) title.
+export type ShippedAnnouncement = {
+  to: string;
+  workspaceName: string;
+  initiativeName: string;
+  title: string;
+  body: string;
+  reason: "asked" | "follow";
+  productUrl?: string | null;
+  unsubscribeUrl?: string | null;
+  /** The workspace's Branding dot color, shown beside its name. */
+  accent?: string | null;
+};
+
+export async function sendShippedAnnouncement(m: ShippedAnnouncement): Promise<void> {
+  const { provider, from } = selectProvider();
+  const result = await provider.send({
+    to: m.to,
+    from: customerFrom(m.workspaceName, noreplyFrom(from)),
+    subject: `Shipped: ${m.title}`,
+    html: renderShippedAnnouncementHtml(m),
+    text: renderShippedAnnouncementText(m),
+    headers: customerHeaders(from, m.workspaceName, `initiative:${m.initiativeName}`, m.unsubscribeUrl),
+    previewLine: `${m.workspaceName} shipped ${m.title}`,
+    link: m.productUrl ?? undefined,
+  });
+  if (!result.ok) {
+    log.error("shipped-announcement send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
 }

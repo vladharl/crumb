@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { db, workspaces, accounts, accountUsers } from "@crumb/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { verify } from "./jwt";
 import { isCloud } from "./tier";
 
@@ -125,42 +125,49 @@ async function upsertAccountAndUser(
   // host product is the source of truth and we (re)apply it on every load.
   roleClaim?: "admin" | "member" | null,
 ): Promise<{ user: typeof accountUsers.$inferSelect; account: typeof accounts.$inferSelect }> {
-  let [account] = await db
-    .select()
-    .from(accounts)
-    .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.name, accountName)))
-    .limit(1);
-  let accountCreated = false;
-  if (!account) {
-    const inserted = await db.insert(accounts).values({ workspaceId, name: accountName }).returning();
-    account = inserted[0]!;
-    accountCreated = true;
+  const accountWhere = and(eq(accounts.workspaceId, workspaceId), eq(accounts.name, accountName));
+  const userWhere = and(eq(accountUsers.workspaceId, workspaceId), eq(accountUsers.email, email));
+  let [account] = await db.select().from(accounts).where(accountWhere).limit(1);
+  let [user] = await db.select().from(accountUsers).where(userWhere).limit(1);
+
+  if (!account || !user) {
+    // First contact. The widget boots /me and /items at once, so two requests
+    // can get here together. accounts has no unique (workspace, name) index
+    // to upsert on, so creating takes a per-account lock: concurrent first
+    // loads make one account, and its first user is still its admin.
+    ({ account, user } = await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${workspaceId}:${accountName}`}, 0))`);
+      let [a] = await tx.select().from(accounts).where(accountWhere).limit(1);
+      const accountCreated = !a;
+      if (!a) [a] = await tx.insert(accounts).values({ workspaceId, name: accountName }).returning();
+      let [u] = await tx.select().from(accountUsers).where(userWhere).limit(1);
+      if (!u) {
+        const initialsSource = name ?? email;
+        const initials = initialsSource
+          .split(/\s+|@/).filter(Boolean).slice(0, 2)
+          .map(s => s[0]?.toUpperCase() ?? "").join("") || "?";
+        // First admin bootstrap: the very first user of a brand-new account becomes
+        // its admin (otherwise no account would ever have one, since the JWT/email
+        // flow defaults everyone to "member"). An explicit JWT role claim wins.
+        const role = roleClaim ?? (accountCreated ? "admin" : "member");
+        // The same person arriving under another account name at the same time
+        // isn't serialized by that lock; the (workspace, email) unique index
+        // decides, and the loser reads the winner's row.
+        [u] = await tx.insert(accountUsers).values({
+          workspaceId,
+          accountId: a!.id,
+          email,
+          name: name ?? email.split("@")[0]!,
+          initials: initials.slice(0, 4),
+          role,
+        }).onConflictDoNothing().returning();
+        if (!u) [u] = await tx.select().from(accountUsers).where(userWhere).limit(1);
+      }
+      return { account: a!, user: u! };
+    }));
   }
 
-  let [user] = await db
-    .select()
-    .from(accountUsers)
-    .where(and(eq(accountUsers.workspaceId, workspaceId), eq(accountUsers.email, email)))
-    .limit(1);
-  if (!user) {
-    const initialsSource = name ?? email;
-    const initials = initialsSource
-      .split(/\s+|@/).filter(Boolean).slice(0, 2)
-      .map(s => s[0]?.toUpperCase() ?? "").join("") || "?";
-    // First admin bootstrap: the very first user of a brand-new account becomes
-    // its admin (otherwise no account would ever have one, since the JWT/email
-    // flow defaults everyone to "member"). An explicit JWT role claim wins.
-    const role = roleClaim ?? (accountCreated ? "admin" : "member");
-    const inserted = await db.insert(accountUsers).values({
-      workspaceId,
-      accountId: account.id,
-      email,
-      name: name ?? email.split("@")[0]!,
-      initials: initials.slice(0, 4),
-      role,
-    }).returning();
-    user = inserted[0]!;
-  } else if (roleClaim && user.role !== roleClaim) {
+  if (roleClaim && user.role !== roleClaim) {
     // Existing user + host asserts a role → host wins; re-apply so a
     // widget-side change can't drift from the host's source of truth.
     const [updated] = await db

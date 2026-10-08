@@ -74,6 +74,14 @@ describe("lib/integrations/state", () => {
     expect(verifyState("linear", `linear.${WS_ID}.nonce.sig`).ok).toBe(false);
   });
 
+  it("carries an optional value under the signature (GitHub's installation id)", () => {
+    const state = signState("github", WS_ID, "123456");
+    expect(verifyState("github", state)).toEqual({ ok: true, workspaceId: WS_ID, data: "123456" });
+    expect(verifyState("github", withPart(state, 4, "654321")).ok).toBe(false);
+    expect(verifyState("github", signState("github", WS_ID))).toEqual({ ok: true, workspaceId: WS_ID });
+    expect(() => signState("github", WS_ID, "1.2")).toThrow();
+  });
+
   it("two sequential sign calls yield different states (nonce changes)", () => {
     const a = signState("linear", WS_ID);
     const b = signState("linear", WS_ID);

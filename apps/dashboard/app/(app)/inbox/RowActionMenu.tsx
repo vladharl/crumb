@@ -7,6 +7,7 @@ import { Btn, Ic, REASON_PLACEHOLDER, REASON_REQUIRED, VENDOR_STATUS_OPTIONS, st
 import type { VendorStatus } from "@crumb/ui";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm";
+import { cancelWaitingMove } from "@/components/ReplyComposer";
 import { errorMessage } from "@/lib/action-error";
 import { statusEmailsCustomer } from "@/lib/notify/customer-plan";
 import { bulkAssign, bulkUpdateStatus } from "./actions";
@@ -209,6 +210,8 @@ export function RowActionMenu({
         confirmLabel: `Move to ${label}`,
       }))) return;
     }
+    // This status wins over a drawer move still waiting out its undo window.
+    cancelWaitingMove(shortId);
     onStatusOptimistic?.(next);
     startTransition(async () => {
       const r = await bulkUpdateStatus([itemId], next);
@@ -223,6 +226,7 @@ export function RowActionMenu({
   function submitReason(reason: string) {
     if (!reasonFor) return;
     const next = reasonFor;
+    cancelWaitingMove(shortId);
     startTransition(async () => {
       const r = await bulkUpdateStatus([itemId], next, reason);
       toast.show(statusToast(r, statusLabel(next), shortId));

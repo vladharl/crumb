@@ -6,6 +6,8 @@ import { GET as slackCallback } from "@/app/api/integrations/slack/callback/rout
 import { POST as slackCommands } from "@/app/api/integrations/slack/commands/route";
 import { POST as slackEvents } from "@/app/api/integrations/slack/events/route";
 import { signState } from "@/lib/integrations/state";
+import { clearProviderInstall } from "@/lib/integrations/revoke";
+import { workspaceForSlackTeam } from "@/lib/slack/install";
 
 // Slack tenancy. The events, commands and interactivity routes find their
 // Crumb workspace by Slack team id, so a team belongs to one workspace at most.
@@ -28,7 +30,9 @@ const tag = randomUUID().slice(0, 8);
 const CLAIMED_TEAM = `T-claimed-${tag}`;
 const SHARED_TEAM = `T-shared-${tag}`;
 const MENTION_TEAM = `T-mention-${tag}`;
+const REVOKED_TEAM = `T-revoked-${tag}`;
 const created: string[] = [];
+let installTeam = CLAIMED_TEAM; // the team the OAuth exchange installs
 
 async function workspace(cols: Partial<typeof workspaces.$inferInsert> = {}) {
   const [ws] = await db.insert(workspaces)
@@ -54,7 +58,7 @@ function fromSlack(path: string, body: string, contentType: string): Request {
   });
 }
 
-// Slack's Web API: the OAuth exchange installs CLAIMED_TEAM, users.info answers
+// Slack's Web API: the OAuth exchange installs `installTeam`, users.info answers
 // from `emails`, chat.postMessage and chat.postEphemeral are recorded. Anything
 // else is unexpected.
 const emails: Record<string, string> = {};
@@ -64,7 +68,7 @@ const ephemeral: Array<{ channel: string; user: string; thread_ts?: string; text
 const slackApi = vi.fn(async (input: unknown, init?: RequestInit) => {
   const url = new URL(String(input));
   if (url.pathname === "/api/oauth.v2.access") {
-    return Response.json({ ok: true, app_id: "A1", team: { id: CLAIMED_TEAM, name: "Acme" }, access_token: "xoxb-new", bot_user_id: "UBOT", scope: "" });
+    return Response.json({ ok: true, app_id: "A1", team: { id: installTeam, name: "Acme" }, access_token: "xoxb-new", bot_user_id: "UBOT", scope: "" });
   }
   if (url.pathname === "/api/users.info") {
     const user = url.searchParams.get("user") ?? "";
@@ -81,6 +85,14 @@ const slackApi = vi.fn(async (input: unknown, init?: RequestInit) => {
   }
   throw new Error(`unexpected fetch: ${url}`);
 });
+
+// Finish a Slack install as the signed-in admin of `workspaceId`.
+const settings = `${APP}/settings/integrations?slack=`;
+function finishInstall(workspaceId: string) {
+  getSession.mockResolvedValue({ workspace: { id: workspaceId }, user: { id: "user-1", role: "admin" } });
+  const state = signState("slack", workspaceId);
+  return slackCallback(new Request(`http://0.0.0.0:3000/api/integrations/slack/callback?code=c&state=${state}`));
+}
 
 describe.skipIf(!reachable && !process.env.CI)("slack tenancy", () => {
   beforeAll(() => {
@@ -100,18 +112,28 @@ describe.skipIf(!reachable && !process.env.CI)("slack tenancy", () => {
   it("a second workspace cannot claim a Slack team another one holds; the holder can reconnect", async () => {
     const holder = await workspace({ slackTeamId: CLAIMED_TEAM, slackBotToken: "xoxb-old", slackBotUserId: "UBOT" });
     const other = await workspace();
-    const finishInstall = (workspaceId: string) => {
-      getSession.mockResolvedValue({ workspace: { id: workspaceId }, user: { id: "user-1", role: "admin" } });
-      const state = signState("slack", workspaceId);
-      return slackCallback(new Request(`http://0.0.0.0:3000/api/integrations/slack/callback?code=c&state=${state}`));
-    };
-    const settings = `${APP}/settings/integrations?slack=`;
 
     expect((await finishInstall(other)).headers.get("location")).toBe(`${settings}error_team_already_connected`);
     expect(await teamOf(other)).toBeNull();
 
     expect((await finishInstall(holder)).headers.get("location")).toBe(`${settings}connected`);
     expect(await teamOf(holder)).toBe(CLAIMED_TEAM);
+  });
+
+  it("a workspace whose Slack install was revoked no longer holds its team", async () => {
+    installTeam = REVOKED_TEAM;
+    // Revoked the way the notifiers clear a dead token: the team id goes too.
+    const revoked = await workspace({ slackTeamId: REVOKED_TEAM, slackBotToken: "xoxb-dead", slackBotUserId: "UBOT" });
+    await clearProviderInstall(revoked, "slack");
+    expect(await teamOf(revoked)).toBeNull();
+    // A row from before that, left with the team id and no token, holds nothing either.
+    await workspace({ slackTeamId: REVOKED_TEAM });
+    const next = await workspace();
+
+    expect((await finishInstall(next)).headers.get("location")).toBe(`${settings}connected`);
+    expect(await teamOf(next)).toBe(REVOKED_TEAM);
+    expect((await workspaceForSlackTeam(REVOKED_TEAM))?.id).toBe(next);
+    installTeam = CLAIMED_TEAM;
   });
 
   it("a team still held by two workspaces (from before that guard) routes nowhere", async () => {

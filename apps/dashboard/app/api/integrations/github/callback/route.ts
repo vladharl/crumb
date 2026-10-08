@@ -1,7 +1,11 @@
+import { NextResponse } from "next/server";
 import { and, eq, ne } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
-import { fetchInstallationMeta, listInstallationRepos, verifyInstallOwnership } from "@/lib/integrations/github";
+import {
+  fetchInstallationMeta, listInstallationRepos, userAuthorizeUrl, verifyInstallOwnership, GITHUB_REDIRECT_URL,
+} from "@/lib/integrations/github";
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
+import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -25,14 +29,19 @@ export async function GET(req: Request) {
     return redirectBack(req, `error_${encodeURIComponent(setupAction)}`);
   }
 
-  const installationId = url.searchParams.get("installation_id");
   const state = url.searchParams.get("state");
-  // Canonical digits only (no leading zeros): the id is interpolated into
-  // App-JWT API paths and string-compared with the stored install id below.
-  if (!installationId || !/^[1-9]\d*$/.test(installationId) || !state) return redirectBack(req, "error_missing_params");
+  if (!state) return redirectBack(req, "error_missing_params");
 
   const v = await verifyCallback(req, "github", state);
   if (!v.ok) return v.redirect;
+
+  // Back from GitHub's user authorization (below), which returns only code +
+  // state, the installation id is the one signed into the state.
+  const installationId = v.data ?? url.searchParams.get("installation_id");
+  // Canonical digits only (no leading zeros): the id is interpolated into
+  // App-JWT API paths and string-compared with the stored install id below.
+  if (!installationId || !/^[1-9]\d*$/.test(installationId)) return redirectBack(req, "error_missing_params");
+  const code = url.searchParams.get("code");
 
   const [ws] = await db
     .select({ id: workspaces.id })
@@ -49,6 +58,16 @@ export async function GET(req: Request) {
     .limit(1);
   if (taken) return redirectBack(req, "error_install_taken");
 
+  // With the App's OAuth credentials set, ownership needs a code. GitHub adds
+  // one only to a fresh install with user authorization on; reconnecting an
+  // App that is already installed (setup_action=update, or none) comes back
+  // without one. So send the installer through GitHub's user authorization,
+  // once: on the way back the state carries the id, and no code fails closed.
+  if (!code && !v.data) {
+    const authorize = userAuthorizeUrl(ws.id, installationId, callbackUrlFromRequest("github", GITHUB_REDIRECT_URL(), req));
+    if (authorize) return NextResponse.redirect(authorize);
+  }
+
   let meta;
   try {
     meta = await fetchInstallationMeta(installationId);
@@ -57,10 +76,7 @@ export async function GET(req: Request) {
     return redirectBack(req, "error_meta_failed");
   }
 
-  const owned = await verifyInstallOwnership(installationId, meta, {
-    code: url.searchParams.get("code"),
-    setupAction,
-  });
+  const owned = await verifyInstallOwnership(installationId, meta, { code, setupAction });
   if (!owned) return redirectBack(req, "error_not_owner");
 
   // Convenience: if the install grants access to exactly one repo, pre-select

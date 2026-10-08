@@ -87,9 +87,10 @@ export const workspaces = pgTable("workspaces", {
   linearAccessToken: text("linear_access_token"),
   linearTeamId:      text("linear_team_id"),
   linearTeamName:    text("linear_team_name"),
-  // The Linear org the token belongs to. Inbound webhooks are scoped by it
-  // (identifiers like ENG-42 repeat across orgs). Null until resolved from
-  // the token on the first webhook after (re)connect.
+  // The Linear org the token belongs to, recorded by the OAuth callback.
+  // Inbound webhooks are scoped by it (identifiers like ENG-42 repeat across
+  // orgs). Null for installs connected before the callback recorded it; the
+  // webhook scopes those by the org's URL key in each item's issue URL.
   linearOrganizationId: text("linear_organization_id"),
   linearInstalledAt: timestamp("linear_installed_at", { withTimezone: true }),
 

@@ -8,7 +8,7 @@ import { log } from "./log";
 // Email everyone following an initiative that it changed on the public
 // roadmap. Best-effort, fire-and-forget — never blocks the vendor's edit.
 export async function notifyRoadmapFollowers(
-  workspace: Pick<Workspace, "name" | "productUrl">,
+  workspace: Pick<Workspace, "name" | "productUrl" | "accent">,
   initiativeId: string,
   initiativeName: string,
   change: string,
@@ -36,6 +36,7 @@ export async function notifyRoadmapFollowers(
       initiativeName,
       change,
       productUrl: workspace.productUrl,
+      accent: workspace.accent,
       unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${f.id}&t=${f.unsubToken}&scope=roadmap` : null,
     })));
 

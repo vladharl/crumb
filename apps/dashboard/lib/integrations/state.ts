@@ -5,9 +5,11 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 // one provider can't be replayed against another. Used by all integration
 // OAuth flows (Slack, Linear, Jira, GitHub, HubSpot, Salesforce).
 //
-// Format: `{provider}.{workspaceId}.{issuedAt}.{nonce}.{sig}` where
+// Format: `{provider}.{workspaceId}.{issuedAt}.{nonce}[.{data}].{sig}` where
 //   issuedAt = Date.now() when the Connect action built the consent link
-//   sig = HMAC-SHA256("{provider}.{workspaceId}.{issuedAt}.{nonce}", stateSecret())
+//   data = an optional value the flow carries through the provider (GitHub's
+//          user authorization carries the installation id), dot-free
+//   sig = HMAC-SHA256(everything before it, stateSecret())
 //
 // A state expires STATE_TTL_MS after issue, so a consent link can't be banked
 // and replayed later. It is not single-use (the nonce isn't stored): the
@@ -39,9 +41,10 @@ function stateSecret(): string {
   );
 }
 
-export function signState(provider: Provider, workspaceId: string): string {
+export function signState(provider: Provider, workspaceId: string, data?: string): string {
+  if (data !== undefined && !/^[\w-]+$/.test(data)) throw new Error("state data must be dot-free");
   const nonce = randomBytes(16).toString("base64url");
-  const body = `${provider}.${workspaceId}.${Date.now()}.${nonce}`;
+  const body = [provider, workspaceId, Date.now(), nonce, ...(data === undefined ? [] : [data])].join(".");
   const sig = createHmac("sha256", stateSecret()).update(body).digest("base64url");
   return `${body}.${sig}`;
 }
@@ -49,13 +52,14 @@ export function signState(provider: Provider, workspaceId: string): string {
 export function verifyState(
   expectedProvider: Provider,
   state: string,
-): { ok: true; workspaceId: string } | { ok: false } {
+): { ok: true; workspaceId: string; data?: string } | { ok: false } {
   const parts = state.split(".");
-  if (parts.length !== 5) return { ok: false };
-  const [provider, workspaceId, issuedAt, nonce, sig] = parts;
+  if (parts.length !== 5 && parts.length !== 6) return { ok: false };
+  const sig = parts.pop()!;
+  const [provider, workspaceId, issuedAt, , data] = parts;
   if (provider !== expectedProvider) return { ok: false };
   const expected = createHmac("sha256", stateSecret())
-    .update(`${provider}.${workspaceId}.${issuedAt}.${nonce}`)
+    .update(parts.join("."))
     .digest("base64url");
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
@@ -64,5 +68,5 @@ export function verifyState(
   // The stamp is signed, so only its age is in question. abs() also rejects a
   // non-numeric stamp (NaN) and one from a clock running far ahead.
   if (!(Math.abs(Date.now() - Number(issuedAt)) <= STATE_TTL_MS)) return { ok: false };
-  return { ok: true, workspaceId };
+  return data === undefined ? { ok: true, workspaceId } : { ok: true, workspaceId, data };
 }

@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import {
   exchangeCode,
-  fetchDefaultTeam,
+  fetchInstallInfo,
   LINEAR_REDIRECT_URL,
 } from "@/lib/integrations/linear";
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
@@ -15,8 +15,9 @@ export const runtime = "nodejs";
 
 // Linear redirects here after the admin grants scopes. Same shape as the
 // Slack callback (verify state, exchange code, persist tokens, redirect
-// back to settings with a status flag). One extra step: fetch the
-// default team so the workspace lands in a usable state.
+// back to settings with a status flag). One extra step: look up the Linear
+// org (the status webhook is scoped by it) and the default team, so the
+// workspace lands in a usable state.
 
 function redirectBack(req: Request, slug: string): Response {
   return redirectToSettings(req, "linear", slug);
@@ -51,24 +52,24 @@ export async function GET(req: Request) {
     return redirectBack(req, "error_exchange_failed");
   }
 
-  // Discover the default team. If the workspace has no Linear teams the
-  // install still completes — vendors can pick a team in settings later.
-  let team: { id: string; name: string } | null = null;
+  // Non-fatal: with no Linear teams the install still completes (vendors pick
+  // a team in settings later), and with no org id the webhook scopes this
+  // install's updates by the org's URL key instead.
+  let info: Awaited<ReturnType<typeof fetchInstallInfo>> | null = null;
   try {
-    team = await fetchDefaultTeam(token.access_token);
+    info = await fetchInstallInfo(token.access_token);
   } catch (err) {
-    log.warn("linear team discovery failed (non-fatal)", { scope: "crumb/linear", err });
+    log.warn("linear org and team discovery failed (non-fatal)", { scope: "crumb/linear", err });
   }
 
   await db
     .update(workspaces)
     .set({
       linearAccessToken: seal(token.access_token),
-      linearTeamId:      team?.id   ?? null,
-      linearTeamName:    team?.name ?? null,
-      // A reconnect may point at a different Linear org; the webhook
-      // resolves the new one from this token (resolveOrganizationIds).
-      linearOrganizationId: null,
+      linearTeamId:      info?.team?.id   ?? null,
+      linearTeamName:    info?.team?.name ?? null,
+      // Set on every connect: a reconnect may point at a different Linear org.
+      linearOrganizationId: info?.organizationId ?? null,
       linearInstalledAt: new Date(),
     })
     .where(eq(workspaces.id, ws.id));

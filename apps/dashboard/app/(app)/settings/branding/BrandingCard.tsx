@@ -468,7 +468,7 @@ export function BrandingCard({
 
           <Field
             label="Product URL"
-            help="Where the widget is embedded. Used to build clickable links in customer notification emails. Leave blank to send link-less emails."
+            help="The page where your widget runs. Customer emails link here and open their thread in the Feedback tab. Leave it blank and emails link to a read-only copy of the thread instead."
           >
             <input
               className="input"

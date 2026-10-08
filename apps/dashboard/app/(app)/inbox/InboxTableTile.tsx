@@ -6,7 +6,10 @@ import { alias } from "drizzle-orm/pg-core";
 import { getActiveSession } from "@/lib/server";
 import { clusterConfigured } from "@/lib/ai/cluster";
 import { emailConfigured } from "@/lib/email";
-import { hasFeature } from "@/lib/entitlements";
+import { hasFeature, workspacePlan } from "@/lib/entitlements";
+import { isCloud } from "@/lib/tier";
+import { getAiUsage } from "@/lib/usage";
+import { AiUsageNotice, UpgradeNotice } from "@/components/UpgradeNotice";
 import { hasSampleData } from "@/lib/samples";
 import { SetupChecklist } from "@/components/SetupChecklist";
 import { TEST_CUSTOMER_ACCOUNT } from "@/app/(app)/settings/install/test-customer";
@@ -292,17 +295,19 @@ async function loadAssignees(workspaceId: string): Promise<Assignee[]> {
 
 export async function InboxTableTile() {
   const { workspace, user: me } = await getActiveSession();
-  const [rows, assignees, initiativeOptions, captureData, samples] = await Promise.all([
+  const [rows, assignees, initiativeOptions, captureData, samples, aiUsage] = await Promise.all([
     loadItems(workspace.id),
     loadAssignees(workspace.id),
     loadInitiativeOptions(workspace.id),
     loadPendingCaptures(workspace.id),
     hasSampleData(workspace.id),
+    getAiUsage(workspace),
   ]);
   // First run: the samples a new Cloud workspace starts with are still there,
   // or nothing but the Install page's Try-it messages has landed. The setup
   // checklist leads until then.
   const firstRun = samples || rows.every(r => r.accountName === TEST_CUSTOMER_ACCOUNT);
+  const isAdmin = me.role === "admin";
   const canManageInitiatives = me.role === "admin" || me.role === "pm";
   // Viewers are read-only — gates the bulk status/assign bar. (Same expr as
   // canManageInitiatives today, but kept distinct for clarity of intent.)
@@ -313,7 +318,10 @@ export async function InboxTableTile() {
 
   return (
     <>
-      {firstRun && <SetupChecklist workspace={workspace} isAdmin={me.role === "admin"} hasSamples={samples} />}
+      {firstRun && <SetupChecklist workspace={workspace} isAdmin={isAdmin} hasSamples={samples} />}
+      {/* Auto-triage, clustering and reply drafts share this month's AI budget;
+          say so from 80% instead of letting them stop silently at the cap. */}
+      {aiUsage && <AiUsageNotice percent={aiUsage.percent} resetsAt={aiUsage.resetsAt} isAdmin={isAdmin} plan={workspacePlan(workspace)} />}
       <CaptureTriage captures={captureData.captures} accounts={captureData.accountOptions} canWrite={canWrite} />
       <InboxTable
         rows={rows}
@@ -324,6 +332,9 @@ export async function InboxTableTile() {
         initiatives={initiativeOptions}
         canManageInitiatives={canManageInitiatives}
         clusterEnabled={aiEntitled && clusterConfigured() && initiativeOptions.length > 0}
+        // Cloud Free: the cluster control shows locked and opens this. Self-host
+        // has no plan to sell, so the control stays hidden there.
+        aiUpgrade={!aiEntitled && isCloud() ? <UpgradeNotice feature="ai" isAdmin={isAdmin} /> : null}
         emailConfigured={emailConfigured()}
         nowMs={Date.now()}
       />

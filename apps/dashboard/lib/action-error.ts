@@ -15,6 +15,7 @@ export function errorMessage(code: string | undefined | null): string {
     case "not_found":             return "We couldn't find that. It may have been deleted.";
     case "no_item":
     case "no_items":              return "Nothing was selected.";
+    case "too_many_items":        return "Select up to 50 at a time.";
     case "bad_status":            return "That status isn't allowed.";
     case "bad_type":              return "That type isn't allowed.";
     case "bad_assignee":

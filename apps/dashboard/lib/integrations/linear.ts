@@ -1,11 +1,7 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
-import { db, workspaces } from "@crumb/db";
 import { signState } from "./state";
-import { open } from "../crypto-at-rest";
-import { clearProviderInstall, IntegrationAuthError } from "./revoke";
-import { log } from "@/lib/log";
+import { IntegrationAuthError } from "./revoke";
 
 // Linear OAuth 2.0. API is GraphQL-only; the auth flow is conventional.
 // Docs: https://linear.app/developers/oauth-2-0-authentication
@@ -68,7 +64,14 @@ export function buildAuthUrl(workspaceId: string, redirectUrl: string): string {
 type TokenResponse = {
   access_token: string;
   token_type: "Bearer";
-  expires_in: number; // seconds — Linear defaults to ~10 years
+  // Seconds: 24 hours, since Linear moved every OAuth app to refresh tokens
+  // on 2026-04-01.
+  // ponytail: no refresh-token support yet. The refresh_token Linear returns
+  // isn't stored, so a day after connecting, the calls that use the access
+  // token (ticket create, team list, AI context) fail as revoked until an admin
+  // reconnects. Storing and using it is a separate follow-up (it needs a
+  // column). Status sync never uses the token (see the webhook).
+  expires_in: number;
   scope: string;
 };
 
@@ -121,40 +124,18 @@ async function gql<T>(token: string, query: string, variables?: Record<string, u
   return data.data as T;
 }
 
-// Called once at install time to discover the user's default team. We
-// pick the first team in the response and stash it on the workspace;
-// vendors can change it later via the settings card.
-export async function fetchDefaultTeam(token: string): Promise<{ id: string; name: string } | null> {
-  type R = { teams: { nodes: Array<{ id: string; name: string; key: string }> } };
-  const data = await gql<R>(token, `query { teams(first: 1) { nodes { id name key } } }`);
+// Called once at install time, with the fresh token: the Linear org it belongs
+// to (the webhook scopes status updates by it) and the user's default team. We
+// pick the first team and stash it on the workspace; vendors can change it
+// later via the settings card.
+export async function fetchInstallInfo(token: string): Promise<{
+  organizationId: string;
+  team: { id: string; name: string } | null;
+}> {
+  type R = { organization: { id: string }; teams: { nodes: Array<{ id: string; name: string }> } };
+  const data = await gql<R>(token, `query { organization { id } teams(first: 1) { nodes { id name } } }`);
   const team = data.teams.nodes[0];
-  if (!team) return null;
-  return { id: team.id, name: team.name };
-}
-
-// The webhook scopes updates by Linear org id, which an install only learns
-// from its token. Fill it in for every install still missing one (connected
-// before the column existed, or reconnected since). The token guard on the
-// write skips a row whose install changed while we were asking Linear.
-// ponytail: one Linear call per unresolved install, once each; if that shows
-// up in webhook latency, look it up in the OAuth callback and backfill once.
-export async function resolveOrganizationIds(): Promise<void> {
-  const pending = await db
-    .select({ id: workspaces.id, token: workspaces.linearAccessToken })
-    .from(workspaces)
-    .where(and(isNotNull(workspaces.linearAccessToken), isNull(workspaces.linearOrganizationId)));
-  await Promise.all(pending.map(async ({ id, token }) => {
-    try {
-      const { organization } = await gql<{ organization: { id: string } }>(open(token!), `query { organization { id } }`);
-      await db
-        .update(workspaces)
-        .set({ linearOrganizationId: organization.id })
-        .where(and(eq(workspaces.id, id), eq(workspaces.linearAccessToken, token!)));
-    } catch (err) {
-      if (err instanceof IntegrationAuthError) await clearProviderInstall(id, "linear");
-      else log.warn("linear org lookup failed; retrying on the next webhook", { scope: "crumb/linear", workspaceId: id, err });
-    }
-  }));
+  return { organizationId: data.organization.id, team: team ? { id: team.id, name: team.name } : null };
 }
 
 // ─── tickets ─────────────────────────────────────────────────

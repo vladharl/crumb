@@ -9,6 +9,8 @@ export type OutgoingEmail = {
   from?: string;
   /** Optional Reply-To header — used by inbound-reply addresses. */
   replyTo?: string;
+  /** Extra headers (List-Unsubscribe, threading). Providers pass them through as-is. */
+  headers?: Record<string, string>;
   /** Short one-line summary surfaced by the stdout provider (e.g. for log scanning). */
   previewLine?: string;
   /** Convenience pointer — providers may surface this in logs. */

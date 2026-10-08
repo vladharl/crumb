@@ -155,7 +155,7 @@ Any sender domain you use must have SPF/DKIM set up at the provider first or mes
 
 ### Inbound email replies
 
-When a vendor replies to a thread, the customer gets an email. Without inbound wiring, that email goes out from a `noreply@…` address. To let customers reply by email and land back on the thread:
+When a vendor replies to a thread, the customer gets an email sent as `<Workspace> via Crumb`. Without inbound wiring, it goes out from `noreply@` on your `CRUMB_EMAIL_FROM` domain. To let customers reply by email and land back on the thread:
 
 ```bash
 CRUMB_INBOUND_DOMAIN=reply.yourdomain.com

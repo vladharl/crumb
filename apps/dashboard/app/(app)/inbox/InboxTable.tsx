@@ -17,6 +17,7 @@ import { errorMessage } from "@/lib/action-error";
 import { statusEmailsCustomer } from "@/lib/notify/customer-plan";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm";
+import { cancelWaitingMove } from "@/components/ReplyComposer";
 import { bulkAssign, bulkUpdateStatus, acceptTriageAssignee, dismissTriage } from "./actions";
 import { bulkSetInitiative, clusterItems, acceptSuggestion, dismissSuggestion } from "../initiatives/actions";
 import { InitiativeChip } from "../initiatives/InitiativeChip";
@@ -203,7 +204,7 @@ const RENDER_WINDOW = 60;
 
 export function InboxTable({
   rows, assignees, meId, canWrite, aiEntitled, initiatives, canManageInitiatives, clusterEnabled, emailConfigured,
-  nowMs: serverNowMs,
+  nowMs: serverNowMs, aiUpgrade,
 }: {
   rows: InboxRow[];
   assignees: Assignee[];
@@ -217,6 +218,9 @@ export function InboxTable({
   // one, the status notes never promise an email.
   emailConfigured: boolean;
   nowMs: number;
+  // Cloud Free only: the upgrade notice the locked cluster control reveals
+  // (rendered on the server, where the plan + role live). Null hides it.
+  aiUpgrade?: ReactNode;
 }) {
   const router = useRouter();
   // A single "now" reference, seeded from the server so the first client render
@@ -553,6 +557,8 @@ export function InboxTable({
   // nothing written snaps the rows back now; a partial failure lets the
   // refreshed server rows decide (see `unsettled`).
   async function writeStatus(ids: string[], status: string, reason?: string) {
+    // This write wins over a drawer move still waiting out its undo window.
+    for (const r of rows) if (ids.includes(r.id)) cancelWaitingMove(r.shortId);
     const res = await bulkUpdateStatus(ids, status, reason);
     if (!res.ok) setOptimisticStatus(ids, null);
     else if (res.failed > 0) for (const id of ids) unsettled.current.add(id);
@@ -682,6 +688,9 @@ export function InboxTable({
       toast.show(err === null ? { message: "Reverted." } : { message: `Couldn't fully revert. ${errorMessage(err)}`, tone: "error" });
     });
   }
+
+  // Locked cluster control (Cloud Free): toggles the upgrade notice.
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   function clusterSelected() {
     if (selected.size === 0) return;
@@ -1196,9 +1205,21 @@ export function InboxTable({
 
       <div className="row between" style={{ flexWrap: "wrap", gap: 12 }}>
         <span className="text-sm muted">Showing {visibleRows.length} of {scopedRows.length}</span>
-        {/* Cluster these: AI-only feature. Hidden entirely on self-host;
-            on Cloud, enabled when a key is set + at least one initiative
+        {/* Cluster these: AI-only feature. Hidden entirely on self-host. On
+            Cloud Free it shows locked and opens the upgrade notice; on a paid
+            plan it's enabled when a key is set + at least one initiative
             exists, otherwise the disabled hint nudges setup. */}
+        {!aiEntitled && aiUpgrade && canManageInitiatives && (
+          <Btn
+            sm
+            icon={<Ic.lock style={{ width: 11, height: 11 }} />}
+            aria-expanded={upgradeOpen}
+            onClick={() => setUpgradeOpen(o => !o)}
+          >
+            Cluster with AI
+          </Btn>
+        )}
+        {upgradeOpen && <div style={{ flexBasis: "100%" }}>{aiUpgrade}</div>}
         {aiEntitled && canManageInitiatives && (
           <div className="row gap-2 center">
             <Btn
@@ -1210,7 +1231,7 @@ export function InboxTable({
               {pending ? "Clustering…" : `Cluster selected${selected.size > 0 ? ` (${selected.size})` : ""}`}
             </Btn>
             {!clusterEnabled && (
-              <Pill ring title={initiatives.length === 0 ? undefined : "Set the AI provider key (self-host) or upgrade to Team (Cloud)"}>
+              <Pill ring title={initiatives.length === 0 ? undefined : "The AI provider key isn't set on this deployment."}>
                 {initiatives.length === 0 ? "Add an initiative first" : "AI clustering not set up"}
               </Pill>
             )}

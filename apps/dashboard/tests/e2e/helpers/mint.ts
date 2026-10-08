@@ -11,6 +11,8 @@ import { resolve } from "node:path";
 //   mintSetupLink      packages/db/src/setup-tokens.ts createSetupToken + setupLinkFor
 //   signReplyAddress   lib/reply-token.ts buildReplyAddress
 //   signAttachmentPath lib/attachments/signed-url.ts signedAttachmentPath
+//   mintUnsubscribeLink lib/items/mutations.ts unsubscribeUrl (also roadmap-notify, changelog)
+// and stdoutEmails reads back what lib/email/stdout.ts printed.
 
 // SQL against the e2e Postgres (docker container crumb-postgres, as setup.ts).
 // Sent over stdin, so no shell quoting; still, interpolate trusted test values
@@ -91,6 +93,39 @@ export function signReplyAddress(slug: string, shortId: string, domain = "crumb.
 export function signAttachmentPath(slug: string, id: string, exp: number): string {
   const sig = hmac(workspaceSigningSecret(slug), `attachment:${id}:${exp}`).subarray(0, 16).toString("base64url");
   return `/api/v1/uploads/${id}?exp=${exp}&sig=${sig}`;
+}
+
+// A customer email's unsubscribe link (path + query), built as the senders
+// build it: the account user's id and its unsub_token capability, plus the
+// scope it mutes (none mutes all customer email).
+export function mintUnsubscribeLink(slug: string, email: string, scope?: "replies" | "status" | "roadmap"): string {
+  const [id, token] = psql(
+    `SELECT au.id, au.unsub_token FROM account_users au JOIN workspaces w ON w.id = au.workspace_id
+     WHERE w.slug = '${slug}' AND au.email = lower('${email}')`,
+  ).split("|");
+  if (!id || !token) throw new Error(`no customer "${email}" in "${slug}"`);
+  return `/api/v1/unsubscribe?u=${id}&t=${token}${scope ? `&scope=${scope}` : ""}`;
+}
+
+// Every email the stdout provider has printed, oldest first, as its printed
+// fields keyed as printed: to, from, reply-to, subject, preview, link, then
+// headers (List-Unsubscribe, ...). Read from CRUMB_E2E_DEV_LOG, the file the
+// dev server's output goes to; null when unset (a server Playwright boots
+// logs to the runner, out of a spec's reach).
+export type StdoutEmail = Record<string, string | undefined>;
+
+export function stdoutEmails(): StdoutEmail[] | null {
+  const path = process.env.CRUMB_E2E_DEV_LOG;
+  if (!path) return null;
+  return readFileSync(path, "utf8")
+    .split("─── crumb · email (stdout) ")
+    .slice(1)
+    .map((block) => Object.fromEntries(
+      block.split("\n─")[0]!.split("\n").flatMap((line) => {
+        const m = line.match(/^ {2}([\w-]+):\s*(.*)$/);
+        return m ? [[m[1]!, m[2]!.trim()]] : [];
+      }),
+    ));
 }
 
 // The origin the app puts on its redirects and links (lib/origin.ts):

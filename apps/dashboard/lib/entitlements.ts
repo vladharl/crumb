@@ -28,13 +28,55 @@ import { isActiveStatus } from "@/lib/stripe";
 export type Feature = "ai" | "session_record" | "integrations" | "usage_analytics";
 export type Plan = "free" | "team" | "growth";
 
-// Which features each plan unlocks. Tune freely as pricing evolves — this is
-// the single source of truth for the plan→feature mapping.
-const PLAN_FEATURES: Record<Plan, readonly Feature[]> = {
+// Which features each plan unlocks. Tune freely as pricing evolves; this is
+// the single source of truth for the plan→feature mapping. PLAN_FEATURES below
+// is how customers read it; tests/unit/billing-plans.test.ts keeps them in step.
+export const PLAN_FEATURE_MAP: Record<Plan, readonly Feature[]> = {
   free: [],
   team: ["ai", "integrations", "usage_analytics"],
   growth: ["ai", "integrations", "session_record", "usage_analytics"],
 };
+
+// What each plan includes, one customer-visible line per feature with the
+// plans that include it. The billing page's plan cards and the upgrade notice
+// render from this, so the copy can't promise what the code doesn't gate.
+// Matches the public pricing page.
+//   feature: the entitlement that enforces the line (null = not plan-gated)
+//   limits:  per-plan monthly allowance, mirroring the caps in lib/usage.ts
+export type PlanFeature = {
+  label: string;
+  plans: readonly Plan[];
+  feature: Feature | null;
+  limits?: Partial<Record<Plan, string>>;
+};
+
+const EVERY_PLAN: readonly Plan[] = ["free", "team", "growth"];
+const PAID_PLANS: readonly Plan[] = ["team", "growth"];
+
+export const PLAN_FEATURES: readonly PlanFeature[] = [
+  { label: "Capture, triage, replies and status flow", plans: EVERY_PLAN, feature: null },
+  { label: "Feedback widget and in-app roadmap", plans: EVERY_PLAN, feature: null },
+  { label: "Customer emails when you reply or ship", plans: EVERY_PLAN, feature: null },
+  {
+    label: "AI suite: clustering, Ask, ticket and reply drafts",
+    plans: PAID_PLANS,
+    feature: "ai",
+    limits: { team: "2,000 operations a month", growth: "10,000 operations a month" },
+  },
+  { label: "One-click Slack, Linear, Jira and GitHub", plans: PAID_PLANS, feature: "integrations" },
+  { label: "CRM sync for HubSpot and Salesforce", plans: PAID_PLANS, feature: "integrations" },
+  { label: "Feedback connectors for Zendesk, Intercom, Gong and more", plans: PAID_PLANS, feature: "integrations" },
+  {
+    label: "Product usage analytics",
+    plans: PAID_PLANS,
+    feature: "usage_analytics",
+    limits: { team: "500,000 events a month", growth: "2,000,000 events a month" },
+  },
+  { label: "Session replay", plans: ["growth"], feature: "session_record", limits: { growth: "5 GB a month" } },
+  { label: "Priority support", plans: ["growth"], feature: null },
+];
+
+const PLAN_NAMES: Record<Plan, string> = { free: "Free", team: "Team", growth: "Growth" };
 
 const KNOWN_PLANS = new Set<Plan>(["free", "team", "growth"]);
 
@@ -43,6 +85,12 @@ function normalizePlan(planId: string | null | undefined): Plan {
   // Unknown lookup_key or a raw Stripe price id we couldn't map → no paid
   // entitlements. Fail closed.
   return "free";
+}
+
+// Customer-facing name for a raw plan id ("team" → "Team"). Unknown ids read
+// as Free, the same way entitlements treat them.
+export function planDisplayName(planId: string | null | undefined): string {
+  return PLAN_NAMES[normalizePlan(planId)];
 }
 
 // The effective plan for a workspace, accounting for tier + subscription
@@ -64,7 +112,7 @@ export function hasFeature(
   feature: Feature,
 ): boolean {
   if (!isCloud()) return false;
-  return PLAN_FEATURES[workspacePlan(ws)].includes(feature);
+  return PLAN_FEATURE_MAP[workspacePlan(ws)].includes(feature);
 }
 
 // Combined rule for third-party integrations. Self-host: allowed (the
@@ -87,14 +135,11 @@ export function usageAnalyticsAllowed(
   return isSelfHost() || hasFeature(ws, "usage_analytics");
 }
 
-// All features the workspace currently has — handy for the billing page's
-// "your plan unlocks…" display and for /me-style payloads.
+// All feature gates the workspace currently has, for /me-style payloads.
+// (The billing page reads PLAN_FEATURES for its customer-facing lines.)
 export function workspaceFeatures(
   ws: Pick<Workspace, "planId" | "subscriptionStatus">,
 ): Feature[] {
   if (!isCloud()) return [];
-  return [...PLAN_FEATURES[workspacePlan(ws)]];
+  return [...PLAN_FEATURE_MAP[workspacePlan(ws)]];
 }
-
-// Exported for tests + the billing UI's plan comparison table.
-export const PLAN_FEATURE_MAP = PLAN_FEATURES;

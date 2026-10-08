@@ -120,12 +120,53 @@ describe.skipIf(!reachable && !process.env.CI)("GitHub install callback binds on
     const ws = await workspace();
 
     expect(await finish(ws, `installation_id=${theirs}&setup_action=install&code=good`)).toBe("error_not_owner");
-    // Dropping the code must not fall back to the recency check.
-    expect(await finish(ws, `installation_id=${theirs}&setup_action=install`)).toBe("error_not_owner");
+    // Dropping the code must not fall back to the recency check: it goes
+    // through GitHub's user authorization instead (next test).
+    expect(await finish(ws, `installation_id=${theirs}&setup_action=install`)).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize\?/);
     expect(await finish(ws, `installation_id=${mine}&setup_action=install&code=bad`)).toBe("error_not_owner");
     expect(await installOf(ws)).toBeNull();
 
     expect(await finish(ws, `installation_id=${mine}&setup_action=install&code=good`)).toBe("connected");
+    expect(await installOf(ws)).toBe(mine);
+  });
+
+  it("with them, reconnecting an App that's already installed goes through GitHub's user authorization", async () => {
+    vi.stubEnv("GITHUB_APP_CLIENT_ID", "Iv1.test");
+    vi.stubEnv("GITHUB_APP_CLIENT_SECRET", "test-client-secret");
+    const mine = newInstallId();
+    const theirs = newInstallId();
+    installedAt.set(mine, minutesAgo(60 * 24 * 30)); // installed a month ago
+    installedAt.set(theirs, minutesAgo(60 * 24 * 30));
+    listed = [mine];
+    const ws = await workspace();
+
+    // GitHub sends an already-installed App back with no code: setup_action=update, or none.
+    for (const query of [`installation_id=${mine}&setup_action=update`, `installation_id=${mine}`]) {
+      const authorize = new URL((await finish(ws, query))!);
+      expect(authorize.origin + authorize.pathname).toBe("https://github.com/login/oauth/authorize");
+      expect(authorize.searchParams.get("client_id")).toBe("Iv1.test");
+      expect(authorize.searchParams.get("redirect_uri")).toBe(`${APP}/api/integrations/github/callback`);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    }
+    expect(await installOf(ws)).toBeNull();
+
+    // GitHub returns only code + state; the state carries the installation id.
+    const back = async (query: string) => {
+      const res = await GET(new Request(`http://0.0.0.0:3000/api/integrations/github/callback?${query}`));
+      return res.headers.get("location")?.replace(`${APP}/settings/integrations?github=`, "");
+    };
+    const stateFor = async (id: string) =>
+      new URL((await finish(ws, `installation_id=${id}&setup_action=update`))!).searchParams.get("state")!;
+
+    // Declined on GitHub (no code): fails closed instead of asking again.
+    expect(await back(`error=access_denied&state=${await stateFor(mine)}`)).toBe("error_not_owner");
+    // An id swapped into the signed state breaks it; a user who can't reach the installation is refused.
+    const swapped = (await stateFor(mine)).replace(mine, theirs);
+    expect(await back(`code=good&state=${swapped}`)).toBe("error_bad_state");
+    expect(await back(`code=good&state=${await stateFor(theirs)}`)).toBe("error_not_owner");
+    expect(await installOf(ws)).toBeNull();
+
+    expect(await back(`code=good&state=${await stateFor(mine)}`)).toBe("connected");
     expect(await installOf(ws)).toBe(mine);
   });
 

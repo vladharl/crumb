@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import { exchangeCode, SLACK_REDIRECT_URL } from "@/lib/slack/install";
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
@@ -56,14 +56,19 @@ export async function GET(req: Request) {
   // One Crumb workspace per Slack team: the events, commands and interactivity
   // routes find their tenant by team id. Reconnecting the holder is fine. The
   // bot token belongs to the team's install, which the holder shares, so it is
-  // dropped here, not revoked.
+  // dropped here, not revoked. Only a live install holds the team (as in
+  // workspaceForSlackTeam): one whose token is gone no longer blocks it.
   // ponytail: check-then-write, no unique index (no migration). A race leaves
   // the team held twice, which workspaceForSlackTeam routes nowhere; a partial
   // unique index on slack_team_id closes it.
   const [holder] = await db
     .select({ id: workspaces.id })
     .from(workspaces)
-    .where(and(eq(workspaces.slackTeamId, result.team.id), ne(workspaces.id, ws.id)))
+    .where(and(
+      eq(workspaces.slackTeamId, result.team.id),
+      isNotNull(workspaces.slackBotToken),
+      ne(workspaces.id, ws.id),
+    ))
     .limit(1);
   if (holder) {
     log.warn("slack team already connected to another workspace", { scope: "crumb/slack", teamId: result.team.id, workspaceId: ws.id });

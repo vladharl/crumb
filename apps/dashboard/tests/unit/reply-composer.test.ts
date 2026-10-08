@@ -2,12 +2,29 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { VENDOR_STATUSES } from "@crumb/ui";
 import type { NotifyPlan, NotifySkipReason } from "@/lib/notify/customer-plan";
 
-// The composer imports the thread's server actions (db, session); the copy and
-// timing helpers under test never call them.
-vi.mock("@/app/(app)/thread/[shortId]/actions", () => ({}));
+// useStatusMove runs under a one-render stand-in for React: state keeps its
+// first value, refs are plain objects, and effects are collected so a test can
+// mount and unmount them. The thread's server actions, router, toast and
+// confirm are fakes; only updateStatus is ever called.
+const h = vi.hoisted(() => ({
+  effects: [] as Array<() => unknown>,
+  updateStatus: vi.fn(async (_input: { itemShortId: string; status: string; reason?: string }) => ({ ok: true, emailed: true })),
+  toast: { show: vi.fn((_opts: { message: string; action?: { onClick: () => void } }) => 7), dismiss: vi.fn((_id: number) => {}) },
+}));
+vi.mock("react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("react")>()),
+  useState: (init: unknown) => [typeof init === "function" ? init() : init, () => {}],
+  useRef: (current: unknown) => ({ current }),
+  useEffect: (fn: () => unknown) => { h.effects.push(fn); },
+}));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
+vi.mock("@/components/toast", () => ({ useToast: () => h.toast }));
+vi.mock("@/components/confirm", () => ({ useConfirm: () => async () => true }));
+vi.mock("@/app/(app)/thread/[shortId]/actions", () => ({ updateStatus: h.updateStatus }));
 
 import {
-  firstName, noEmailNote, replyNote, replySentMessage, sendAfterDelay, statusMovedMessage, statusWillEmail,
+  STATUS_EMAIL_DELAY_MS, cancelWaitingMove, firstName, modeForTabChange, noEmailNote, replyNote, replySentMessage,
+  sendAfterDelay, statusMovedMessage, statusWillEmail, useStatusMove,
 } from "@/components/ReplyComposer";
 
 const emails: NotifyPlan = { willEmail: true };
@@ -74,16 +91,42 @@ describe("statusWillEmail (which status rows say they email)", () => {
   });
 });
 
+describe("modeForTabChange (the composer follows the conversation's tab)", () => {
+  it("picks a note on Internal and a reply on Customer, only when the tab changes", () => {
+    expect(modeForTabChange("reply", "note", true)).toBe("note");
+    expect(modeForTabChange("note", "reply", true)).toBe("reply");
+    // No change (or the Trail, which has no composer): a hand-flipped switch stays.
+    expect(modeForTabChange("note", "note", true)).toBeNull();
+    expect(modeForTabChange("reply", undefined, true)).toBeNull();
+  });
+
+  it("keeps viewers on notes", () => {
+    expect(modeForTabChange("note", "reply", false)).toBe("note");
+  });
+});
+
+// A window/document stand-in that records listeners and can fire them.
+function eventTarget() {
+  const on = new Map<string, Set<() => void>>();
+  return {
+    visibilityState: "visible",
+    addEventListener: (type: string, fn: () => void) => { on.set(type, (on.get(type) ?? new Set()).add(fn)); },
+    removeEventListener: (type: string, fn: () => void) => { on.get(type)?.delete(fn); },
+    fire: (type: string) => { for (const fn of [...(on.get(type) ?? [])]) fn(); },
+    listening: () => [...on.values()].reduce((n, fns) => n + fns.size, 0),
+  };
+}
+
 describe("sendAfterDelay (status-email undo)", () => {
-  let guards: Set<(e: { preventDefault: () => void; returnValue?: unknown }) => void>;
+  let win: ReturnType<typeof eventTarget>;
+  let doc: ReturnType<typeof eventTarget>;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    guards = new Set();
-    vi.stubGlobal("window", {
-      addEventListener: (type: string, fn: never) => { if (type === "beforeunload") guards.add(fn); },
-      removeEventListener: (type: string, fn: never) => { if (type === "beforeunload") guards.delete(fn); },
-    });
+    win = eventTarget();
+    doc = eventTarget();
+    vi.stubGlobal("window", win);
+    vi.stubGlobal("document", doc);
   });
 
   afterEach(() => {
@@ -91,19 +134,16 @@ describe("sendAfterDelay (status-email undo)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sends once the delay ends, and asks before leaving the page until then", () => {
+  it("sends once the delay ends, then stops listening", () => {
     const send = vi.fn();
     const pending = sendAfterDelay(send, 6000);
-    expect(guards.size).toBe(1);
-    const e = { preventDefault: vi.fn(), returnValue: undefined as unknown };
-    [...guards][0]!(e);
-    expect(e.preventDefault).toHaveBeenCalled();
+    expect(win.listening() + doc.listening()).toBe(2);
 
     vi.advanceTimersByTime(5999);
     expect(send).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(guards.size).toBe(0);
+    expect(win.listening() + doc.listening()).toBe(0);
     expect(pending.undo()).toBe(false); // too late: it already went
   });
 
@@ -115,6 +155,91 @@ describe("sendAfterDelay (status-email undo)", () => {
     expect(pending.undo()).toBe(false);
     vi.advanceTimersByTime(60_000);
     expect(send).not.toHaveBeenCalled();
-    expect(guards.size).toBe(0);
+    expect(win.listening() + doc.listening()).toBe(0);
+  });
+
+  it("sends at once, and only once, when the page is hidden or left", () => {
+    const hidden = vi.fn();
+    sendAfterDelay(hidden, 6000);
+    doc.fire("visibilitychange"); // still visible: keeps waiting
+    expect(hidden).not.toHaveBeenCalled();
+    doc.visibilityState = "hidden";
+    doc.fire("visibilitychange");
+    expect(hidden).toHaveBeenCalledTimes(1);
+
+    const left = vi.fn();
+    const pending = sendAfterDelay(left, 6000);
+    win.fire("pagehide");
+    expect(left).toHaveBeenCalledTimes(1);
+    pending.flush();
+    vi.advanceTimersByTime(60_000);
+    expect(left).toHaveBeenCalledTimes(1);
+    expect(hidden).toHaveBeenCalledTimes(1);
+    expect(pending.undo()).toBe(false);
+  });
+});
+
+describe("useStatusMove (an emailing move waits behind Undo)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", eventTarget());
+    vi.stubGlobal("document", eventTarget());
+    h.effects.length = 0;
+    h.updateStatus.mockClear();
+    h.toast.show.mockClear();
+    h.toast.dismiss.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  // Renders the hook for FB-1 (open, its submitter gets status emails) and
+  // runs its effects, as mounting would.
+  function mount() {
+    const { move } = useStatusMove({ itemShortId: "FB-1", status: "open", first: "Maya", source: null, plan: emails });
+    const cleanups = h.effects.map(effect => effect());
+    return { move, unmount: () => { for (const c of cleanups) if (typeof c === "function") c(); } };
+  }
+  const committed = { itemShortId: "FB-1", status: "planned", reason: undefined };
+
+  it("commits once the undo window ends", async () => {
+    const m = mount();
+    await m.move("planned");
+    expect(h.updateStatus).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(STATUS_EMAIL_DELAY_MS);
+    expect(h.updateStatus).toHaveBeenCalledWith(committed);
+    m.unmount();
+    expect(h.updateStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("Undo inside the window sends nothing", async () => {
+    const m = mount();
+    await m.move("planned");
+    h.toast.show.mock.calls[0]![0].action!.onClick();
+    vi.advanceTimersByTime(60_000);
+    m.unmount();
+    expect(h.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it("commits at once when the composer's page unmounts, and ends the Undo", async () => {
+    const m = mount();
+    await m.move("planned");
+    m.unmount();
+    expect(h.updateStatus).toHaveBeenCalledWith(committed);
+    expect(h.toast.dismiss).toHaveBeenCalledWith(7);
+    vi.advanceTimersByTime(60_000);
+    expect(h.updateStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("never commits once another status change for the item has started", async () => {
+    const m = mount();
+    await m.move("planned");
+    cancelWaitingMove("FB-1");
+    expect(h.toast.dismiss).toHaveBeenCalledWith(7);
+    vi.advanceTimersByTime(60_000);
+    m.unmount();
+    expect(h.updateStatus).not.toHaveBeenCalled();
   });
 });
