@@ -276,7 +276,7 @@ Crumb prioritizes by the revenue behind a request, so every account carries an A
 - **HubSpot**: `HUBSPOT_CLIENT_ID` / `HUBSPOT_CLIENT_SECRET` (+ optional `HUBSPOT_ARR_PROPERTY` to preset the ARR property on self-host). Redirect URL `{dashboard origin}/api/integrations/hubspot/callback`.
 - **Salesforce**: `SALESFORCE_CLIENT_ID` / `SALESFORCE_CLIENT_SECRET` (+ `SALESFORCE_LOGIN_URL` for a sandbox / My Domain). Redirect URL `{dashboard origin}/api/integrations/salesforce/callback`.
 
-After connecting, an admin picks the CRM field that holds ARR (any number or currency field) on the integration's card. Nothing is assumed: the stock annual-revenue field is the customer company's own revenue, not what it pays you, so until a field is picked only account names sync. Line up fields under **Settings → Account mapping**. Connect-time sync and the **Sync now** button work immediately; to keep ARR fresh, hit `POST /api/v1/internal/crm-sync` on a schedule (header `X-Crumb-Sweep-Secret`, e.g. every 6h). ARR you set by hand is marked manual and is never overwritten by a sync unless you opt in.
+After connecting, an admin picks the CRM field that holds ARR (any number or currency field) on the integration's card. Nothing is assumed: the stock annual-revenue field is the customer company's own revenue, not what it pays you, so until a field is picked only account names sync. Line up fields under **Settings → Account mapping**. Connect-time sync and the **Sync now** button work immediately; to keep ARR fresh, hit `POST /api/v1/internal/crm-sync` on a schedule (header `X-Crumb-Sweep-Secret`, e.g. every 6h). ARR you set by hand is marked manual and is never overwritten by a sync.
 
 ### AI initiative clustering
 

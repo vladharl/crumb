@@ -206,7 +206,14 @@ export function ExternalTicketModal({
                   setProvider(v as Provider);
                   // A draft is written in the prior tracker's voice; drop it so
                   // it isn't mistaken for a suggestion for the new one, and
-                  // ignore one still on its way.
+                  // ignore one still on its way. Its text goes too: a Linear or
+                  // Jira draft ends with the customer's name and ARR, which must
+                  // not ride along into a GitHub issue (repos can be public).
+                  if (aiReason !== null) {
+                    setTitle(initialTitle);
+                    setBody(initialBody);
+                    setLabels("");
+                  }
                   draftRun.current++;
                   setAiPending(false);
                   setAiReason(null);

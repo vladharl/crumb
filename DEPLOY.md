@@ -21,7 +21,7 @@ SSH in, then (skip if you chose a Docker/Coolify template that already has it):
 ```bash
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER && newgrp docker   # run docker without sudo
-docker version && docker compose version          # sanity check
+docker version && docker compose version          # sanity check: Compose 2.24 or newer
 ```
 
 ## 3. Get the code
