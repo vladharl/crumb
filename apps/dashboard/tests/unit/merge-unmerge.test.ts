@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { db, accounts, accountUsers, items, replaySessions, statusEvents, workspaces, workspaceUsers } from "@crumb/db";
+import { db, accounts, accountUsers, dedupeSuggestions, items, replaySessions, statusEvents, workspaces, workspaceUsers } from "@crumb/db";
 
 // Unmerge undoes a merge: the item gets back the status it had before (from
 // its own history) and the replay sessions the merge moved to the canonical.
 // A canonical merged later brings its duplicates along, and unmerging it
-// brings them back with it.
+// brings them back with it. A merge accepts the duplicate suggestion that
+// proposed it, whichever way round it went.
 //
 // Against Postgres (DATABASE_URL, migrated via `pnpm db:migrate`). Skipped
 // locally when no database answers; CI has one, so there it fails instead.
@@ -151,5 +152,26 @@ describe.skipIf(!reachable && !process.env.CI)("unmerge undoes a merge", () => {
     expect(await unmergeItem("FB-1")).toMatchObject({ ok: true, carried: 0 });
     expect(await item("FB-3")).toMatchObject({ mergedIntoId: id["FB-4"] });
     expect(await item("FB-2")).toMatchObject({ mergedIntoId: id["FB-4"] });
+  });
+
+  it("accepts the suggestion behind a merge, also when the vendor swapped its direction", async () => {
+    const [pat] = await db.select({ id: accountUsers.id, accountId: accountUsers.accountId }).from(accountUsers)
+      .where(and(eq(accountUsers.workspaceId, wsId), eq(accountUsers.email, "pat@initech.test")));
+    const file = async (seq: number) => (await db.insert(items).values({
+      workspaceId: wsId, accountId: pat!.accountId, submitterId: pat!.id, seq, shortId: `FB-${seq}`, title: `Export ${seq}`, type: "idea",
+    }).returning({ id: items.id }))[0]!.id;
+    const [six, seven, eight] = [await file(6), await file(7), await file(8)];
+    // FB-6 was flagged as a duplicate of FB-7, and of FB-8.
+    const [ofSeven, ofEight] = await db.insert(dedupeSuggestions).values([
+      { itemId: six, candidateItemId: seven, similarity: 0.93 },
+      { itemId: six, candidateItemId: eight, similarity: 0.9 },
+    ]).returning({ id: dedupeSuggestions.id });
+    const statusOf = async (s: { id: string } | undefined) => (await db.select({ status: dedupeSuggestions.status })
+      .from(dedupeSuggestions).where(eq(dedupeSuggestions.id, s!.id)))[0]!.status;
+
+    // Swapped: FB-7 folds into FB-6. Only FB-8 is still a question.
+    expect(await mergeItems("FB-7", "FB-6")).toMatchObject({ ok: true });
+    expect(await statusOf(ofSeven)).toBe("accepted");
+    expect(await statusOf(ofEight)).toBe("pending");
   });
 });

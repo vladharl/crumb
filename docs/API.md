@@ -304,7 +304,7 @@ Response `201`:
 { "id": "c2d4…", "short_id": "FB-43", "status": "open", "created_at": "2026-01-04T10:00:00.000Z" }
 ```
 
-Errors: `400 invalid_json`, `invalid_type`, `missing_title`, `title_too_long`, `body_too_long`, `invalid_attachment_id`, `invalid_session_token`, the token errors, `429 rate_limited`.
+Errors: `400 invalid_json`, `invalid_type`, `missing_title`, `title_too_long`, `body_too_long`, `invalid_attachment_id`, `invalid_session_token`, `403 submitter_blocked` (your team marked this person's feedback as spam), the token errors, `429 rate_limited`.
 
 ### `GET /api/v1/items/{shortId}`
 
@@ -376,7 +376,7 @@ Response `201`:
 { "id": "7d3a…", "created_at": "2026-01-04T10:05:00.000Z" }
 ```
 
-Errors: `400 missing_body` (neither text nor attachments), `400 body_too_long`, `404 item_not_found`, `403 not_your_item`, the token errors, `429 rate_limited`.
+Errors: `400 missing_body` (neither text nor attachments), `400 body_too_long`, `404 item_not_found`, `403 not_your_item`, `403 submitter_blocked`, the token errors, `429 rate_limited`.
 
 ### `POST /api/v1/items/{shortId}/close`
 
