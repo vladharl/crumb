@@ -218,7 +218,7 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
       const projectKey = input.target ?? workspace.jiraDefaultProjectKey;
       if (!projectKey) return { ok: false, error: "no_project" };
       const issue = await Jira.createIssue(workspace, { projectKey, title, description });
-      ticket = { id: issue.key, uid: issue.id, url: issue.url, status: issue.statusName };
+      ticket = { id: issue.key, uid: issue.uid, url: issue.url, status: issue.statusName };
     } else if (input.provider === "github") {
       if (!workspace.githubAppInstallId) return { ok: false, error: "github_not_connected" };
       const repo = input.target ?? workspace.githubDefaultRepo;
@@ -723,11 +723,18 @@ export async function mergeItems(
     // Re-point replay sessions to the canonical item: the source's own and
     // the ones its duplicates brought to it.
     await tx.update(replaySessions).set({ itemId: target.id }).where(eq(replaySessions.itemId, source.id));
-    // Resolve any pending dedupe suggestion that proposed this merge.
+    // Resolve the source's pending dedupe suggestions, and the target's that
+    // proposed this merge the other way round (MergePanel can swap it).
     await tx
       .update(dedupeSuggestions)
       .set({ status: "accepted", decidedAt: new Date() })
-      .where(and(eq(dedupeSuggestions.itemId, source.id), eq(dedupeSuggestions.status, "pending")));
+      .where(and(
+        eq(dedupeSuggestions.status, "pending"),
+        or(
+          eq(dedupeSuggestions.itemId, source.id),
+          and(eq(dedupeSuggestions.itemId, target.id), eq(dedupeSuggestions.candidateItemId, source.id)),
+        ),
+      ));
     return moved;
   });
   // Already merged into this target (a repeated submit): nothing changed, so

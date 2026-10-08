@@ -256,7 +256,7 @@ export async function listProjectsWithToken(cloudId: string, accessToken: string
 }
 
 export type JiraIssueRef = {
-  id: string;
+  uid: string;             // issueUid: what the status webhook matches on
   key: string;             // "PROJ-123"
   url: string;
   title: string;
@@ -277,6 +277,15 @@ function bodyToAdf(body: string): unknown {
       content: line ? [{ type: "text", text: line }] : [],
     })),
   };
+}
+
+// How a linked issue is stored (items.external_ticket_uid) and matched: its
+// ARI, Atlassian's id for it across sites. The numeric id alone repeats, as
+// every site numbers from 10000, so a workspace that moved to another site
+// would see the new site's issues land on links made on the old one. The
+// cloud id, unlike the site URL, survives a site rename.
+export function issueUid(cloudId: string, issueId: string): string {
+  return `ari:cloud:jira:${cloudId}:issue/${issueId}`;
 }
 
 export async function createIssue(
@@ -308,7 +317,7 @@ export async function createIssue(
   const created = (await resp.json()) as { id: string; key: string; self: string };
   const url = workspace.jiraSiteUrl ? `${workspace.jiraSiteUrl}/browse/${created.key}` : created.self;
   return {
-    id: created.id,
+    uid: issueUid(t.cloudId, created.id),
     key: created.key,
     url,
     title: input.title,

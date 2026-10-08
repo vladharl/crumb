@@ -12,6 +12,7 @@ import { sign } from "@/lib/jwt";
 import { signReplyToken } from "@/lib/reply-token";
 import { buildInboxAddress } from "@/lib/inbound-address";
 import { POST as widgetPost } from "@/app/api/v1/items/route";
+import { POST as widgetReply } from "@/app/api/v1/items/[shortId]/route";
 import { POST as inboundReply } from "@/app/api/v1/inbound/reply/route";
 import { POST as inboundEmail } from "@/app/api/v1/inbound/email/route";
 
@@ -19,8 +20,9 @@ import { POST as inboundEmail } from "@/app/api/v1/inbound/email/route";
 // workspace go, and only for an admin; requests merged into a deleted one go
 // back to the status they had before the merge instead of reading Duplicate
 // of nothing; the bytes behind deleted files and recordings are dropped; and
-// spam blocks the submitter, whose next request is refused and whose emails
-// are accepted and dropped.
+// spam blocks the submitter (never a reserved .invalid placeholder), whose
+// next request and widget replies are refused and whose emails are accepted
+// and dropped.
 //
 // Runs against Postgres (DATABASE_URL, migrated via `pnpm db:migrate`).
 // Skipped locally when no database answers; CI has one, so there it fails.
@@ -138,7 +140,7 @@ describe.skipIf(!reachable && !process.env.CI)("Delete and Mark as spam", () => 
     expect(submitter!.blockedAt).toBeNull();
   });
 
-  it("marks as spam: blocks the submitter, refuses their next request and drops their emails", async () => {
+  it("marks as spam: blocks the submitter, refuses their next request and widget replies, and drops their emails", async () => {
     vi.stubEnv("CRUMB_INBOUND_SECRET", "inbound-test-secret");
     const a = await workspace();
     const admin = await a.member("admin");
@@ -168,6 +170,14 @@ describe.skipIf(!reachable && !process.env.CI)("Delete and Mark as spam", () => 
     }));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "submitter_blocked", message: "We can't accept feedback from you here." });
+    // So does a widget reply on a request they still have.
+    const reply = await widgetReply(new Request(`http://localhost/api/v1/items/${left.shortId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${jwt}` },
+      body: JSON.stringify({ body: "Buy now" }),
+    }), { params: { shortId: left.shortId } });
+    expect(reply.status).toBe(403);
+    expect(await reply.json()).toEqual({ error: "submitter_blocked" });
 
     // Their email reply and their forwarded email are accepted and dropped.
     const post = async (route: (req: Request) => Promise<Response>, body: object) => {
@@ -188,5 +198,22 @@ describe.skipIf(!reachable && !process.env.CI)("Delete and Mark as spam", () => 
     })).toEqual({ ok: true, accepted: false, reason: "blocked" });
     expect(await db.select({ id: replies.id }).from(replies).where(eq(replies.itemId, left.id))).toEqual([]);
     expect(await db.select({ id: inboundCaptures.id }).from(inboundCaptures).where(eq(inboundCaptures.workspaceId, a.id))).toEqual([]);
+  });
+
+  it("marks as spam without blocking a reserved .invalid placeholder, which stands for a teammate", async () => {
+    const a = await workspace();
+    const admin = await a.member("admin");
+    // A teammate's email-less Slack captures, their Install preview, and a real sender.
+    const slack = await a.person("slack-U0TEAM@slack.invalid");
+    const preview = await a.person(`preview+${admin}@${a.slug}.INVALID`);
+    const spammer = await a.person("spam@junk.test");
+    const junk = [await a.item(slack), await a.item(preview), await a.item(spammer)];
+
+    expect(await deleteItems(a.actor(admin, "admin"), { shortIds: junk.map(j => j.shortId), mode: "spam" }))
+      .toEqual({ ok: true, deleted: 3, restored: 0, blocked: 1 });
+    const people = await db.select({ id: accountUsers.id, blockedAt: accountUsers.blockedAt }).from(accountUsers)
+      .where(inArray(accountUsers.id, [slack, preview, spammer]));
+    expect(Object.fromEntries(people.map(p => [p.id, p.blockedAt !== null])))
+      .toEqual({ [slack]: false, [preview]: false, [spammer]: true });
   });
 });

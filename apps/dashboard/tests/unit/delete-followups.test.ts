@@ -1,12 +1,13 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomInt, randomUUID } from "node:crypto";
 import { eq, inArray, sql } from "drizzle-orm";
-import { db, accounts, accountUsers, items, replaySessions, workspaces, workspaceUsers } from "@crumb/db";
+import { db, accounts, accountUsers, items, replayChunks, replaySessions, workspaces, workspaceUsers } from "@crumb/db";
 import { signReplyToken } from "@/lib/reply-token";
 
 // Follow-ups to Delete and Mark as spam (audit #62): deleting a canonical
 // hands each merged request back the recordings its merge brought along, by
-// the attribution unmergeItem uses; an emailed reply to a deleted item is
+// the attribution unmergeItem uses, and deleting a merged request takes its
+// own off the canonical, bytes too; an emailed reply to a deleted item is
 // accepted and dropped (a 200, so the provider doesn't retry), also on Cloud,
 // where other workspaces have the same FB number; and an admin can take back
 // a block that outlived its Undo.
@@ -14,10 +15,10 @@ import { signReplyToken } from "@/lib/reply-token";
 // Against Postgres (DATABASE_URL, migrated via `pnpm db:migrate`). Skipped
 // locally when no database answers; CI has one, so there it fails instead.
 
-const h = vi.hoisted(() => ({ session: null as unknown }));
+const h = vi.hoisted(() => ({ session: null as unknown, dropped: [] as string[] }));
 vi.mock("@/lib/storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/storage")>()),
-  deleteBytes: async () => {},
+  deleteBytes: async (key: string) => { h.dropped.push(key); },
 }));
 vi.mock("@/lib/server", () => ({ getActiveSession: async () => h.session }));
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
@@ -92,6 +93,43 @@ describe.skipIf(!reachable && !process.env.CI)("Delete and Mark as spam follow-u
       [sessionOf.repeat!]: repeat.id,
       [sessionOf.lee2!]: lee2.id,
     });
+  });
+
+  it("takes a deleted duplicate's own recordings off its canonical, bytes too", async () => {
+    const a = await workspace();
+    const pat = await a.person("Pat");
+    const lee = await a.person("Lee");
+    // Pat's request, and Lee's a day later, merged into it. Each came from a
+    // recording that started an hour before; the merge moved Lee's onto Pat's.
+    const day = 86_400_000;
+    const t0 = Date.now() - 10 * day;
+    const base = randomInt(1_000_000, 900_000_000);
+    const file = async (submitterId: string, d: number, mergedIntoId?: string) => (await db.insert(items).values({
+      workspaceId: a.id, accountId: a.accountId, submitterId, seq: base + d, shortId: `FB-${base + d}`, title: "Export", type: "idea",
+      createdAt: new Date(t0 + d * day), ...(mergedIntoId ? { status: "duplicate", mergedIntoId, mergedAt: new Date() } : {}),
+    }).returning({ id: items.id, shortId: items.shortId }))[0]!;
+    const canonical = await file(pat, 0);
+    const dup = await file(lee, 1, canonical.id);
+    const recording = async (accountUserId: string, d: number) => {
+      const [s] = await db.insert(replaySessions).values({
+        workspaceId: a.id, accountUserId, itemId: canonical.id, sessionToken: randomUUID().replace(/-/g, ""),
+        startedAt: new Date(t0 + d * day - 3_600_000),
+      }).returning({ id: replaySessions.id });
+      await db.insert(replayChunks).values({
+        sessionId: s!.id, sequence: 0, storageKey: `t/${s!.id}`, sizeBytes: 10, eventCount: 1, startedAt: new Date(), endedAt: new Date(),
+      });
+      return s!.id;
+    };
+    const patRecording = await recording(pat, 0);
+    const leeRecording = await recording(lee, 1);
+
+    expect(await deleteItems(a.actor, { shortIds: [dup.shortId], mode: "delete" }))
+      .toEqual({ ok: true, deleted: 1, restored: 0, blocked: 0 });
+    expect(await db.select({ id: replaySessions.id, itemId: replaySessions.itemId })
+      .from(replaySessions).where(eq(replaySessions.workspaceId, a.id)))
+      .toEqual([{ id: patRecording, itemId: canonical.id }]);
+    await vi.waitFor(() => expect(h.dropped).toContain(`t/${leeRecording}`));
+    expect(h.dropped).not.toContain(`t/${patRecording}`);
   });
 
   it("accepts and drops an emailed reply to a deleted item, also where another workspace has its number", async () => {
