@@ -7,6 +7,7 @@ import { failureForStatus } from "@/lib/integrations/feedback/types";
 import { gong } from "@/lib/integrations/feedback/gong";
 import { createInboundCapture } from "@/lib/captures";
 import { withAutopilotBudget } from "@/lib/feedback/ingest";
+import { upsertConnection } from "@/lib/integrations/feedback/connections";
 
 // Autopilot pulls fail loudly and recover on their own (audit #80): a refused
 // token is an error state, an outage keeps the cursor and retries with backoff,
@@ -123,6 +124,26 @@ describe.skipIf(!reachable && !process.env.CI)("feedback sync against Postgres",
     expect(await captures()).toHaveLength(1);
   });
 
+  it("a reconnect keeps a running sync's claim and drops the failure streak", async () => {
+    const ws = await newWorkspace();
+    const claimed = "2026-10-07T12:00:00.000Z";
+    await db.insert(integrationConnections).values({
+      workspaceId: ws.id, provider: "freshdesk", accessToken: "old",
+      config: { domain: "acme", syncingSince: claimed, failures: 3 }, syncCursor: "1700000000",
+    });
+    await upsertConnection(ws.id, "freshdesk", { accessToken: "new", config: { domain: "acme2" } }, "1800000000");
+    const [r] = await db.select().from(integrationConnections)
+      .where(and(eq(integrationConnections.workspaceId, ws.id), eq(integrationConnections.provider, "freshdesk")));
+    expect(r!.config).toEqual({ domain: "acme2", syncingSince: claimed });
+    expect(r!.syncCursor).toBe("1700000000"); // a reconnect keeps its place
+
+    // No claim to keep: the new config is stored as given.
+    await db.update(integrationConnections).set({ config: { domain: "acme2" } }).where(eq(integrationConnections.id, r!.id));
+    await upsertConnection(ws.id, "freshdesk", { accessToken: "newer", config: { domain: "acme3" } }, "1800000000");
+    const [r2] = await db.select().from(integrationConnections).where(eq(integrationConnections.id, r!.id));
+    expect(r2!.config).toEqual({ domain: "acme3" });
+  });
+
   it("meters Autopilot apart from the AI suite's budget", async () => {
     process.env.CRUMB_TIER = "cloud";
     process.env.CRUMB_AI_MONTHLY_CAP = "2";
@@ -157,5 +178,30 @@ describe("Gong", () => {
 
     respond(401); // a refused key is still an auth failure
     await expect(gong.listSince(conn, cursor)).rejects.toMatchObject({ reason: "auth" });
+  });
+
+  it("holds the cursor before a recent call whose transcript isn't ready, but not an old one", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-07T14:00:00Z"));
+    try {
+      const page = (calls: Array<{ id: string; started: string }>, transcribed: string[]) =>
+        vi.stubGlobal("fetch", vi.fn(async (url: URL | string) => String(url).endsWith("/v2/calls/transcript")
+          ? { ok: true, status: 200, json: async () => ({ callTranscripts: transcribed.map((callId) => ({ callId, transcript: [{ sentences: [{ text: "We need SSO." }] }] })) }) }
+          : { ok: true, status: 200, json: async () => ({ calls }) }));
+
+      // c2 (an hour old) has no transcript yet: c3 is captured, but the cursor
+      // stays just after c1 so the next run reads c2 again.
+      page([{ id: "c3", started: "2026-10-07T13:30:00Z" }, { id: "c1", started: "2026-10-07T12:30:00Z" }, { id: "c2", started: "2026-10-07T13:00:00Z" }], ["c1", "c3"]);
+      const held = await gong.listSince(conn, cursor);
+      expect(held.records.map((r) => r.externalId)).toEqual(["c1", "c3"]);
+      expect(held).toMatchObject({ nextCursor: "2026-10-07T12:30:01.000Z", done: true });
+
+      // The same gap two days later was never recorded: it no longer holds the cursor.
+      vi.setSystemTime(new Date("2026-10-09T14:00:00Z"));
+      const moved = await gong.listSince(conn, cursor);
+      expect(moved.nextCursor).toBe("2026-10-07T13:30:01.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

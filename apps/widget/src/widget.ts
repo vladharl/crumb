@@ -1074,7 +1074,14 @@ function init(config: Config) {
       adoptLegacyMarks(items);
       listState = { kind: "idle" };
     } catch (err) {
-      listState = failed(err);
+      // Trusted-email installs (no JWT) create the customer on their first
+      // submission, so until then the list is empty, not a sign-in failure.
+      if (!config.jwt && (err as ApiError).code === "user_not_found") {
+        items = [];
+        listState = { kind: "idle" };
+      } else {
+        listState = failed(err);
+      }
     }
     render();
   }
@@ -1302,15 +1309,17 @@ function init(config: Config) {
       // here doesn't imply a guaranteed link. Files ride on the first message.
       const data = await call("items", "POST", authBody({ type: v.type, title: v.title.trim(), body: v.body.trim(), session_token: replayToken(), context: submissionContext(), attachment_ids: pendingAttachments.map(a => a.id) }));
       const sid: string = data.short_id;
-      submitState = { kind: "idle" };
       pendingAttachments = [];
       attachmentError = null;
       editDrafts(d => { delete d.compose; });
       // Their own new request is not news to them.
       markThreadSeen(sid, 0);
       markStatusSeen(sid, "open");
-      await fetchList();
+      // Swap the form out before Send re-enables, so a second click can't
+      // post the same request again; the list refreshes behind the confirm.
+      submitState = { kind: "idle" };
       setView({ kind: "confirm", shortId: sid });
+      void fetchList();
     } catch (err) {
       submitState = failed(err);
       render();
@@ -1370,6 +1379,10 @@ function init(config: Config) {
       if (!config.jwt) {
         form.append("workspace_slug", config.workspace);
         form.append("account_user_email", config.userEmail);
+        // A first-time customer has no row yet: these let the server create
+        // it, as POST /items does, so compose can attach before the first send.
+        if (config.accountName) form.append("account_name", config.accountName);
+        if (config.userName) form.append("account_user_name", config.userName);
       }
       const data = await call("uploads", "POST", form);
       // The customer may have moved to another composer while it uploaded.
@@ -2425,6 +2438,9 @@ function init(config: Config) {
     channels = null;
     channelsState = { kind: "idle" };
     seenCache = statusSeenCache = null;
+    panel.innerHTML = ""; // nothing of theirs left in the page, open or closed
+    live.textContent = "";
+    clearTimeout(liveTimer);
   }
 
   function identify(opts?: { jwt?: unknown }) {
@@ -2456,7 +2472,7 @@ function init(config: Config) {
     pendingOpen = null;
     applyVisibility();
     closeApi();
-    panel.innerHTML = ""; // nothing of theirs left in the page
+    panel.innerHTML = ""; // and nothing re-rendered on the way out
   }
 
   const queued = window.crumb?.q ?? [];

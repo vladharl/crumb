@@ -15,6 +15,7 @@ import {
 
 const DEFAULT_BASE = "https://api.gong.io";
 const MAX_CALLS_PER_PAGE = 100;
+const TRANSCRIPT_GRACE_MS = 24 * 60 * 60 * 1000;
 
 type GongCall = { id: string; url?: string | null; started?: string | null; title?: string | null };
 type CallsResponse = { calls?: GongCall[]; records?: { totalRecords?: number; cursor?: string | null } | null };
@@ -90,8 +91,15 @@ export const gong: FeedbackAdapter = {
 
     const records: FeedbackRecord[] = [];
     let maxStarted = fromDateTime;
-    for (const c of calls) {
+    // A transcript can lag its call by hours. The cursor stops before the
+    // first recent call that has none yet, so the next run reads it again
+    // (calls already captured are skipped); a call older than the grace
+    // period with no transcript was never recorded and doesn't hold it back.
+    let held = false;
+    const sorted = [...calls].sort((a, b) => (a.started ?? "").localeCompare(b.started ?? ""));
+    for (const c of sorted) {
       const text = transcripts[c.id];
+      if (!text && c.started && Date.now() - new Date(c.started).getTime() < TRANSCRIPT_GRACE_MS) held = true;
       if (text) {
         records.push({
           externalId: c.id,
@@ -104,14 +112,17 @@ export const gong: FeedbackAdapter = {
           raw: { startedAt: c.started ?? null },
         });
       }
-      if (c.started && c.started > maxStarted) maxStarted = c.started;
+      if (!held && c.started && c.started > maxStarted) maxStarted = c.started;
     }
 
-    // Gong paginates with records.cursor; absent ⇒ caught up. We advance the time
-    // cursor regardless so the next sync resumes after the newest call seen.
+    // Gong paginates with records.cursor; absent ⇒ caught up. The time cursor
+    // moves to just after the newest call seen (or the last one before a held
+    // call); a held page ends the run so it isn't re-read in a loop.
     const more = !!callsData.records?.cursor;
-    const nextCursor = new Date(new Date(maxStarted).getTime() + 1000).toISOString();
-    return { records, nextCursor, done: !more };
+    const nextCursor = maxStarted === fromDateTime
+      ? cursor
+      : new Date(new Date(maxStarted).getTime() + 1000).toISOString();
+    return { records, nextCursor, done: held || !more };
   },
 
   // The calls list reports records.totalRecords for the whole window.

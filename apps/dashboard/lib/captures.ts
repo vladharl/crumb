@@ -102,7 +102,9 @@ export async function createInboundCapture(ws: Workspace, input: CaptureInput): 
     .returning({ id: inboundCaptures.id });
   if (!cap) return null;
 
-  void emitEvent(ws.id, {
+  // A capture that lands already decided (Autopilot accepted or dismissed it)
+  // never waits in the review queue, so it isn't announced as one.
+  if (status === "pending") void emitEvent(ws.id, {
     type: "capture.created",
     workspace: ws.slug,
     capture: { id: cap.id, source: input.source, subject: input.subject, status },
