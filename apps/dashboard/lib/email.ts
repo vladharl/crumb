@@ -108,16 +108,33 @@ export function supportContactEnabled(): boolean {
   return emailConfigured() && supportContactAddress() !== null;
 }
 
+// One send budget for the whole process, so the digest run, alert bursts and
+// announcement pools can't outrun the provider together: each real send starts
+// at the next free slot, CRUMB_EMAIL_SENDS_PER_SEC apart (blank or unset: 2, the
+// Resend default). The stdout provider prints, so it isn't paced.
+// ponytail: per process. Several dashboard processes on one provider account
+// each get the full rate; divide it between them, or share a Redis bucket.
+let nextSendAt = 0;
+
+function waitForSendSlot(): Promise<void> {
+  const perSec = Number(process.env.CRUMB_EMAIL_SENDS_PER_SEC?.trim() || 2);
+  const now = Date.now();
+  const at = Math.max(now, nextSendAt);
+  nextSendAt = at + 1000 / (perSec > 0 ? perSec : 2);
+  return new Promise(r => setTimeout(r, at - now));
+}
+
 // The one door every email leaves through. It refuses reserved-TLD
 // placeholders (RFC 2606 .invalid: Slack captures with no address get
 // x@slack.invalid, sample customers and the Install preview use them too), so
-// no path can send to one, and logs a provider failure.
+// no path can send to one, paces real sends, and logs a provider failure.
 async function deliver(kind: string, m: OutgoingEmail): Promise<SendResult> {
   const { provider } = selectProvider();
   if (/\.invalid\.?$/i.test(senderAddress(m.to))) {
     log.info("email not sent: placeholder address", { scope: "crumb/email", kind });
     return { ok: false, error: "invalid_recipient" };
   }
+  if (provider !== stdoutProvider) await waitForSendSlot();
   const result = await provider.send(m);
   if (!result.ok) {
     log.error(`${kind} send failed`, { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });

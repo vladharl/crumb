@@ -200,4 +200,40 @@ describe.skipIf(!reachable && !process.env.CI)("merged requests hear back", () =
     expect(mergeNoticeText("resolved")).toBe("We've combined this with an earlier request for the same thing.");
     expect(mergeNoticeText("planned")).toMatch(/hear from us here when it moves/);
   });
+
+  it("tells a duplicate moved along with its canonical once, in either order", async () => {
+    clear();
+    const accountOf = async (name: string) => (await db.select({ id: accounts.id }).from(accounts)
+      .where(and(eq(accounts.workspaceId, wsId), eq(accounts.name, name))))[0].id;
+    const [initech, globex] = [await accountOf("Initech"), await accountOf("Globex")];
+    const add = async (seq: number, extra: object) => (await db.insert(items).values({
+      workspaceId: wsId, seq, shortId: `FB-${seq}`, title: `Request ${seq}`, type: "idea", source: "widget",
+      accountId: initech, submitterId: people.pat, ...extra,
+    }).returning({ id: items.id }))[0].id;
+    const dupOf = (mergedIntoId: string) => ({ accountId: globex, submitterId: people.maya, status: "duplicate", mergedIntoId });
+    const ship = (shortId: string) => updateItemStatus(actor(), { itemShortId: shortId, status: "shipped", origin });
+
+    // The bulk bar (Merged on) moves both. The duplicate first: it now has
+    // its own status, so the canonical no longer fans out to it.
+    const first = await add(8, {});
+    await add(9, dupOf(first));
+    expect(await ship("FB-9")).toEqual({ ok: true, emailed: true, mergedEmailed: 0 });
+    expect(await mergedReach(wsId, first)).toBe(0);
+    expect(await ship("FB-8")).toEqual({ ok: true, emailed: true, mergedEmailed: 0 });
+
+    // The canonical first: its fan-out told Maya, so moving her request too
+    // doesn't say it again.
+    const second = await add(10, {});
+    await add(11, dupOf(second));
+    expect(await ship("FB-10")).toEqual({ ok: true, emailed: true, mergedEmailed: 1 });
+    expect(await ship("FB-11")).toEqual({ ok: true, emailed: false, mergedEmailed: 0 });
+
+    expect(h.status.map(m => [m.to, m.itemShortId])).toEqual([
+      ["maya@globex.test", "FB-9"],
+      ["pat@initech.test", "FB-8"],
+      ["pat@initech.test", "FB-10"],
+      ["maya@globex.test", "FB-11"],
+    ]);
+    expect(await ledger("FB-11")).toEqual([{ kind: "status", toStatus: "shipped" }]);
+  });
 });

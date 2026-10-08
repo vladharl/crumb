@@ -234,17 +234,16 @@ export async function POST(req: Request, { params }: { params: { shortId: string
     });
   }
 
-  // Notify the vendor team — best-effort, never blocks the response.
-  try {
-    await notifyVendorsOfCustomerReply({
-      itemId: item.id,
-      customerName: r.ctx.user.name,
-      replyBody: body,
-      dashboardOrigin: dashboardOriginFromHeaders(req),
-    });
-  } catch (err) {
+  // Notify the vendor team, best-effort and not awaited: lib/email paces
+  // sends, so a few admins' emails would hold the customer's reply open.
+  void notifyVendorsOfCustomerReply({
+    itemId: item.id,
+    customerName: r.ctx.user.name,
+    replyBody: body,
+    dashboardOrigin: dashboardOriginFromHeaders(req),
+  }).catch((err) => {
     log.error("widget-reply notify failed", { scope: "crumb/widget-reply", err });
-  }
+  });
 
   return cors(NextResponse.json({
     id: created!.id,

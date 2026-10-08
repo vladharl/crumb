@@ -172,6 +172,32 @@ describe.skipIf(!reachable && !process.env.CI)("vendor notifications", () => {
     expect(recipients()).toEqual(["bo@vendor.test", "quin@vendor.test"]);
   });
 
+  it("past 30 at once, a workspace's new-submission alerts wait for the digest", async () => {
+    // A flood through the public widget endpoint, in a workspace of its own.
+    const [flood] = await db.insert(workspaces)
+      .values({ slug: `alert-flood-${randomUUID().slice(0, 8)}`, name: "Flood test" })
+      .returning({ id: workspaces.id });
+    try {
+      await db.insert(workspaceUsers).values({ workspaceId: flood.id, email: "al@flood.test", name: "Al", initials: "A", role: "admin" });
+      const [acct] = await db.insert(accounts).values({ workspaceId: flood.id, name: "Spam Co" }).returning({ id: accounts.id });
+      const [bot] = await db.insert(accountUsers)
+        .values({ workspaceId: flood.id, accountId: acct.id, email: "bot@spam.test", name: "Bot", initials: "B" })
+        .returning({ id: accountUsers.id });
+      const [spam] = await db.insert(items)
+        .values({ workspaceId: flood.id, accountId: acct.id, submitterId: bot.id, seq: 1, shortId: "FB-1", title: "Spam", type: "bug" })
+        .returning({ id: items.id });
+      for (let i = 0; i < 31; i++) await notifyNewSubmission({ workspaceId: flood.id, itemId: spam.id });
+      expect(recipients()).toEqual(Array(30).fill("al@flood.test"));
+
+      // Other workspaces keep their own allowance.
+      await notifyNewSubmission({ workspaceId: ws, itemId: fb[1] });
+      expect(recipients()).toEqual(["ada@vendor.test", "bo@vendor.test", "quin@vendor.test"]);
+    } finally {
+      await db.delete(items).where(eq(items.workspaceId, flood.id));
+      await db.delete(workspaces).where(eq(workspaces.id, flood.id));
+    }
+  });
+
   it("an assignment tells the assignee only, and never about their own action", async () => {
     await notifyAssigned({ workspaceId: ws, itemId: fb[4], assigneeId: m.pia, actorWorkspaceUserId: m.ada });
     const [mail] = sent;
