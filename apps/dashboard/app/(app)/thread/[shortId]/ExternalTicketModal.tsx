@@ -239,6 +239,9 @@ export function ExternalTicketModal({
               rows={8}
               style={{ ...inputStyle, resize: "vertical", lineHeight: 1.55 }}
             />
+            {aiReason && provider !== "github" && (
+              <span className="text-xs muted">The draft ends with the customer&apos;s name and ARR. Remove that if people outside your team can read {providerLabel}.</span>
+            )}
           </div>
 
           <div className="col gap-1">
