@@ -210,7 +210,7 @@ CRUMB_RATE_LIMIT_CAPACITY=60          # tokens per bucket
 CRUMB_RATE_LIMIT_REFILL_PER_SEC=1     # tokens per second
 ```
 
-Exhausted buckets return `429 rate_limited` with a `Retry-After` header. The limiter is process-local — fine for single-VM self-host. Cloud multi-instance swaps in a Redis-backed implementation behind the same helper.
+Exhausted buckets return `429 rate_limited` with a `Retry-After` header. Sign-in links are limited separately: 20 an hour per IP and 5 an hour per address; a limited request still looks sent (so nobody can probe for accounts) and leaves a `sign-in link rate limited` log line. An IPv6 caller counts as its /64 network. The limiter is process-local — fine for single-VM self-host. Cloud multi-instance swaps in a Redis-backed implementation behind the same helper.
 
 The source IP is read from `CF-Connecting-IP`, then `X-Real-IP`, then the last `X-Forwarded-For` hop, and the first two are trusted as sent. So keep the app reachable only through the Cloudflare Tunnel (leave `DASHBOARD_BIND` at `127.0.0.1`). Behind your own proxy instead, have it overwrite both headers with the client address (nginx: `proxy_set_header X-Real-IP $remote_addr;` and `proxy_set_header CF-Connecting-IP $remote_addr;`), or a client can claim a fresh IP on every request.
 

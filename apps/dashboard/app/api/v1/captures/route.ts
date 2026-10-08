@@ -59,5 +59,8 @@ export async function POST(req: Request) {
     rawMeta: { via: "captures-api" },
   });
 
+  // No external id here, so null can only mean the sender was marked as spam:
+  // accepted and dropped, like the inbound email routes.
+  if (captureId === null) return NextResponse.json({ ok: true, accepted: false, reason: "blocked" });
   return NextResponse.json({ ok: true, captureId });
 }

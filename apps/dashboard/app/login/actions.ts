@@ -41,7 +41,11 @@ export async function requestMagicLink(formData: FormData): Promise<LoginResult>
   const limited =
     (ip !== "anon" && !(await checkRateLimitAsync(`login:ip:${ip}`, { capacity: 20, refillPerSec: 20 / HOUR })).ok) ||
     !(await checkRateLimitAsync(`login:to:${email}`, { capacity: 5, refillPerSec: 5 / HOUR })).ok;
-  if (limited) return { ok: true };
+  if (limited) {
+    // Looks sent on purpose (no account probing); the log is the only trace.
+    log.info("sign-in link rate limited", { scope: "crumb/login" });
+    return { ok: true };
+  }
 
   await issueMagicLink(email, origin, safeNextPath(formData.get("next")));
   return { ok: true };

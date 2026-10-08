@@ -29,7 +29,10 @@ import { isCloud } from "@/lib/tier";
 export function githubConfigured(): boolean {
   return !!process.env.GITHUB_APP_ID?.trim()
     && !!process.env.GITHUB_APP_PRIVATE_KEY?.trim()
-    && !!process.env.GITHUB_APP_SLUG?.trim();
+    && !!process.env.GITHUB_APP_SLUG?.trim()
+    // Cloud binds an install only after the installer's OAuth proves they own
+    // it, so without the client credentials a Connect could never finish.
+    && (!isCloud() || (!!process.env.GITHUB_APP_CLIENT_ID?.trim() && !!process.env.GITHUB_APP_CLIENT_SECRET?.trim()));
 }
 
 export const GITHUB_APP_ID = () => process.env.GITHUB_APP_ID?.trim() ?? null;

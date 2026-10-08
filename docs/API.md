@@ -591,7 +591,7 @@ Errors: `400 invalid_json`, `bad_sequence`, `missing_workspace_slug`, `missing_t
 
 ### `POST /api/v1/captures`
 
-Capture feedback from a browser or email extension into your **Captures** queue, where your team confirms it onto an account or discards it. It doesn't create an item by itself.
+Capture feedback from a browser or email extension into the pending captures at the top of your Inbox, where your team confirms it onto an account or discards it. It doesn't create an item by itself.
 
 Auth is the workspace's capture address rather than a customer token. With `CRUMB_INBOUND_DOMAIN` and `CRUMB_INBOUND_SECRET` set, **Settings → Install** shows an address `inbox+<slug>.<token>@<domain>`; send its `<slug>` and `<token>` parts.
 
@@ -610,7 +610,7 @@ Request:
 
 `subject` (up to 300 characters) or `body` (up to 20,000) is required.
 
-Response `200`: `{ "ok": true, "captureId": "a91f…" }`
+Response `200`: `{ "ok": true, "captureId": "a91f…" }`. When the sender was marked as spam the capture is dropped and the answer is still `200`: `{ "ok": true, "accepted": false, "reason": "blocked" }`.
 
 Errors: `400 bad_json`, `400 empty`, `401 unauthorized` (wrong token, or `CRUMB_INBOUND_SECRET` is unset), `404 workspace_not_found`, `429 rate_limited`. Not CORS-enabled: call it from an extension or a server.
 

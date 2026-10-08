@@ -110,8 +110,8 @@ alive), and the shared `JIRA_WEBHOOK_SECRET` webhook is refused. Jira connection
 made before this must reconnect once from Settings → Integrations to keep status
 sync. Self-host is unchanged: the manual webhook signed with `JIRA_WEBHOOK_SECRET`.
 
-**Enable @mention request sizing.** To let people @mention Crumb for an in-thread
-sizing reply, the Slack app needs the `app_mentions:read` bot scope and Event
+**Enable @mention request sizing.** To let people @mention Crumb for a private
+sizing reply (in the thread when the mention is in one), the Slack app needs the `app_mentions:read` bot scope and Event
 Subscriptions turned on: set the **Request URL** to
 `https://crumb.example.com/api/integrations/slack/events` (Slack sends a
 one-time `challenge` on save and the endpoint answers it), then subscribe to the
