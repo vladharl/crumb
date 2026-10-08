@@ -164,6 +164,11 @@ export const workspaces = pgTable("workspaces", {
   // and only injects the rrweb recorder bundle when true.
   sessionRecordEnabled: boolean("session_record_enabled").notNull().default(false),
 
+  // ── Public pages ─────────────────────────────────────────────
+  // Admin opt-in for the public /<slug>/roadmap and /<slug>/changelog pages.
+  // Off by default: nothing is served publicly until an admin turns it on.
+  publicPagesEnabled: boolean("public_pages_enabled").notNull().default(false),
+
   // ── Stripe (Cloud only; self-host leaves these NULL) ─────────
   // The Stripe webhook handler keeps these in sync from Stripe's
   // subscription events; entitlement helpers in lib/tier read them. plan_id
@@ -1127,6 +1132,37 @@ export const roadmapFollows = pgTable("roadmap_follows", {
 }));
 
 export type RoadmapFollow = typeof roadmapFollows.$inferSelect;
+
+// ─── public follows (anonymous email follows from the public pages) ────
+// A visitor follows one public initiative from /<slug>/roadmap, or all
+// updates (initiative_id null) from /<slug>/changelog. Double opt-in: mail
+// goes only to rows with confirmed_at set and unsubscribed_at null. The
+// emailed link carries a random token; only its sha256 is stored.
+export const publicFollows = pgTable("public_follows", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  // null = all updates (the changelog page's follow).
+  initiativeId: uuid("initiative_id").references(() => initiatives.id, { onDelete: "cascade" }),
+  email: text("email").notNull(), // stored lowercased
+  tokenHash: text("token_hash").notNull().unique(), // sha256 hex of the confirm/unsubscribe token
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  unsubscribedAt: timestamp("unsubscribed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  // One follow per (workspace, scope, email). A plain unique treats NULLs as
+  // distinct, so the all-updates scope folds to the nil uuid; lower() keeps it
+  // per address even if a caller skips lowercasing. An expression index can't
+  // be a typed onConflictDoUpdate target (drizzle 0.36): use
+  // onConflictDoNothing() and follow up with an update.
+  uniqScopeEmail: uniqueIndex("public_follows_scope_email_uniq").on(
+    t.workspaceId,
+    sql`coalesce(${t.initiativeId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+    sql`lower(${t.email})`,
+  ),
+  byInitiative: index("public_follows_initiative_idx").on(t.initiativeId),
+}));
+
+export type PublicFollow = typeof publicFollows.$inferSelect;
 
 // ─── feedback answers ("Ask your feedback"; feature 5) ───────
 // History of natural-language Q&A over the corpus, with the item ids the

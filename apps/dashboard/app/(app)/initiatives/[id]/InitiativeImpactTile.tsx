@@ -4,6 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
 import { usageAnalyticsAllowed } from "@/lib/entitlements";
 import { adoptionAround } from "@/lib/usage/signals";
+import { shippedAtSql } from "@/lib/roadmap";
 
 // Quantitative "did it work?" for a shipped initiative — closes crumb's loop.
 // Compares adoption of the initiative's tracked events in equal windows
@@ -24,21 +25,20 @@ export async function InitiativeImpactTile({ id }: { id: string }) {
 
   const [ini] = await db
     .select({
-      status: initiatives.status,
       trackedEventNames: initiatives.trackedEventNames,
-      // Best-available ship timestamp: when the initiative was last changed
-      // (presumed → shipped). Initiatives have no dedicated shipped_at column.
-      updatedAt: initiatives.updatedAt,
+      // When it shipped (null until then), as the board and public roadmap
+      // date it, so naming tracked events afterwards doesn't move the split.
+      shippedAt: shippedAtSql(),
     })
     .from(initiatives)
     .where(and(eq(initiatives.workspaceId, workspace.id), eq(initiatives.id, id)))
     .limit(1);
 
-  if (!ini || ini.status !== "shipped") return null;
+  if (!ini?.shippedAt) return null;
   const names = ini.trackedEventNames ?? [];
   if (names.length === 0) return null;
 
-  const pivot = ini.updatedAt;
+  const pivot = ini.shippedAt;
   const adoption = await adoptionAround({ workspaceId: workspace.id, eventNames: names, pivot, windowDays: 30 });
 
   // Sentiment of this initiative's feedback, 30d before vs 30d after the ship.

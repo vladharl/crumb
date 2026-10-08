@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, gt } from "drizzle-orm";
 import { db, replaySessions, replayChunks, items } from "@crumb/db";
 import { getBytes } from "@/lib/storage";
 
@@ -130,6 +130,9 @@ export async function getReplayForItem(
     .where(and(
       eq(items.shortId, itemShortId),
       eq(items.workspaceId, workspaceId),
+      // A submit links its recording before the first chunk may have landed:
+      // nothing to watch until one does.
+      gt(replaySessions.eventCount, 0),
     ))
     .limit(1);
   if (!row) return null;

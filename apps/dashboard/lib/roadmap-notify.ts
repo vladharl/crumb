@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db, roadmapFollows, accountUsers, type Workspace } from "@crumb/db";
 import { sendRoadmapUpdateNotification } from "./email";
 import { notifyAccountChannels } from "./notify/account-channel";
+import { notifyPublicFollowers } from "./public-follows";
 import { customerNotifyPlan, type NotifyPlan } from "./notify/customer-plan";
 import { WIDGET_SOURCE } from "./feedback/source";
 import { log } from "./log";
@@ -27,14 +28,18 @@ export function roadmapEmailPlan(
 }
 
 // Email everyone following an initiative that it changed on the public
-// roadmap. Best-effort, fire-and-forget — never blocks the vendor's edit.
+// roadmap: customers who follow it in the widget, then visitors who follow it
+// from the public roadmap page, minus any address the first pass emailed, so
+// nobody hears about one move twice. Best-effort, fire-and-forget — never
+// blocks the vendor's edit.
 export async function notifyRoadmapFollowers(
-  workspace: Pick<Workspace, "name" | "productUrl" | "accent">,
+  workspace: Pick<Workspace, "id" | "slug" | "name" | "productUrl" | "accent">,
   initiativeId: string,
   initiativeName: string,
   change: string,
   origin: string | null,
 ): Promise<void> {
+  const told = new Set<string>();
   try {
     const followers = await db
       .select({
@@ -50,7 +55,7 @@ export async function notifyRoadmapFollowers(
       .where(eq(roadmapFollows.initiativeId, initiativeId));
     // Honor each follower's prefs (muted, roadmap updates off, no real address).
     const recipients = followers.filter(f => roadmapEmailPlan(f).willEmail);
-    if (recipients.length === 0) return;
+    for (const f of recipients) told.add(f.email.trim().toLowerCase());
     await Promise.all(recipients.map(f => sendRoadmapUpdateNotification({
       to: f.email,
       workspaceName: workspace.name,
@@ -74,4 +79,15 @@ export async function notifyRoadmapFollowers(
   } catch (err) {
     log.error("roadmap follower notify failed", { scope: "crumb/roadmap", err });
   }
+
+  // Never throws.
+  await notifyPublicFollowers({
+    workspaceId: workspace.id,
+    initiativeId,
+    kind: "roadmap_move",
+    title: initiativeName,
+    summary: change,
+    url: origin ? `${origin}/${workspace.slug}/roadmap` : null,
+    skip: told,
+  });
 }

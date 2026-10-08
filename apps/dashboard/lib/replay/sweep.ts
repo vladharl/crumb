@@ -1,5 +1,5 @@
 import "server-only";
-import { and, isNull, lt, eq, inArray } from "drizzle-orm";
+import { and, isNull, lt, eq, inArray, or } from "drizzle-orm";
 import { db, replaySessions, replayChunks, workspaces } from "@crumb/db";
 import { deleteBytes } from "@/lib/storage";
 import { workspacePlan, type Plan } from "@/lib/entitlements";
@@ -51,7 +51,9 @@ export async function sweepOrphanSessions(opts: SweepOptions = {}): Promise<Swee
     .select({ id: replaySessions.id })
     .from(replaySessions)
     .where(and(
-      isNull(replaySessions.itemId),
+      // Never linked, or linked at submit but no chunk ever arrived (the
+      // recorder was blocked or the tab closed first): nothing to replay.
+      or(isNull(replaySessions.itemId), eq(replaySessions.eventCount, 0)),
       lt(replaySessions.startedAt, cutoff),
     ))
     .limit(limit);

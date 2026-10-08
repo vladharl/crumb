@@ -21,6 +21,7 @@ export const en = {
   // header, tabs, footer
   yourFeedback: "Your feedback",
   roadmap: "Roadmap",
+  whatsNew: "What’s new",
   admin: "Admin",
   back: "Back",
   close: "Close",
@@ -64,6 +65,7 @@ export const en = {
   recordConsent: "Record my session to help us reproduce this",
   recordBodies: "Captures this page as you see it, your clicks and scrolling, and the page's network requests including their contents, with secret-looking values such as passwords and tokens removed.",
   recordNoBodies: "Captures this page as you see it, your clicks and scrolling, and the address, status and timing of the page's network requests, but not their contents.",
+  recordWindow: "It includes the few minutes before you turn this on, which never leave your device unless you do.",
   recordMasking: "Text you type into standard form fields is masked; rich-text editors may be recorded. You can turn this off anytime.",
   postingAs: (who: string, account: string) => `Posting as ${who} · ${account}`,
   send: "Send",
@@ -90,12 +92,13 @@ export const en = {
   yourReply: "Your reply",
   replyHint: "Reply…",
 
-  // roadmap
-  columns: { now: "Now", next: "Next", later: "Later" },
+  // roadmap and what's new
+  columns: { now: "Now", next: "Next", later: "Later", shipped: "Recently shipped" },
   follow: "Follow",
   following: "Following",
   roadmapEmpty: "Nothing here yet",
   roadmapEmptyBody: "This team hasn't shared a public roadmap yet. Check back soon.",
+  newEntry: "New",
 
   // email settings
   notifications: "Notifications",

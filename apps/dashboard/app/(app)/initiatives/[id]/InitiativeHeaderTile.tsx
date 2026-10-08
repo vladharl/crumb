@@ -8,6 +8,7 @@ import { notMergedSql } from "@/lib/loop-sql";
 import { statusMix } from "@/lib/insights/status-mix";
 import { usageAnalyticsAllowed } from "@/lib/entitlements";
 import { knownEventNames } from "@/lib/usage/signals";
+import { followerCountSql } from "@/lib/roadmap";
 import { InitiativeStatusPill } from "../InitiativeChip";
 import type { BoardCol } from "../InitiativesBoard";
 import { EditPanel } from "./EditPanel";
@@ -28,11 +29,8 @@ async function loadHeader(workspaceId: string, id: string) {
       trackedEventNames: initiatives.trackedEventNames,
       roadmapColumn: initiatives.roadmapColumn,
       isPublic: initiatives.isPublic,
-      // Fully-qualified correlation, as on the board (a raw ${initiatives.id}
-      // renders unqualified and would match roadmap_follows.id).
-      followers: sql<number>`(
-        SELECT COUNT(*)::int FROM roadmap_follows WHERE roadmap_follows.initiative_id = initiatives.id
-      )`,
+      // Everyone a public move emails, as on the board.
+      followers: followerCountSql(),
       ownerName: workspaceUsers.name,
       ownerInitials: workspaceUsers.initials,
     })

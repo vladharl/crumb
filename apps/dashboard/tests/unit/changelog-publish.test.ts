@@ -60,7 +60,7 @@ describe.skipIf(!reachable && !process.env.CI)("publishChangelogEntry", () => {
 
     // stdout never counts as delivered, so nothing is reported sent.
     expect(await publishChangelogEntry(ws!, entry!.id)).toEqual({
-      ok: true, announced: true, delivered: 0, failed: 0, emailOn: false, marked: 0,
+      ok: true, announced: true, delivered: 0, failed: 0, followers: 0, emailOn: false, marked: 0,
       skipped: { count: 0, sources: [], noEmail: false, muted: false },
     });
     const mail = Object.fromEntries(sent.map(m => [m.to, m]));

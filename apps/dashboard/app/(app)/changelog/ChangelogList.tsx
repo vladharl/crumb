@@ -14,8 +14,9 @@ export type ChangelogRow = {
   body: string;
   isPublic: boolean;
   publishedAt: string | null;
-  // An initiative's draft: who publishing it would email. Null for entries
-  // written by hand (they email no one) and once published.
+  // A draft's audience: who publishing it would email (an initiative's
+  // askers and followers, and the public followers). Null when publishing
+  // emails no one, and once published.
   audience: Audience | null;
 };
 
@@ -125,8 +126,8 @@ function EntryCard({ entry, canManage }: { entry: ChangelogRow; canManage: boole
           </div>
           {canManage && (
             <div className="row gap-2 center">
-              {/* A hand-written entry is only published; an initiative's
-                  draft is announced from the controls below. */}
+              {/* An entry that emails no one is only published; the rest
+                  are announced from the controls below. */}
               {!isPublished && !entry.audience && (
                 <button
                   type="button"

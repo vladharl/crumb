@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { and, asc, eq, isNotNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, initiatives, roadmapFollows } from "@crumb/db";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
+import { listPublicRoadmap, onPublicRoadmapSql, type RoadmapLane } from "@/lib/roadmap";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,7 +16,8 @@ export function OPTIONS() {
   return preflight();
 }
 
-// GET /api/v1/roadmap[?workspace&email] → public initiatives grouped Now/Next/Later.
+// GET /api/v1/roadmap[?workspace&email] → public initiatives grouped Now/Next/Later,
+// plus the most recently shipped.
 export async function GET(req: Request) {
   const rl = await checkRateLimitAsync(`roadmap:${callerIpFromRequest(req)}`, { capacity: 120, refillPerSec: 2 });
   if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds);
@@ -27,39 +29,25 @@ export async function GET(req: Request) {
   });
   if (!r.ok) return fail(r.status, r.error);
 
-  const rows = await db
-    .select({
-      id: initiatives.id,
-      shortId: initiatives.shortId,
-      name: initiatives.name,
-      description: initiatives.description,
-      status: initiatives.status,
-      column: initiatives.roadmapColumn,
-    })
-    .from(initiatives)
-    .where(and(
-      eq(initiatives.workspaceId, r.ctx.workspace.id),
-      eq(initiatives.isPublic, true),
-      isNotNull(initiatives.roadmapColumn),
-    ))
-    .orderBy(asc(initiatives.seq));
-
-  const follows = await db
-    .select({ initiativeId: roadmapFollows.initiativeId })
-    .from(roadmapFollows)
-    .where(eq(roadmapFollows.accountUserId, r.ctx.user.id));
+  const [entries, follows] = await Promise.all([
+    listPublicRoadmap(r.ctx.workspace.id),
+    db
+      .select({ initiativeId: roadmapFollows.initiativeId })
+      .from(roadmapFollows)
+      .where(eq(roadmapFollows.accountUserId, r.ctx.user.id)),
+  ]);
   const followed = new Set(follows.map(f => f.initiativeId));
 
-  const columns: Record<"now" | "next" | "later", unknown[]> = { now: [], next: [], later: [] };
-  for (const it of rows) {
-    const col = it.column as "now" | "next" | "later" | null;
-    if (!col || !(col in columns)) continue;
-    columns[col].push({
+  const columns: Record<RoadmapLane, unknown[]> = { now: [], next: [], later: [], shipped: [] };
+  for (const it of entries) {
+    columns[it.lane].push({
       id: it.id,
       short_id: it.shortId,
       name: it.name,
       description: it.description,
       status: it.status,
+      lane: it.lane,
+      shipped_at: it.shippedAt,
       following: followed.has(it.id),
     });
   }
@@ -88,14 +76,14 @@ export async function POST(req: Request) {
   });
   if (!r.ok) return fail(r.status, r.error);
 
-  // The initiative must belong to this workspace and be public.
+  // The initiative must belong to this workspace and be on its public roadmap.
   const [init] = await db
     .select({ id: initiatives.id })
     .from(initiatives)
     .where(and(
       eq(initiatives.id, body.initiative_id),
       eq(initiatives.workspaceId, r.ctx.workspace.id),
-      eq(initiatives.isPublic, true),
+      onPublicRoadmapSql(),
     ))
     .limit(1);
   if (!init) return fail(404, "initiative_not_found");

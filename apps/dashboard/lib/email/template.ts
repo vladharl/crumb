@@ -880,6 +880,104 @@ export function renderShippedAnnouncementText(v: ShippedAnnouncementVars): strin
   ].filter(Boolean).join("\n\n");
 }
 
+// ─── Public follows (an address typed on the public pages) ──
+// Visitors on /<slug>/roadmap and /<slug>/changelog follow by email, with no
+// customer account behind them (lib/public-follows). Double opt-in: the
+// confirmation carries no unsubscribe link (nothing is subscribed until they
+// click); every update does.
+
+export type PublicFollowConfirmVars = {
+  workspaceName: string;
+  /** The initiative followed; null for every update (the changelog's form). */
+  initiativeName: string | null;
+  link: string;
+  ttlDays: number;
+  /** The workspace's Branding dot color (#RRGGBB). */
+  accent?: string | null;
+};
+
+const publicFollowAsk = (v: PublicFollowConfirmVars) =>
+  `Confirm to get an email when ${v.initiativeName ? `${v.initiativeName} moves on ${v.workspaceName}'s roadmap` : `${v.workspaceName} posts an update`}. The link expires in ${ttlPhrase(v.ttlDays * 24 * 60)}.`;
+const publicFollowAskReason = (ws: string) =>
+  `You're getting this because someone entered this address on ${ws}'s public pages. Not you? Ignore it and nothing more is sent.`;
+
+export function renderPublicFollowConfirmHtml(v: PublicFollowConfirmVars): string {
+  return customerShell({
+    workspaceName: v.workspaceName,
+    accent: v.accent,
+    reason: publicFollowAskReason(v.workspaceName),
+    rows: `
+          <tr><td style="padding:0 8px">
+            <h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">Confirm your email</h1>
+            <p style="margin:0;font-size:14px;color:#4A2E1F">${escapeHtml(publicFollowAsk(v))}</p>
+          </td></tr>
+          <tr><td style="padding:24px 8px 0">
+            ${buttonHtml(v.link, "Confirm")}
+          </td></tr>`,
+  });
+}
+
+export function renderPublicFollowConfirmText(v: PublicFollowConfirmVars): string {
+  return [
+    "Confirm your email",
+    publicFollowAsk(v),
+    `Confirm: ${v.link}`,
+    customerFooterText(publicFollowAskReason(v.workspaceName)),
+  ].join("\n\n");
+}
+
+export type PublicFollowUpdateVars = {
+  workspaceName: string;
+  kind: "roadmap_move" | "changelog";
+  /** The initiative's name (a move) or the entry's title (a changelog post). */
+  title: string;
+  /** What changed ("moved to Now"), or the entry's text. */
+  summary: string;
+  /** The public roadmap or changelog page. */
+  url: string | null;
+  /** Following one initiative, or every update: picks the footer line. */
+  scope: "initiative" | "all";
+  unsubscribeUrl: string;
+  /** The workspace's Branding dot color (#RRGGBB). */
+  accent?: string | null;
+};
+
+const publicUpdateReason = (v: PublicFollowUpdateVars) => v.scope === "initiative"
+  ? sentFor.follow(v.workspaceName)
+  : `You're getting this because you asked ${v.workspaceName} for updates.`;
+const publicUpdateCta = (v: PublicFollowUpdateVars) => (v.kind === "roadmap_move" ? "View the roadmap" : "Read the changelog");
+
+export function renderPublicFollowUpdateHtml(v: PublicFollowUpdateVars): string {
+  const lead = v.kind === "roadmap_move"
+    ? `<h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">A roadmap item you follow was updated</h1>
+            <p style="margin:0;font-size:14px;color:#4A2E1F"><strong style="font-weight:600">${escapeHtml(v.title)}</strong>: ${escapeHtml(v.summary)}.</p>`
+    : `<h1 style="margin:0 0 12px;font-size:18px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(v.title)}</h1>
+            ${v.summary.trim() ? paragraphsToHtml(v.summary.trim()) : ""}`;
+  return customerShell({
+    workspaceName: v.workspaceName,
+    accent: v.accent,
+    reason: publicUpdateReason(v),
+    unsubscribeUrl: v.unsubscribeUrl,
+    rows: `
+          <tr><td style="padding:0 8px">
+            ${lead}
+          </td></tr>${v.url ? `
+          <tr><td style="padding:24px 8px 0">
+            ${buttonHtml(v.url, publicUpdateCta(v))}
+          </td></tr>` : ""}`,
+  });
+}
+
+export function renderPublicFollowUpdateText(v: PublicFollowUpdateVars): string {
+  const move = v.kind === "roadmap_move";
+  return [
+    move ? "A roadmap item you follow was updated" : v.title,
+    move ? `${v.title}: ${v.summary}.` : v.summary.trim(),
+    v.url ? `${publicUpdateCta(v)}: ${v.url}` : "",
+    customerFooterText(publicUpdateReason(v), v.unsubscribeUrl),
+  ].filter(Boolean).join("\n\n");
+}
+
 // ─── New-signup notification (to the operator) ───────────────
 // Internal ops notice: fires when someone completes self-serve signup, so the
 // operator knows a new workspace exists. Factual, not customer-facing. Goes to

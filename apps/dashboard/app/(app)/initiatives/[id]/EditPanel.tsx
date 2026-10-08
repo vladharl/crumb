@@ -2,11 +2,11 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Btn, Ic, Switch } from "@crumb/ui";
+import { Btn, Ic } from "@crumb/ui";
 import type { Announce } from "@/lib/changelog";
 import { AnnouncePrompt } from "@/app/(app)/changelog/Announce";
 import { setInitiativePublic, updateInitiative } from "../actions";
-import type { BoardCol } from "../InitiativesBoard";
+import { PUBLIC_HINT, PublicSwitch, type BoardCol } from "../InitiativesBoard";
 import { PRESET_COLORS } from "../presetColors";
 import { useColumnMove } from "../useColumnMove";
 
@@ -41,6 +41,8 @@ function humanError(code: string): string {
     default:                     return "Couldn't save. Try again.";
   }
 }
+
+const COLUMN_NAME: Record<string, string> = { "": "Unscheduled", now: "Now", next: "Next", later: "Later" };
 
 // Mirror of the server-side normalization in updateInitiative: trim, drop
 // empties, cap each name + the list, dedupe (event names are case-sensitive).
@@ -185,6 +187,11 @@ export function EditPanel({
     });
   }
   const emailsOnMove = isPublic && initiative.followers > 0;
+  // Shipped is a status, so it's the Column too (as on the board): picking it
+  // ships the initiative, and while shipped the Column waits on its Status.
+  const shipped = status === "shipped";
+  // Customers see a public initiative only once it's scheduled or shipped.
+  const locked = !shipped && column.shown === null && !isPublic;
 
   return (
     <div
@@ -253,17 +260,23 @@ export function EditPanel({
         <label className="eyebrow" htmlFor="ed-column">Column</label>
         <select
           id="ed-column"
-          value={column.shown ?? ""}
-          onChange={e => pickColumn(e.target.value)}
-          aria-describedby={emailsOnMove ? "ed-column-help" : undefined}
+          value={shipped ? "shipped" : column.shown ?? ""}
+          onChange={e => (e.target.value === "shipped" ? pickStatus("shipped") : pickColumn(e.target.value))}
+          disabled={shipped}
+          aria-describedby={shipped || emailsOnMove ? "ed-column-help" : undefined}
           style={inputStyle}
         >
           <option value="">Unscheduled</option>
           <option value="now">Now</option>
           <option value="next">Next</option>
           <option value="later">Later</option>
+          <option value="shipped">Shipped</option>
         </select>
-        {emailsOnMove && (
+        {shipped ? (
+          <span id="ed-column-help" className="text-2xs muted">
+            It stays in Shipped while its status is Shipped. Change the status to move it back to {COLUMN_NAME[column.shown ?? ""]}.
+          </span>
+        ) : emailsOnMove && (
           <span id="ed-column-help" className="text-2xs muted">
             Moving it to Now, Next or Later emails its {initiative.followers} {initiative.followers === 1 ? "follower" : "followers"}, after a few seconds to undo.
           </span>
@@ -272,13 +285,13 @@ export function EditPanel({
       <div className="col gap-1">
         <span className="eyebrow">Public</span>
         {/* The label names the switch for screen readers. */}
-        <label className="row gap-2 center" style={{ alignSelf: "flex-start", cursor: "pointer" }}>
-          <Switch on={isPublic} onClick={togglePublic} />
+        <label className="row gap-2 center" style={{ alignSelf: "flex-start", cursor: locked ? "default" : "pointer" }}>
+          <PublicSwitch on={isPublic} locked={locked} describedBy="ed-public-help" onClick={togglePublic} />
           <span className="text-sm">Show on the customer roadmap</span>
         </label>
-        <span className="text-2xs muted">
-          {column.shown === null
-            ? "Customers only see a public initiative once it's in Now, Next or Later."
+        <span id="ed-public-help" className="text-2xs muted">
+          {!shipped && column.shown === null
+            ? PUBLIC_HINT
             : "Public initiatives show on the roadmap in the widget, where customers can follow them."}
         </span>
       </div>

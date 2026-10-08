@@ -20,7 +20,9 @@ import {
   renderSupportRequestHtml, renderSupportRequestText,
   renderVendorNudgeHtml, renderVendorNudgeText,
   renderDigestHtml, renderDigestText,
-  type DigestVars,
+  renderPublicFollowConfirmHtml, renderPublicFollowConfirmText,
+  renderPublicFollowUpdateHtml, renderPublicFollowUpdateText,
+  type DigestVars, type PublicFollowConfirmVars, type PublicFollowUpdateVars,
 } from "./email/template";
 import { isCloud } from "./tier";
 import { log } from "./log";
@@ -704,6 +706,49 @@ export async function sendShippedAnnouncement(m: ShippedAnnouncement): Promise<b
     headers: customerHeaders(from, m.workspaceName, `initiative:${m.initiativeName}`, m.unsubscribeUrl),
     previewLine: `${m.workspaceName} shipped ${m.title}`,
     link: m.productUrl ?? undefined,
+  });
+  return result.ok && emailConfigured();
+}
+
+// ─── Public follows (an address typed on the public pages) ───
+// The confirmation the Follow and "Email me updates" forms send, and the
+// updates a confirmed follower gets (lib/public-follows). From the vendor via
+// Crumb on noreply@, like the other customer emails.
+
+export type PublicFollowConfirm = PublicFollowConfirmVars & { to: string };
+
+export async function sendPublicFollowConfirm(m: PublicFollowConfirm): Promise<void> {
+  const { from } = selectProvider();
+  await deliver("public-follow-confirm", {
+    to: m.to,
+    from: customerFrom(m.workspaceName, noreplyFrom(from)),
+    subject: `Confirm updates from ${m.workspaceName}`,
+    html: renderPublicFollowConfirmHtml(m),
+    text: renderPublicFollowConfirmText(m),
+    previewLine: `confirm a public follow, expires in ${ttlText(m.ttlDays * 1440)}`,
+    link: m.link,
+  });
+}
+
+export type PublicFollowUpdate = PublicFollowUpdateVars & { to: string };
+
+// A move leads with the move ("Moved to Now: Dark mode"), as the customer
+// roadmap email does. True only when a real provider accepted it.
+export async function sendPublicFollowUpdate(m: PublicFollowUpdate): Promise<boolean> {
+  const { from } = selectProvider();
+  const move = m.kind === "roadmap_move";
+  const subject = move
+    ? `${m.summary.charAt(0).toUpperCase()}${m.summary.slice(1)}: ${m.title}`
+    : `New from ${m.workspaceName}: ${m.title}`;
+  const result = await deliver("public-follow-update", {
+    to: m.to,
+    from: customerFrom(m.workspaceName, noreplyFrom(from)),
+    subject,
+    html: renderPublicFollowUpdateHtml(m),
+    text: renderPublicFollowUpdateText(m),
+    headers: customerHeaders(from, m.workspaceName, `${move ? "initiative" : "changelog"}:${m.title}`, m.unsubscribeUrl),
+    previewLine: subject,
+    link: m.url ?? undefined,
   });
   return result.ok && emailConfigured();
 }

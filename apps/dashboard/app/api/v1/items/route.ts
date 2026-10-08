@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { db, accounts, items, replaySessions } from "@crumb/db";
+import { db, accounts, items } from "@crumb/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { createItem, SubmitterBlockedError } from "@/lib/items/create";
+import { linkReplaySession } from "@/lib/replay/ingest";
 import { WIDGET_SOURCE } from "@/lib/feedback/source";
 import { createItemSchema, parseJsonBody } from "@/lib/validation";
 import { loopTurn } from "@/lib/loop";
@@ -133,9 +134,8 @@ export async function GET(req: Request) {
 
 // ─── POST /api/v1/items ────────────────────────────────────────
 // Creates an item. JWT-authed if the Bearer header is present; otherwise
-// trusts body fields (for the demo embed). The `session_token` field is an
-// optional replay-session linker — the widget includes it only after ≥1
-// chunk has flushed, avoiding dead empty rows.
+// trusts body fields (for the demo embed). The optional `session_token`
+// links the customer's replay recording to the new item.
 export async function POST(req: Request) {
   // Rate-limit before parsing — keep spammy clients cheap.
   const rl = await checkRateLimitAsync(`items:${callerIpFromRequest(req)}`);
@@ -194,29 +194,13 @@ export async function POST(req: Request) {
     ));
   }
 
-  // Link a replay session if the widget passed a token. Best-effort: the
-  // session must belong to this workspace and have ≥1 chunk (empty rows
-  // exist before any chunk flushes, but we only attach ones with actual
-  // content). Failures here don't block item creation.
-  if (session_token && /^[0-9a-f]{32}$/.test(session_token)) {
-    try {
-      const [replay] = await db
-        .select({ id: replaySessions.id, workspaceId: replaySessions.workspaceId, eventCount: replaySessions.eventCount })
-        .from(replaySessions)
-        .where(eq(replaySessions.sessionToken, session_token))
-        .limit(1);
-      if (replay && replay.workspaceId === ws.id && replay.eventCount > 0) {
-        // Also stamp account_user_id while we have it — lets the per-
-        // account session list join cleanly without going through items
-        // every time, and unlocks a future per-customer session view.
-        await db
-          .update(replaySessions)
-          .set({ itemId: created.id, accountUserId: user.id })
-          .where(eq(replaySessions.id, replay.id));
-      }
-    } catch (err) {
+  // Link the customer's recording if the widget passed its token, even when
+  // no chunk has landed yet (see linkReplaySession). Best-effort: failures
+  // here don't block item creation.
+  if (session_token) {
+    await linkReplaySession(ws, created, session_token).catch((err: unknown) => {
       log.error("linking replay session_token failed", { scope: "crumb/replay", err });
-    }
+    });
   }
 
   return cors(NextResponse.json({

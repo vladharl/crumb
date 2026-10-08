@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { db, accounts, accountUsers, items, initiatives, workspaces } from "@crumb/db";
-import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { emailConfigured } from "@/lib/email";
+import { onPublicRoadmapSql } from "@/lib/roadmap";
 import { TEST_CUSTOMER_ACCOUNT } from "@/app/(app)/settings/install/test-customer";
 
 export const dynamic = "force-dynamic";
@@ -85,14 +86,11 @@ export async function GET(req: Request) {
   }
 
   // Does this workspace have a public roadmap? Drives the widget's Roadmap tab.
+  // Counts what the roadmap shows, shipped ones included (lib/roadmap).
   const [{ count: roadmapCount }] = await db
     .select({ count: sql<number>`COUNT(*)::int` })
     .from(initiatives)
-    .where(and(
-      eq(initiatives.workspaceId, workspace.id),
-      eq(initiatives.isPublic, true),
-      isNotNull(initiatives.roadmapColumn),
-    ));
+    .where(and(eq(initiatives.workspaceId, workspace.id), onPublicRoadmapSql()));
 
   // Customer notification settings are only meaningful when the deployment can
   // actually send email — the widget hides the whole view when this is false.
