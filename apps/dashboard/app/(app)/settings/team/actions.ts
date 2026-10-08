@@ -13,7 +13,8 @@ const INVITE_TTL_DAYS = 7;
 const VALID_ROLES = new Set(["admin", "pm", "viewer"]);
 
 export type InviteResult =
-  | { ok: true; link: string; email: string }
+  // `emailed`: a real provider took the invite email (not a printed one).
+  | { ok: true; link: string; email: string; emailed: boolean }
   | { ok: false; error: string };
 
 export async function inviteTeammate(formData: FormData): Promise<InviteResult> {
@@ -69,12 +70,11 @@ export async function inviteTeammate(formData: FormData): Promise<InviteResult> 
 
   const link = `${origin}/login/verify?token=${encodeURIComponent(token)}`;
 
-  // Fire the email shim too — in dev that logs to stdout; in prod (later) it
-  // dispatches via the configured provider. Either way, the admin can copy
-  // the returned link directly.
-  await sendInvite({ to: email, link, ttlMinutes: INVITE_TTL_DAYS * 24 * 60, workspaceName: workspace.name, inviterName: me.name });
+  // Email it too, when email is set up. Either way the admin gets the link to
+  // copy, and the form says whether it was emailed.
+  const emailed = await sendInvite({ to: email, link, ttlMinutes: INVITE_TTL_DAYS * 24 * 60, workspaceName: workspace.name, inviterName: me.name });
 
-  return { ok: true, link, email };
+  return { ok: true, link, email, emailed };
 }
 
 export async function resendInvite(workspaceUserId: string): Promise<InviteResult> {
@@ -104,9 +104,9 @@ export async function resendInvite(workspaceUserId: string): Promise<InviteResul
   });
 
   const link = `${origin}/login/verify?token=${encodeURIComponent(token)}`;
-  await sendInvite({ to: u.email, link, ttlMinutes: INVITE_TTL_DAYS * 24 * 60, workspaceName: workspace.name, inviterName: me.name });
+  const emailed = await sendInvite({ to: u.email, link, ttlMinutes: INVITE_TTL_DAYS * 24 * 60, workspaceName: workspace.name, inviterName: me.name });
 
-  return { ok: true, link, email: u.email };
+  return { ok: true, link, email: u.email, emailed };
 }
 
 export type MutationResult = { ok: true } | { ok: false; error: string };

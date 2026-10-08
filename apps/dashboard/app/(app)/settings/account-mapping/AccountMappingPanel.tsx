@@ -8,11 +8,6 @@ import { createAccount, renameAccount, deleteAccount, reassignUser, importAccoun
 export type UserView = { id: string; email: string; name: string };
 export type AccountView = { id: string; name: string; users: UserView[] };
 
-const inputStyle: React.CSSProperties = {
-  background: "var(--surface)", border: "var(--border)", borderRadius: "var(--r-sm)",
-  padding: "8px 10px", font: "inherit", color: "var(--ink)",
-};
-
 export function AccountMappingPanel({ initial, isManager }: { initial: AccountView[]; isManager: boolean }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -59,13 +54,13 @@ export function AccountMappingPanel({ initial, isManager }: { initial: AccountVi
       {isManager && (
         <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
           <input
-            className="minw-relax"
+            className="input minw-relax"
             value={newName}
             onChange={e => setNewName(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") add(); }}
             aria-label="New account name"
             placeholder="New account name"
-            style={{ ...inputStyle, flex: 1, minWidth: 200 }}
+            style={{ flex: 1, minWidth: 200 }}
           />
           <Btn variant="primary" icon={<Ic.plus style={{ width: 11, height: 11 }} />} onClick={add} disabled={pending || !newName.trim()}>Add account</Btn>
           <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onImportFile} style={{ display: "none" }} />
@@ -88,10 +83,11 @@ export function AccountMappingPanel({ initial, isManager }: { initial: AccountVi
                 {editing?.id === acc.id ? (
                   <div className="row gap-2 center" style={{ flex: 1 }}>
                     <input
+                      className="input"
                       aria-label="Account name"
                       value={editing.name}
                       onChange={e => setEditing({ id: acc.id, name: e.target.value })}
-                      style={{ ...inputStyle, flex: 1 }}
+                      style={{ flex: 1 }}
                       autoFocus
                     />
                     <Btn sm variant="primary" onClick={() => run(() => renameAccount(acc.id, editing!.name), () => setEditing(null))} disabled={pending}>Save</Btn>

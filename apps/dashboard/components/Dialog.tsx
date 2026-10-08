@@ -89,7 +89,8 @@ export function useModal(
   }, [open, rootRef, cardRef, initialFocus]);
 
   return (e: ReactKeyboardEvent) => {
-    if (e.defaultPrevented) return; // a menu or listbox inside handled it
+    // A menu or listbox inside handled it, or an IME owns the key.
+    if (e.defaultPrevented || e.nativeEvent.isComposing) return;
     if (e.key === "Escape") {
       e.preventDefault();
       onClose();

@@ -454,7 +454,7 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
 
       {aiEntitled && atRisk.length > 0 && (
         <Card>
-          <CardHead title="Accounts at risk" after={<Pill ring>{formatArr(sentimentRiskArr, " ARR")}</Pill>} />
+          <CardHead title="Accounts at risk" after={<Pill ring>{formatArr(sentimentRiskArr, " ARR", "$0 ARR")}</Pill>} />
           <div className="card-body col gap-2" style={{ padding: 18 }}>
             <p className="text-xs muted" style={{ margin: "0 0 6px" }}>High-ARR accounts trending negative on sentiment or with open severe issues. Highest revenue first.</p>
             {atRisk.map(a => (

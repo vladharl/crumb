@@ -64,7 +64,6 @@ export function PreferencesCard({
             {(["off", "daily", "weekly"] as const).map(v => (
               <button
                 key={v}
-                aria-selected={prefs.digestFrequency === v}
                 aria-pressed={prefs.digestFrequency === v}
                 onClick={() => update("digestFrequency", v)}
                 disabled={pending}
@@ -87,7 +86,6 @@ export function PreferencesCard({
               return (
                 <button
                   key={v}
-                  aria-selected={prefs.delivery === v}
                   aria-pressed={prefs.delivery === v}
                   onClick={() => slackBlocked ? router.push("/settings/integrations") : update("delivery", v)}
                   disabled={pending}
@@ -108,9 +106,9 @@ export function PreferencesCard({
           const value = prefs[r.key];
           return (
             <div key={r.key} className="row gap-3 center">
-              {/* The switch is the button (no button around it). Clicks wait
-                  out a save in flight, as the old disabled wrapper did. */}
-              <Switch on={value} label={r.label} onClick={() => { if (!pending) update(r.key, !value); }} />
+              {/* The switch is the button (no button around it). It's
+                  disabled while a save is in flight, as the old wrapper was. */}
+              <Switch on={value} label={r.label} disabled={pending} onClick={() => update(r.key, !value)} />
               <span className="text-sm grow">{r.label}</span>
             </div>
           );

@@ -7,7 +7,7 @@ const HEX = /^#[0-9a-f]{6}$/i;
 // no app shell. Same card as the customer unsubscribe page (api/v1/unsubscribe).
 const CSS =
   `:root{--bg:#FBF7F0;--surface:#FDFAF4;--text:#4A2E1F;--text-2:#6A4528;--mute:rgba(74,46,31,.74);` +
-  `--hair:rgba(74,46,31,.10);--accent:#E27D3A;--accent-soft:#FCE9D6}` +
+  `--hair:rgba(74,46,31,.10);--focus-ring:#9C4C17;--accent-soft:#FCE9D6}` +
   `*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;` +
   `background:var(--bg);color:var(--text);font:13px/1.5 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}` +
   `main{width:380px;max-width:100%;background:var(--surface);border:1px solid var(--hair);border-radius:6px;padding:28px}` +
@@ -16,7 +16,7 @@ const CSS =
   `form{margin-top:20px}.note{margin-top:16px;font-size:12px;color:var(--mute)}a{color:var(--text)}` +
   `button{font:500 12px/1.2 Inter,system-ui,sans-serif;padding:8px 14px;border-radius:4px;cursor:pointer;` +
   `border:1px solid var(--text);background:var(--text);color:var(--bg)}button:hover{background:var(--text-2)}` +
-  `button:focus-visible{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}`;
+  `:focus-visible{outline:2px solid var(--focus-ring);outline-offset:0;box-shadow:0 0 0 5px var(--accent-soft)}`;
 
 // The small page a public follow's confirm and unsubscribe links land on, under
 // the vendor's name and Branding dot. Text in, escaped here; `button` posts

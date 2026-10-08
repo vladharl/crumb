@@ -10,10 +10,12 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEventHandler,
   type ReactNode,
 } from "react";
 import { Btn, Ic } from "@crumb/ui";
 import { completeTour } from "@/app/(app)/actions";
+import { useModal } from "@/components/Dialog";
 
 /**
  * First-sign-in getting-started walkthrough. On a user's first visit (when the
@@ -121,20 +123,16 @@ export function TourProvider({ autoStart, children }: { autoStart: boolean; chil
   const stepRef = useRef(0);
   useEffect(() => { stepRef.current = step; }, [step]);
 
-  // The callout's Next button takes focus on open; on close, focus returns to
-  // whatever had it on relaunch (the sidebar launcher). Auto-start has none.
-  const returnFocus = useRef<HTMLElement | null>(null);
-
+  // Open, the tour is modal (useModal in each overlay): the app behind goes
+  // inert, the callout's Next button takes focus and Tab stays in the callout,
+  // and on close focus returns to whatever had it (the sidebar launcher).
   const start = useCallback(() => {
-    returnFocus.current = document.activeElement as HTMLElement | null;
     setStep(0);
     setActive(true);
   }, []);
 
   const finish = useCallback(() => {
     setActive(false);
-    returnFocus.current?.focus();
-    returnFocus.current = null;
     // Fire-and-forget: closing the UI shouldn't wait on the network. A failed
     // write just means the tour reappears next sign-in, which is acceptable.
     void completeTour().catch(() => {});
@@ -148,10 +146,13 @@ export function TourProvider({ autoStart, children }: { autoStart: boolean; chil
   const back = useCallback(() => setStep(s => Math.max(0, s - 1)), []);
 
   // Keyboard navigation while the tour is open. Enter is left to the focused
-  // button, so Enter on Skip or Back does that instead of advancing.
+  // button, so Enter on Skip or Back does that instead of advancing. Escape in
+  // the callout is the modal's (already handled); here it covers focus that
+  // a click left on the page.
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (e.key === "Escape") { e.preventDefault(); finish(); }
       else if (e.key === "ArrowRight") { e.preventDefault(); next(); }
       else if (e.key === "ArrowLeft") { e.preventDefault(); back(); }
@@ -178,8 +179,11 @@ function SpotlightOverlay({
 }: { step: number; onNext: () => void; onBack: () => void; onSkip: () => void }) {
   const current = STEPS[step];
   const [rect, setRect] = useState<Rect | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const calloutRef = useRef<HTMLDivElement>(null);
   const [calloutH, setCalloutH] = useState(180);
+  // Modal once there's a target to show (the overlay renders nothing before).
+  const onKeyDown = useModal(rect !== null, rootRef, calloutRef, onSkip);
 
   // Measure the target element; auto-advance if it isn't in the DOM (e.g. a
   // gated nav item), rather than rendering a hole at 0,0.
@@ -231,7 +235,7 @@ function SpotlightOverlay({
     : Math.min(hole.top + hole.height + 12, vh - calloutH - 12);
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Getting started">
+    <div ref={rootRef}>
       {/* Transparent click-catcher under the cutout — blocks the app, no-op on click. */}
       <div style={{ position: "fixed", inset: 0, zIndex: 69 }} />
       {/* The hole: a box-shadow spread paints the scrim everywhere but here. */}
@@ -253,6 +257,7 @@ function SpotlightOverlay({
         onNext={onNext}
         onBack={onBack}
         onSkip={onSkip}
+        onKeyDown={onKeyDown}
       />
     </div>
   );
@@ -264,34 +269,46 @@ function CarouselOverlay({
 }: { step: number; onNext: () => void; onBack: () => void; onSkip: () => void }) {
   const current = STEPS[step];
   const Icon = Ic[current.icon];
+  const rootRef = useRef<HTMLDivElement>(null);
+  const calloutRef = useRef<HTMLDivElement>(null);
+  const onKeyDown = useModal(true, rootRef, calloutRef, onSkip);
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Getting started"
+      ref={rootRef}
       style={{
         position: "fixed", inset: 0, background: "var(--scrim)",
         display: "flex", alignItems: "center", justifyContent: "center",
         zIndex: 60, padding: 24,
       }}
     >
-      <Callout style={{ width: "min(360px, 100%)" }} step={step} onNext={onNext} onBack={onBack} onSkip={onSkip} icon={<Icon style={{ width: 22, height: 22 }} />} />
+      <Callout
+        ref={calloutRef}
+        style={{ width: "min(360px, 100%)" }}
+        step={step}
+        onNext={onNext}
+        onBack={onBack}
+        onSkip={onSkip}
+        onKeyDown={onKeyDown}
+        icon={<Icon style={{ width: 22, height: 22 }} />}
+      />
     </div>
   );
 }
 
-/** Shared callout card used by both the spotlight and the mobile carousel. */
+/** Shared callout card used by both the spotlight and the mobile carousel: the dialog itself. */
 type CalloutProps = {
   step: number;
   onNext: () => void;
   onBack: () => void;
   onSkip: () => void;
+  /** The modal's key handler (useModal): Escape, and Tab kept inside. */
+  onKeyDown: KeyboardEventHandler<HTMLDivElement>;
   style?: CSSProperties;
   icon?: ReactNode;
 };
 
 const Callout = forwardRef<HTMLDivElement, CalloutProps>(function Callout(
-  { step, onNext, onBack, onSkip, style, icon },
+  { step, onNext, onBack, onSkip, onKeyDown, style, icon },
   ref,
 ) {
   const current = STEPS[step];
@@ -299,6 +316,11 @@ const Callout = forwardRef<HTMLDivElement, CalloutProps>(function Callout(
   return (
     <div
       ref={ref}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Getting started"
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
       onClick={e => e.stopPropagation()}
       style={{
         background: "var(--paper, var(--surface))",

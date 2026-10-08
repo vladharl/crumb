@@ -25,13 +25,18 @@ test.describe("OAuth init wiring", () => {
 
       const connect = page.getByRole("button", { name: p.connectBtn, exact: true });
       if ((await connect.count()) === 0) {
-        // Not connectable from the UI: either env not set (setup details) or
-        // already connected. Record which, and assert the card rendered.
-        const notConfigured = (await page.getByText(p.setEnvText, { exact: false }).count()) > 0;
+        // Not connectable from the UI: either not set up on the server or
+        // already connected. Record which, and assert the card rendered. The
+        // card's own "Not set up" pill says so on every edition; the env var
+        // name (self-host admins' setup details) is the fallback.
+        const card = page.locator(".card", { has: page.getByRole("heading", { name: p.title, exact: true }) });
+        const notConfigured =
+          (await card.locator(".card-head").getByText("Not set up", { exact: true }).count()) > 0 ||
+          (await card.getByText(p.setEnvText, { exact: false }).count()) > 0;
         testInfo.annotations.push({
           type: notConfigured ? "not-configured" : "connected",
           description: notConfigured
-            ? `${p.title}: env not set on host (${p.setEnvText})`
+            ? `${p.title}: not set up on the host (${p.setEnvText} unset)`
             : `${p.title}: no Connect button — treated as already connected`,
         });
         await expect(page.getByText(p.title, { exact: false }).first()).toBeVisible();

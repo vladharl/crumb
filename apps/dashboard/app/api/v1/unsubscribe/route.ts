@@ -22,7 +22,7 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 // Crumb's paper tokens (app/globals.css), inlined: this page has no app shell.
 const CSS =
   `:root{--bg:#FBF7F0;--surface:#FDFAF4;--text:#4A2E1F;--text-2:#6A4528;--mute:rgba(74,46,31,.74);` +
-  `--hair:rgba(74,46,31,.10);--accent:#E27D3A;--accent-soft:#FCE9D6}` +
+  `--hair:rgba(74,46,31,.10);--focus-ring:#9C4C17;--accent-soft:#FCE9D6}` +
   `*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;` +
   `background:var(--bg);color:var(--text);font:13px/1.5 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}` +
   `main{width:380px;max-width:100%;background:var(--surface);border:1px solid var(--hair);border-radius:6px;padding:28px}` +
@@ -32,7 +32,7 @@ const CSS =
   `button{font:500 12px/1.2 Inter,system-ui,sans-serif;padding:8px 14px;border-radius:4px;cursor:pointer;` +
   `border:1px solid var(--text);background:transparent;color:var(--text)}button:hover{background:var(--text);color:var(--bg)}` +
   `button.primary{background:var(--text);color:var(--bg)}button.primary:hover{background:var(--text-2)}` +
-  `button:focus-visible{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}`;
+  `:focus-visible{outline:2px solid var(--focus-ring);outline-offset:0;box-shadow:0 0 0 5px var(--accent-soft)}`;
 
 const NOTE = `<p class=note>You can change this anytime from the feedback widget.</p>`;
 

@@ -17,6 +17,9 @@ export const metadata = { title: "QBR" };
 // Covers the last 90 days. Reuses the same churn signals as Insights, and the
 // same counting: unmerged items only, open = not closed (Set aside included).
 
+// The printed report reads millions to two decimals ($2.35M), the app to one.
+const arr = (cents: number, suffix = "", zero?: string) => formatArr(cents, suffix, zero, 2);
+
 function humanDuration(seconds: number): string {
   if (!seconds || seconds < 0) return "—";
   const h = Math.round(seconds / 3600);
@@ -96,7 +99,7 @@ export default async function QbrPage() {
 
       <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 16, marginBottom: 28 }}>
         {[
-          { label: "Total ARR", value: formatArr(Number(pf.total_arr)) },
+          { label: "Total ARR", value: arr(Number(pf.total_arr)) },
           { label: "Accounts", value: String(pf.accounts) },
           { label: "New feedback", value: String(act.new_90) },
           { label: "Shipped", value: String(act.shipped_90) },
@@ -114,7 +117,7 @@ export default async function QbrPage() {
         <section style={{ marginBottom: 28 }}>
           <h2 style={{ fontSize: 18, margin: "0 0 8px" }}>Accounts at risk</h2>
           <div style={{ fontSize: 12, color: "var(--mute)", marginBottom: 8 }}>
-            Trending negative on sentiment or with open severe issues. {formatArr(atRiskArrCents(signals), " ARR")}.
+            Trending negative on sentiment or with open severe issues. {arr(atRiskArrCents(signals), " ARR", "$0 ARR")}.
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>Account</th><th style={th}>ARR</th><th style={th}>Sentiment</th><th style={th}>Trend</th><th style={th}>Open</th></tr></thead>
@@ -122,7 +125,7 @@ export default async function QbrPage() {
               {atRisk.slice(0, 10).map(a => (
                 <tr key={a.accountId}>
                   <td style={td}>{a.name}</td>
-                  <td style={td}>{formatArr(a.arrCents)}</td>
+                  <td style={td}>{arr(a.arrCents)}</td>
                   <td style={td}>{a.avgSentiment != null ? a.avgSentiment.toFixed(2) : "—"}</td>
                   <td style={{ ...td, color: a.sentimentTrend != null && a.sentimentTrend < 0 ? "var(--rust-deep)" : "var(--green-deep)" }}>
                     {a.sentimentTrend != null ? `${a.sentimentTrend < 0 ? "↓" : "↑"} ${a.sentimentTrend.toFixed(2)}` : "—"}
@@ -143,7 +146,7 @@ export default async function QbrPage() {
             {top.map(t => (
               <tr key={t.id}>
                 <td style={td}>{t.name}</td>
-                <td style={td}>{formatArr(Number(t.arr_cents))}</td>
+                <td style={td}>{arr(Number(t.arr_cents))}</td>
                 <td style={td}>{Number(t.total)}</td>
                 <td style={td}>{Number(t.open)}</td>
                 <td style={td}>{Number(t.shipped)}</td>

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Dropdown, Ic } from "@crumb/ui";
+import { Dialog } from "@/components/Dialog";
 import { errorMessage } from "@/lib/action-error";
 import { createExternalTicket, listProviderTargets, suggestExternalTicket } from "./actions";
 
@@ -86,35 +87,15 @@ export function ExternalTicketModal({
   // may fill the form.
   const draftRun = useRef(0);
   const [pending, startTransition] = useTransition();
-  // Whatever opened the dialog (the tile's button), read on first render,
-  // before focus moves to the title; it gets focus back on every close.
-  const [opener] = useState(() => (typeof document === "undefined" ? null : document.activeElement as HTMLElement | null));
-  const titleRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (open) titleRef.current?.focus();
-  }, [open]);
 
   // Esc, the X, Cancel and the scrim, except while the ticket is being created
-  // (closing then would hide how it went).
+  // (closing then would hide how it went). Dialog puts focus back on whatever
+  // opened it, and a Dropdown's own Escape closes just its menu.
   function close() {
     if (pending) return;
     setSubmitError(null);
     onClose();
-    opener?.focus();
   }
-
-  // On window, like the confirm dialog: a Dropdown stops its own Escape, so Esc
-  // there closes just the menu.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.isComposing || e.defaultPrevented) return;
-      e.preventDefault();
-      close();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
 
   function fill(d: Draft) {
     setTitle(d.title);
@@ -189,211 +170,199 @@ export function ExternalTicketModal({
 
   if (!open) return null;
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Create ${providerLabel} ticket`}
-      className="sheet-scrim"
-      onClick={close}
-    >
-      <div
-        className="sheet wide"
-        onClick={e => e.stopPropagation()}
-        style={{ padding: 20 }}
-      >
-        <div className="row between center" style={{ marginBottom: 12 }}>
-          <h3 className="serif" style={{ margin: 0, fontSize: 18 }}>Create {providerLabel} ticket</h3>
-          <div className="row gap-2 center">
-            {aiAvailable && (
-              <Btn
-                sm
-                icon={<Ic.sparkle style={{ width: 11, height: 11 }} />}
-                onClick={suggest}
-                disabled={aiPending || pending || targetsLoading}
-              >
-                {aiPending ? "Drafting…" : "Suggest with AI"}
-              </Btn>
-            )}
-            <button
-              aria-label="Close"
-              onClick={close}
-              disabled={pending}
-              style={{ background: "none", border: 0, padding: 5, cursor: "pointer", color: "var(--mute)" }}
-            >
-              <Ic.x style={{ width: 14, height: 14 }} />
-            </button>
-          </div>
-        </div>
-
-        {/* A draft arrives after a wait: announce it, without moving focus. */}
-        <div aria-live="polite">
-          {draft && (
-            <div
-              className="text-xs"
-              style={{
-                background: "var(--surface-2)",
-                border: "1px solid var(--line, var(--hair))",
-                borderRadius: "var(--r-sm)",
-                padding: "8px 10px",
-                marginBottom: 12,
-                color: "var(--mute)",
-                lineHeight: 1.55,
-              }}
-            >
-              <span className="row gap-2 center" style={{ marginBottom: 2 }}>
-                <Ic.sparkle style={{ width: 10, height: 10 }} />
-                <span className="fw-med">AI draft · {Math.round(draft.confidence * 100)}% confidence</span>
-              </span>
-              {draft.reason}
-              {draft.held && (
-                <div className="col gap-2" style={{ marginTop: 8 }}>
-                  <span style={{ color: "var(--ink)" }}>
-                    You edited the ticket, so the draft didn&apos;t replace your text. Using it replaces the title, description and labels.
-                  </span>
-                  <div
-                    style={{
-                      background: "var(--surface)",
-                      border: "1px solid var(--line, var(--hair))",
-                      borderRadius: "var(--r-sm)",
-                      padding: "8px 10px",
-                      maxHeight: 160,
-                      overflow: "auto",
-                      whiteSpace: "pre-wrap",
-                      color: "var(--ink)",
-                    }}
-                  >
-                    <span className="fw-med">{draft.title}</span>
-                    {`\n\n${draft.body}`}
-                    {draft.labels && `\n\nLabels: ${draft.labels}`}
-                  </div>
-                  <div className="row gap-2">
-                    <Btn sm variant="primary" onClick={() => { fill(draft); setDraft({ ...draft, held: false }); }}>
-                      Use the draft
-                    </Btn>
-                    <Btn sm onClick={() => setDraft(null)}>Keep my text</Btn>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="col gap-3">
-          {connectedProviders.length > 1 && (
-            <div className="col gap-1">
-              <label className="eyebrow" htmlFor="ext-provider">Tracker</label>
-              <Dropdown
-                ariaLabel="Tracker"
-                value={provider}
-                onChange={v => {
-                  setProvider(v as Provider);
-                  // A draft is written in the prior tracker's voice; drop it so
-                  // it isn't mistaken for a suggestion for the new one, and
-                  // ignore one still on its way. Its text goes too: a Linear or
-                  // Jira draft ends with the customer's name and ARR, which must
-                  // not ride along into a GitHub issue (repos can be public).
-                  if (aiInForm) {
-                    setTitle(initialTitle);
-                    setBody(initialBody);
-                    setLabels("");
-                    setAiInForm(false);
-                    edited.current = false;
-                  }
-                  draftRun.current++;
-                  setAiPending(false);
-                  setDraft(null);
-                }}
-                disabled={pending}
-                buttonStyle={{ width: "100%" }}
-                options={connectedProviders.map(p => ({ value: p, label: PROVIDER_LABEL[p] }))}
-              />
-            </div>
-          )}
-
-          <div className="col gap-1">
-            <label className="eyebrow" htmlFor="ext-title">Title</label>
-            <input
-              ref={titleRef}
-              id="ext-title"
-              className="input"
-              value={title}
-              onChange={e => { edited.current = true; setTitle(e.target.value); }}
-              maxLength={240}
-            />
-          </div>
-
-          <div className="col gap-1">
-            <label className="eyebrow" htmlFor="ext-body">Description</label>
-            <textarea
-              id="ext-body"
-              className="input"
-              value={body}
-              onChange={e => { edited.current = true; setBody(e.target.value); }}
-              rows={8}
-            />
-            {aiInForm && provider !== "github" && (
-              <span className="text-xs muted">The draft ends with the customer&apos;s name and ARR. Remove that if people outside your team can read {providerLabel}.</span>
-            )}
-          </div>
-
-          <div className="col gap-1">
-            <label className="eyebrow" htmlFor="ext-labels">Labels</label>
-            <input
-              id="ext-labels"
-              className="input"
-              value={labels}
-              onChange={e => { edited.current = true; setLabels(e.target.value); }}
-              placeholder="Comma separated"
-            />
-            {provider !== "github" && labels.trim() && (
-              <span className="text-xs muted">{providerLabel} gets these as the last line of the description.</span>
-            )}
-          </div>
-
-          <div className="col gap-1">
-            <label className="eyebrow" htmlFor="ext-target">
-              {provider === "linear" ? "Team" : provider === "jira" ? "Project" : "Repository"}
-            </label>
-            {targetsLoading ? (
-              <span className="text-sm muted">Loading targets…</span>
-            ) : targetsError ? (
-              <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
-                <span className="text-sm" style={{ color: "var(--err-text)" }}>{humanError(targetsError, provider)}</span>
-                {RETRYABLE_TARGET_ERRORS.has(targetsError) && (
-                  <Btn sm onClick={() => setTargetsAttempt(n => n + 1)}>Try again</Btn>
-                )}
-              </div>
-            ) : (
-              <Dropdown
-                ariaLabel={provider === "linear" ? "Team" : provider === "jira" ? "Project" : "Repository"}
-                value={target}
-                onChange={setTarget}
-                disabled={pending}
-                searchable={targets.length > 8}
-                buttonStyle={{ width: "100%" }}
-                options={targets.map(t => ({ value: t.id, label: t.label }))}
-              />
-            )}
-          </div>
-
-          {submitError && (
-            <span role="alert" className="text-xs" style={{ color: "var(--err-text)" }}>{submitError}</span>
-          )}
-
-          <div className="row gap-2" style={{ justifyContent: "flex-end" }}>
-            <Btn onClick={close} disabled={pending}>Cancel</Btn>
+    <Dialog label={`Create ${providerLabel} ticket`} onClose={close} className="sheet wide" style={{ padding: 20 }}>
+      <div className="row between center" style={{ marginBottom: 12 }}>
+        <h3 className="serif" style={{ margin: 0, fontSize: 18 }}>Create {providerLabel} ticket</h3>
+        <div className="row gap-2 center">
+          {aiAvailable && (
             <Btn
-              variant="primary"
-              icon={<Ic.send style={{ width: 12, height: 12 }} />}
-              onClick={submit}
-              disabled={pending || targetsLoading || !!targetsError}
+              sm
+              icon={<Ic.sparkle style={{ width: 11, height: 11 }} />}
+              onClick={suggest}
+              disabled={aiPending || pending || targetsLoading}
             >
-              {pending ? "Creating…" : `Create in ${providerLabel}`}
+              {aiPending ? "Drafting…" : "Suggest with AI"}
             </Btn>
-          </div>
+          )}
+          <button
+            aria-label="Close"
+            onClick={close}
+            disabled={pending}
+            style={{ background: "none", border: 0, padding: 5, cursor: "pointer", color: "var(--mute)" }}
+          >
+            <Ic.x style={{ width: 14, height: 14 }} />
+          </button>
         </div>
       </div>
-    </div>
+
+      {/* A draft arrives after a wait: announce it, without moving focus. */}
+      <div aria-live="polite">
+        {draft && (
+          <div
+            className="text-xs"
+            style={{
+              background: "var(--surface-2)",
+              border: "1px solid var(--line, var(--hair))",
+              borderRadius: "var(--r-sm)",
+              padding: "8px 10px",
+              marginBottom: 12,
+              color: "var(--mute)",
+              lineHeight: 1.55,
+            }}
+          >
+            <span className="row gap-2 center" style={{ marginBottom: 2 }}>
+              <Ic.sparkle style={{ width: 10, height: 10 }} />
+              <span className="fw-med">AI draft · {Math.round(draft.confidence * 100)}% confidence</span>
+            </span>
+            {draft.reason}
+            {draft.held && (
+              <div className="col gap-2" style={{ marginTop: 8 }}>
+                <span style={{ color: "var(--ink)" }}>
+                  You edited the ticket, so the draft didn&apos;t replace your text. Using it replaces the title, description and labels.
+                </span>
+                <div
+                  style={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--line, var(--hair))",
+                    borderRadius: "var(--r-sm)",
+                    padding: "8px 10px",
+                    maxHeight: 160,
+                    overflow: "auto",
+                    whiteSpace: "pre-wrap",
+                    color: "var(--ink)",
+                  }}
+                >
+                  <span className="fw-med">{draft.title}</span>
+                  {`\n\n${draft.body}`}
+                  {draft.labels && `\n\nLabels: ${draft.labels}`}
+                </div>
+                <div className="row gap-2">
+                  <Btn sm variant="primary" onClick={() => { fill(draft); setDraft({ ...draft, held: false }); }}>
+                    Use the draft
+                  </Btn>
+                  <Btn sm onClick={() => setDraft(null)}>Keep my text</Btn>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="col gap-3">
+        {connectedProviders.length > 1 && (
+          <div className="col gap-1">
+            <label className="eyebrow" htmlFor="ext-provider">Tracker</label>
+            <Dropdown
+              ariaLabel="Tracker"
+              value={provider}
+              onChange={v => {
+                setProvider(v as Provider);
+                // A draft is written in the prior tracker's voice; drop it so
+                // it isn't mistaken for a suggestion for the new one, and
+                // ignore one still on its way. Its text goes too: a Linear or
+                // Jira draft ends with the customer's name and ARR, which must
+                // not ride along into a GitHub issue (repos can be public).
+                if (aiInForm) {
+                  setTitle(initialTitle);
+                  setBody(initialBody);
+                  setLabels("");
+                  setAiInForm(false);
+                  edited.current = false;
+                }
+                draftRun.current++;
+                setAiPending(false);
+                setDraft(null);
+              }}
+              disabled={pending}
+              buttonStyle={{ width: "100%" }}
+              options={connectedProviders.map(p => ({ value: p, label: PROVIDER_LABEL[p] }))}
+            />
+          </div>
+        )}
+
+        <div className="col gap-1">
+          <label className="eyebrow" htmlFor="ext-title">Title</label>
+          <input
+            autoFocus
+            id="ext-title"
+            className="input"
+            value={title}
+            onChange={e => { edited.current = true; setTitle(e.target.value); }}
+            maxLength={240}
+          />
+        </div>
+
+        <div className="col gap-1">
+          <label className="eyebrow" htmlFor="ext-body">Description</label>
+          <textarea
+            id="ext-body"
+            className="input"
+            value={body}
+            onChange={e => { edited.current = true; setBody(e.target.value); }}
+            rows={8}
+          />
+          {aiInForm && provider !== "github" && (
+            <span className="text-xs muted">The draft ends with the customer&apos;s name and ARR. Remove that if people outside your team can read {providerLabel}.</span>
+          )}
+        </div>
+
+        <div className="col gap-1">
+          <label className="eyebrow" htmlFor="ext-labels">Labels</label>
+          <input
+            id="ext-labels"
+            className="input"
+            value={labels}
+            onChange={e => { edited.current = true; setLabels(e.target.value); }}
+            placeholder="Comma separated"
+          />
+          {provider !== "github" && labels.trim() && (
+            <span className="text-xs muted">{providerLabel} gets these as the last line of the description.</span>
+          )}
+        </div>
+
+        <div className="col gap-1">
+          <label className="eyebrow" htmlFor="ext-target">
+            {provider === "linear" ? "Team" : provider === "jira" ? "Project" : "Repository"}
+          </label>
+          {targetsLoading ? (
+            <span className="text-sm muted">Loading targets…</span>
+          ) : targetsError ? (
+            <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
+              <span className="text-sm" style={{ color: "var(--err-text)" }}>{humanError(targetsError, provider)}</span>
+              {RETRYABLE_TARGET_ERRORS.has(targetsError) && (
+                <Btn sm onClick={() => setTargetsAttempt(n => n + 1)}>Try again</Btn>
+              )}
+            </div>
+          ) : (
+            <Dropdown
+              ariaLabel={provider === "linear" ? "Team" : provider === "jira" ? "Project" : "Repository"}
+              value={target}
+              onChange={setTarget}
+              disabled={pending}
+              searchable={targets.length > 8}
+              buttonStyle={{ width: "100%" }}
+              options={targets.map(t => ({ value: t.id, label: t.label }))}
+            />
+          )}
+        </div>
+
+        {submitError && (
+          <span role="alert" className="text-xs" style={{ color: "var(--err-text)" }}>{submitError}</span>
+        )}
+
+        <div className="row gap-2" style={{ justifyContent: "flex-end" }}>
+          <Btn onClick={close} disabled={pending}>Cancel</Btn>
+          <Btn
+            variant="primary"
+            icon={<Ic.send style={{ width: 12, height: 12 }} />}
+            onClick={submit}
+            disabled={pending || targetsLoading || !!targetsError}
+          >
+            {pending ? "Creating…" : `Create in ${providerLabel}`}
+          </Btn>
+        </div>
+      </div>
+    </Dialog>
   );
 }
 

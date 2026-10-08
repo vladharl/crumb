@@ -385,9 +385,9 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
       )}
 
       <div className="seg" style={{ alignSelf: "flex-start" }}>
-        <button aria-selected={tab === "customer"} aria-pressed={tab === "customer"} onClick={() => setTab("customer")}>Customer · {customerMsgs.length}</button>
-        <button aria-selected={tab === "internal"} aria-pressed={tab === "internal"} onClick={() => setTab("internal")}>Internal · {internalMsgs.length}</button>
-        <button aria-selected={tab === "trail"}    aria-pressed={tab === "trail"}    onClick={() => setTab("trail")}>Trail · {trail.length}</button>
+        <button aria-pressed={tab === "customer"} onClick={() => setTab("customer")}>Customer · {customerMsgs.length}</button>
+        <button aria-pressed={tab === "internal"} onClick={() => setTab("internal")}>Internal · {internalMsgs.length}</button>
+        <button aria-pressed={tab === "trail"} onClick={() => setTab("trail")}>Trail · {trail.length}</button>
       </div>
 
       {item.detectedLang && item.detectedLang !== "en" && (
@@ -591,7 +591,7 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
                 style={{ textDecoration: "none", color: "inherit" }}>
                 <Avatar kind="ink">{account.name[0]}</Avatar>
                 <div className="col grow">
-                  <span className="serif text-md">{account.name}</span>
+                  <span className="fw-med text-md">{account.name}</span>
                   <span className="text-xs muted">{formatArr(account.arrCents, " ARR")}</span>
                 </div>
                 <Ic.chevR style={{ width: 12, height: 12, color: "var(--mute-2)" }} />
@@ -696,7 +696,7 @@ export function ThreadView({ data, canWrite, isAdmin = false }: { data: ThreadDa
                       onClick={() => pickStatus(s, "card")}
                       disabled={statusMove.saving || isCurrent || !canWrite}
                       className="nav-item"
-                      aria-selected={isCurrent}
+                      aria-current={isCurrent || undefined}
                       style={{ justifyContent: "flex-start", gap: 12, width: "100%" }}
                     >
                       <StatusDot status={s} />

@@ -162,5 +162,12 @@ describe("lib/priority", () => {
       expect(formatArr(0, "", "$0")).toBe("$0");
       expect(formatArr(480_000_00, "", "$0")).toBe("$480k");
     });
+    it("keeps two decimals of millions where asked (the printed QBR)", () => {
+      expect(formatArr(2_349_000_00, "", undefined, 2)).toBe("$2.35M");
+      expect(formatArr(1_250_000_00, " ARR", undefined, 2)).toBe("$1.25M ARR");
+      expect(formatArr(999_500_00, "", undefined, 2)).toBe("$1.00M");
+      expect(formatArr(480_000_00, "", undefined, 2)).toBe("$480k"); // only millions change
+      expect(formatArr(0, "", undefined, 2)).toBe("ARR not set");
+    });
   });
 });

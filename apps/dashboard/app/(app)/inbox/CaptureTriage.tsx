@@ -146,7 +146,7 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
                 options={accountOpts}
               />
               {noAccount && (
-                <span className="text-2xs" style={{ color: "var(--rust)" }}>
+                <span className="text-2xs" style={{ color: "var(--err-text)" }}>
                   Unknown customer. Map it to a customer to continue.
                 </span>
               )}

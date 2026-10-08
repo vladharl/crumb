@@ -75,11 +75,12 @@ export function ApiKeysPanel({ initial, isAdmin }: { initial: KeyView[]; isAdmin
       {isAdmin && (
         <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
           <input
+            className="input"
             value={name}
             onChange={e => setName(e.target.value)}
             aria-label="Key name"
             placeholder="Key name (e.g. Claude Desktop)"
-            style={{ flex: 1, minWidth: 260, background: "var(--surface)", border: "var(--border)", borderRadius: "var(--r-sm)", padding: "8px 10px", font: "inherit", color: "var(--ink)" }}
+            style={{ flex: 1, minWidth: 260 }}
           />
           <Btn variant="primary" onClick={add} disabled={pending || !name.trim()}>{pending ? "Creating…" : "Create key"}</Btn>
         </div>

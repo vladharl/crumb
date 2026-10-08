@@ -2,13 +2,13 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Btn, Dropdown, Field, Ic, Pill } from "@crumb/ui";
+import { Btn, Dropdown, Field, Ic } from "@crumb/ui";
 import { useConfirm } from "@/components/confirm";
 import { changeRole, inviteTeammate, removeMember, resendInvite } from "./actions";
 
 type Result =
   | { kind: "idle" }
-  | { kind: "sent"; email: string; link: string }
+  | { kind: "sent"; email: string; link: string; emailed: boolean }
   | { kind: "error"; message: string };
 
 export function InvitePanel({ canInvite }: { canInvite: boolean }) {
@@ -43,8 +43,13 @@ export function InvitePanel({ canInvite }: { canInvite: boolean }) {
         <div className="col gap-3">
           <div className="col gap-1">
             <span className="serif text-md">Invite link for {result.email}</span>
+            {/* Where the link went, only as far as it's true: emailed means
+                a real provider took it. */}
             <span className="text-xs muted">
-              Share this with them directly. They'll be signed in on click. The link expires in 7 days.
+              {result.emailed
+                ? `We emailed this link to ${result.email}. You can also share it with them directly.`
+                : "We couldn't email it, so share this link with them yourself."}
+              {" "}They&apos;ll be signed in on click. The link expires in 7 days.
             </span>
           </div>
           <div className="row gap-2 center" style={{
@@ -71,7 +76,7 @@ export function InvitePanel({ canInvite }: { canInvite: boolean }) {
             const form = new FormData(e.currentTarget);
             startTransition(async () => {
               const res = await inviteTeammate(form);
-              if (res.ok) setResult({ kind: "sent", email: res.email, link: res.link });
+              if (res.ok) setResult({ kind: "sent", email: res.email, link: res.link, emailed: res.emailed });
               else setResult({ kind: "error", message: res.error });
             });
           }}
@@ -96,7 +101,6 @@ export function InvitePanel({ canInvite }: { canInvite: boolean }) {
             </Btn>
             <Btn sm variant="ghost" onClick={() => { setOpen(false); setResult({ kind: "idle" }); }} disabled={pending}>Cancel</Btn>
           </div>
-          <Pill>The invite link is printed to the dashboard's stdout too.</Pill>
         </form>
       )}
     </div>
@@ -133,8 +137,7 @@ function RolePicker({ disabled }: { disabled: boolean }) {
             disabled={disabled}
             onClick={() => setRole(value)}
             onKeyDown={onKeyDown}
-            // The selected segment's ink fill (.seg's own selected style keys on aria-selected).
-            style={{ flex: 1, ...(role === value ? { background: "var(--text)", color: "var(--cream)" } : null) }}
+            style={{ flex: 1 }}
           >
             {label}
           </button>
@@ -243,18 +246,24 @@ export function ResendButton({ id }: { id: string }) {
           onClick={() => navigator.clipboard.writeText(result.link).catch(() => {})}>
           Copy
         </Btn>
+        <span className="text-xs muted" role="status">
+          {result.emailed ? `Emailed to ${result.email}.` : "Not emailed. Share the link yourself."}
+        </span>
       </div>
     );
   }
   return (
-    <Btn sm variant="ghost" disabled={pending} onClick={() => {
-      startTransition(async () => {
-        const res = await resendInvite(id);
-        if (res.ok) setResult({ kind: "sent", email: res.email, link: res.link });
-        else setResult({ kind: "error", message: res.error });
-      });
-    }}>
-      {pending ? "…" : "Get link"}
-    </Btn>
+    <div className="row gap-2 center">
+      {result.kind === "error" && <span className="text-xs" role="alert" style={{ color: "var(--err-text)" }}>{result.message}</span>}
+      <Btn sm variant="ghost" disabled={pending} onClick={() => {
+        startTransition(async () => {
+          const res = await resendInvite(id);
+          if (res.ok) setResult({ kind: "sent", email: res.email, link: res.link, emailed: res.emailed });
+          else setResult({ kind: "error", message: res.error });
+        });
+      }}>
+        {pending ? "…" : "Get link"}
+      </Btn>
+    </div>
   );
 }

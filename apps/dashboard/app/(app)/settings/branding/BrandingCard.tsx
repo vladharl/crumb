@@ -154,7 +154,7 @@ function BrandingPreview({
             { k: "news", label: "News" },
             { k: "peek", label: "Peek" },
           ] as const).map(({ k, label }) => (
-            <button key={k} aria-selected={state === k} aria-pressed={state === k} onClick={() => setState(k)}>{label}</button>
+            <button key={k} aria-pressed={state === k} onClick={() => setState(k)}>{label}</button>
           ))}
         </div>
       </div>
@@ -188,7 +188,7 @@ function BrandingPreview({
           }}
         />
         {siteState === "loading" && <span className="text-2xs" style={{ color: "var(--mute)", flexShrink: 0 }}>Fetching…</span>}
-        {siteState === "error" && <span className="text-2xs" style={{ color: "var(--rust)", flexShrink: 0 }}>{siteError}</span>}
+        {siteState === "error" && <span className="text-2xs" style={{ color: "var(--err-text)", flexShrink: 0 }}>{siteError}</span>}
         {siteState === "loaded" && siteThin && (
           <span className="text-2xs" style={{ color: "var(--mute)", flexShrink: 0 }}>
             JS apps may stay blank without sign-in; try a public page
@@ -431,7 +431,6 @@ export function BrandingCard({
               ] as const).map(({ k, label }) => (
                 <button
                   key={k}
-                  aria-selected={edge === k}
                   aria-pressed={edge === k}
                   onClick={() => setEdge(k)}
                   style={{ flex: 1 }}
@@ -451,7 +450,6 @@ export function BrandingCard({
               ] as const).map(({ k, label }) => (
                 <button
                   key={k}
-                  aria-selected={visibility === k}
                   aria-pressed={visibility === k}
                   onClick={() => setVisibility(k)}
                   style={{ flex: 1 }}

@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Ic, StatusPill, TypeChip } from "@crumb/ui";
 import type { Status, TypeKind } from "@crumb/ui";
+import { Dialog } from "@/components/Dialog";
 import { listUnassignedItems, bulkSetInitiative } from "../actions";
 
 type Candidate = {
@@ -73,116 +74,109 @@ export function AddItemsButton({ initiativeId }: { initiativeId: string }) {
         Add requests
       </Btn>
 
+      {/* Modal (Dialog): Escape or the scrim closes it, except mid-add. */}
       {open && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Add requests to this initiative"
-          onClick={() => !pending && setOpen(false)}
-          style={{
+        <Dialog
+          label="Add requests to this initiative"
+          onClose={() => { if (!pending) setOpen(false); }}
+          scrimClassName=""
+          scrimStyle={{
             position: "fixed", inset: 0, background: "var(--scrim)",
             display: "flex", alignItems: "center", justifyContent: "center",
             zIndex: 55, padding: 24,
           }}
+          className="col gap-3"
+          style={{
+            background: "var(--paper, var(--surface))",
+            border: "1px solid var(--line, var(--hair))",
+            borderRadius: "var(--r-md)",
+            padding: 20,
+            width: "min(640px, 100%)",
+            maxHeight: "85vh",
+            boxShadow: "var(--sh-soft)",
+          }}
         >
-          <div
-            onClick={e => e.stopPropagation()}
-            className="col gap-3"
-            style={{
-              background: "var(--paper, var(--surface))",
-              border: "1px solid var(--line, var(--hair))",
-              borderRadius: "var(--r-md)",
-              padding: 20,
-              width: "min(640px, 100%)",
-              maxHeight: "85vh",
-              boxShadow: "var(--sh-soft)",
-            }}
-          >
-            <div className="row between center">
-              <h3 className="serif" style={{ margin: 0, fontSize: 18 }}>Add requests</h3>
-              <button
-                aria-label="Close"
-                onClick={() => setOpen(false)}
-                disabled={pending}
-                style={{ background: "none", border: 0, padding: 5, cursor: "pointer", color: "var(--mute)" }}
-              >
-                <Ic.x style={{ width: 14, height: 14 }} />
-              </button>
-            </div>
-            <p className="text-xs muted" style={{ margin: 0 }}>
-              Feedback that isn&apos;t in an initiative yet. The requests you select move into this one.
-            </p>
+          <div className="row between center">
+            <h3 className="serif" style={{ margin: 0, fontSize: 18 }}>Add requests</h3>
+            <button
+              aria-label="Close"
+              onClick={() => setOpen(false)}
+              disabled={pending}
+              style={{ background: "none", border: 0, padding: 5, cursor: "pointer", color: "var(--mute)" }}
+            >
+              <Ic.x style={{ width: 14, height: 14 }} />
+            </button>
+          </div>
+          <p className="text-xs muted" style={{ margin: 0 }}>
+            Feedback that isn&apos;t in an initiative yet. The requests you select move into this one.
+          </p>
 
-            <div className="row gap-2 center" style={{ position: "relative" }}>
-              <Ic.search style={{ width: 13, height: 13, position: "absolute", left: 10, color: "var(--mute)" }} />
-              <input
-                autoFocus
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                aria-label="Filter by title or ID"
-                placeholder="Filter by title or ID…"
-                style={{
-                  background: "var(--surface)", border: "1px solid var(--line, var(--hair))",
-                  borderRadius: "var(--r-sm)", padding: "8px 10px 8px 30px", font: "inherit",
-                  color: "var(--ink)", width: "100%",
-                }}
-              />
-            </div>
+          <div className="row gap-2 center" style={{ position: "relative" }}>
+            <Ic.search style={{ width: 13, height: 13, position: "absolute", left: 10, color: "var(--mute)" }} />
+            <input
+              autoFocus
+              className="input"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              aria-label="Filter by title or ID"
+              placeholder="Filter by title or ID…"
+              style={{ paddingLeft: 30 }}
+            />
+          </div>
 
-            <div className="col" style={{ overflow: "auto", flex: 1, minHeight: 120, border: "1px solid var(--line, var(--hair))", borderRadius: "var(--r-sm)" }}>
-              {loading ? (
-                <div className="card-body"><span className="text-sm muted">Loading requests…</span></div>
-              ) : filtered.length === 0 ? (
-                <div className="card-body"><span className="text-sm muted">{candidates.length === 0 ? "Every request is already in an initiative." : "No requests match that filter."}</span></div>
-              ) : filtered.map(c => {
-                const checked = selected.has(c.id);
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => toggle(c.id)}
-                    aria-pressed={checked}
-                    className="row gap-3 center"
+          <div className="col" style={{ overflow: "auto", flex: 1, minHeight: 120, border: "1px solid var(--line, var(--hair))", borderRadius: "var(--r-sm)" }}>
+            {loading ? (
+              <div className="card-body"><span className="text-sm muted">Loading requests…</span></div>
+            ) : filtered.length === 0 ? (
+              <div className="card-body"><span className="text-sm muted">{candidates.length === 0 ? "Every request is already in an initiative." : "No requests match that filter."}</span></div>
+            ) : filtered.map(c => {
+              const checked = selected.has(c.id);
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => toggle(c.id)}
+                  aria-pressed={checked}
+                  className="row gap-3 center"
+                  style={{
+                    width: "100%", textAlign: "left", background: checked ? "var(--hover)" : "transparent",
+                    border: 0, borderBottom: "1px solid var(--line, var(--hair))", padding: "10px 12px",
+                    cursor: "pointer", font: "inherit",
+                  }}
+                >
+                  <span
+                    aria-hidden
                     style={{
-                      width: "100%", textAlign: "left", background: checked ? "var(--hover)" : "transparent",
-                      border: 0, borderBottom: "1px solid var(--line, var(--hair))", padding: "10px 12px",
-                      cursor: "pointer", font: "inherit",
+                      width: 16, height: 16, flexShrink: 0, borderRadius: 4,
+                      border: checked ? "0" : "1.5px solid var(--line)",
+                      background: checked ? "var(--text)" : "transparent",
+                      display: "grid", placeItems: "center", color: "var(--cream)",
                     }}
                   >
-                    <span
-                      aria-hidden
-                      style={{
-                        width: 16, height: 16, flexShrink: 0, borderRadius: 4,
-                        border: checked ? "0" : "1.5px solid var(--line)",
-                        background: checked ? "var(--text)" : "transparent",
-                        display: "grid", placeItems: "center", color: "var(--cream)",
-                      }}
-                    >
-                      {checked && <Ic.check style={{ width: 11, height: 11 }} />}
-                    </span>
-                    <span className="text-2xs mono muted" style={{ flexShrink: 0, width: 52 }}>{c.shortId}</span>
-                    <TypeChip type={c.type as TypeKind} />
-                    <span className="fw-med truncate" style={{ flex: 1 }}>{c.title}</span>
-                    <span className="text-xs muted truncate" style={{ maxWidth: 110 }}>{c.accountName}</span>
-                    <StatusPill status={c.status as Status} />
-                  </button>
-                );
-              })}
-            </div>
+                    {checked && <Ic.check style={{ width: 11, height: 11 }} />}
+                  </span>
+                  <span className="text-2xs mono muted" style={{ flexShrink: 0, width: 52 }}>{c.shortId}</span>
+                  <TypeChip type={c.type as TypeKind} />
+                  <span className="fw-med truncate" style={{ flex: 1 }}>{c.title}</span>
+                  <span className="text-xs muted truncate" style={{ maxWidth: 110 }}>{c.accountName}</span>
+                  <StatusPill status={c.status as Status} />
+                </button>
+              );
+            })}
+          </div>
 
-            {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
+          {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{error}</span>}
 
-            <div className="row between center">
-              <span className="text-xs muted">{selected.size} selected</span>
-              <div className="row gap-2">
-                <Btn onClick={() => setOpen(false)} disabled={pending}>Cancel</Btn>
-                <Btn variant="primary" onClick={add} disabled={pending || selected.size === 0}>
-                  {pending ? "Adding…" : `Add ${selected.size || ""} ${selected.size === 1 ? "request" : "requests"}`.replace("  ", " ").trim()}
-                </Btn>
-              </div>
+          <div className="row between center">
+            <span className="text-xs muted">{selected.size} selected</span>
+            <div className="row gap-2">
+              <Btn onClick={() => setOpen(false)} disabled={pending}>Cancel</Btn>
+              <Btn variant="primary" onClick={add} disabled={pending || selected.size === 0}>
+                {pending ? "Adding…" : `Add ${selected.size || ""} ${selected.size === 1 ? "request" : "requests"}`.replace("  ", " ").trim()}
+              </Btn>
             </div>
           </div>
-        </div>
+        </Dialog>
       )}
     </>
   );

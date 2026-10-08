@@ -264,8 +264,10 @@ function ttlText(minutes: number): string {
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
-export async function sendInvite(m: Invite): Promise<void> {
-  await deliver("invite", {
+// True when a real provider accepted it: the invite form then says the link
+// was emailed. Printed by the stdout provider, it wasn't.
+export async function sendInvite(m: Invite): Promise<boolean> {
+  const result = await deliver("invite", {
     to: m.to,
     subject: `${m.inviterName} invited you to ${m.workspaceName} on Crumb`,
     html: renderInviteHtml(m),
@@ -273,6 +275,7 @@ export async function sendInvite(m: Invite): Promise<void> {
     previewLine: `invite to ${m.workspaceName}, expires in ${ttlText(m.ttlMinutes)}`,
     link: m.link,
   });
+  return result.ok && emailConfigured();
 }
 
 // Self-serve signup confirmation. Mints the workspace only after the link is

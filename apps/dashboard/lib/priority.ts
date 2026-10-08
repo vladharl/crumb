@@ -169,13 +169,14 @@ export function byPriorityDesc(
  * `suffix` (" ARR", " at stake") is appended to amounts only, so the zero
  * state never reads "ARR not set ARR". A sum over a subset (ARR at stake, at
  * risk) passes `zero = "$0"`: nothing at stake is not the same as no ARR set.
+ * `digits` is the decimals on millions: 1 in the app, 2 on the printed QBR.
  */
-export function formatArr(cents: number, suffix = "", zero = "ARR not set"): string {
+export function formatArr(cents: number, suffix = "", zero = "ARR not set", digits = 1): string {
   if (!(cents > 0)) return zero;
   const dollars = Math.round(cents / 100);
   if (dollars < 1000) return `$${dollars}${suffix}`;
   const k = Math.round(dollars / 1000);
   // $999,500 rounds to 1000k, so it reads as millions instead.
   if (k < 1000) return `$${k}k${suffix}`;
-  return `$${(dollars / 1_000_000).toFixed(1)}M${suffix}`;
+  return `$${(dollars / 1_000_000).toFixed(digits)}M${suffix}`;
 }

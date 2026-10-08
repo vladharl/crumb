@@ -29,7 +29,9 @@ const interval = (page: Page, label: "Monthly" | "Annual") =>
 
 test("a plan link preselects its plan and interval, at the list prices", async ({ page }) => {
   await page.goto("/settings/billing?plan=team&interval=month");
-  await expect(page.getByText("Stripe isn't configured on this deployment.")).toBeVisible();
+  // Stripe isn't configured here: members read it in plain words (the env
+  // var detail goes to the server log).
+  await expect(page.getByText("Billing isn't available right now.")).toBeVisible();
 
   const team = planCard(page, "Team");
   const growth = planCard(page, "Growth");
