@@ -1,9 +1,11 @@
 import "server-only";
 import type { EmailProvider, OutgoingEmail } from "./provider";
 
-// Logs delivery to stdout. Default for dev and self-hosters who haven't
-// configured a real provider — they can read magic links from the
-// dashboard's logs (e.g. `docker compose logs dashboard`).
+// Prints the email to stdout instead of delivering it. Default for dev and
+// self-hosters who haven't configured a real provider — they can read magic
+// links from the dashboard's logs (e.g. `docker compose logs dashboard`).
+// `ok` here means "printed": lib/email.ts never counts a stdout send as a
+// customer delivery (the loop ledger records only real ones).
 export const stdoutProvider: EmailProvider = {
   name: "stdout",
   async send(m: OutgoingEmail) {

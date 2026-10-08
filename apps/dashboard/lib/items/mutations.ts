@@ -4,13 +4,14 @@ import {
   db, items, replies, replyMentions, attachments, statusEvents,
   accountUsers, workspaceUsers, workspaces, customerNotifications,
 } from "@crumb/db";
+import { statusLabel, REASON_REQUIRED, VENDOR_STATUSES, type Status } from "@crumb/ui";
 import { emitEvent } from "@/lib/webhooks";
 import { notifyWorkspaceChannel } from "@/lib/notify/chat";
 import { notifyAccountChannels } from "@/lib/notify/account-channel";
-import { sendReplyNotification, sendStatusChangeNotification } from "@/lib/email";
+import { customerNotifyPlan, statusEmailsCustomer, type NotifyPlan } from "@/lib/notify/customer-plan";
+import { emailConfigured, sendReplyNotification, sendStatusChangeNotification } from "@/lib/email";
 import { notifyMentioned, parseMentionIds } from "@/lib/mention-notify";
 import { buildReplyAddress } from "@/lib/reply-token";
-import { autoNotifiesSubmitter } from "@/lib/feedback/source";
 import { log } from "@/lib/log";
 
 // Session-free cores of the vendor-side item mutations (status / reply /
@@ -25,31 +26,12 @@ import { log } from "@/lib/log";
 // the inbound Request in the MCP route); revalidatePath stays in the action
 // wrapper. See lib/origin.ts.
 
-export type Status =
-  | "open" | "review" | "planned" | "progress"
-  | "shipped" | "declined" | "deferred" | "duplicate"
-  // Customer-initiated close, set only via the widget's close endpoint — never
-  // a vendor-settable status (deliberately absent from ALLOWED_STATUSES below).
-  | "resolved";
-
-export const STATUS_LABELS: Record<Status, string> = {
-  open:      "Open",
-  review:    "In review",
-  planned:   "Planned",
-  progress:  "In progress",
-  shipped:   "Shipped",
-  declined:  "Won’t ship",
-  deferred:  "Set aside",
-  duplicate: "Duplicate",
-  resolved:  "Resolved",
-};
+// The status union + labels live once, in @crumb/ui.
+export type { Status };
 
 // What a vendor may set from the dashboard/MCP. "resolved" is intentionally
 // excluded — only the item's submitter can resolve it, through the widget.
-export const ALLOWED_STATUSES: Status[] = [
-  "open", "review", "planned", "progress", "shipped", "declined", "deferred", "duplicate",
-];
-const REASON_REQUIRED: Set<Status> = new Set(["declined", "deferred", "duplicate"]);
+export const ALLOWED_STATUSES: Status[] = [...VENDOR_STATUSES];
 
 export type VendorRole = "admin" | "pm" | "viewer";
 
@@ -90,11 +72,60 @@ async function loadActor(actor: VendorActor) {
   return { workspace: workspace ?? null, user: user ?? null };
 }
 
+// The item plus its submitter's address + email prefs, scoped to the workspace.
+async function loadItem(workspaceId: string, itemShortId: string) {
+  const [row] = await db
+    .select({
+      id: items.id,
+      title: items.title,
+      type: items.type,
+      status: items.status,
+      accountId: items.accountId,
+      source: items.source,
+      submitterId: accountUsers.id,
+      submitterEmail: accountUsers.email,
+      submitterNotifyReplies: accountUsers.notifyReplies,
+      submitterNotifyStatus: accountUsers.notifyStatus,
+      submitterUnsub: accountUsers.unsubscribedAll,
+      submitterUnsubToken: accountUsers.unsubToken,
+    })
+    .from(items)
+    .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
+    .where(and(eq(items.workspaceId, workspaceId), eq(items.shortId, itemShortId)))
+    .limit(1);
+  return row ?? null;
+}
+
+// The same plan the thread renders its "will be emailed" copy from.
+function notifyPlanFor(row: NonNullable<Awaited<ReturnType<typeof loadItem>>>) {
+  return customerNotifyPlan({
+    source: row.source,
+    submitterEmail: row.submitterEmail,
+    unsubscribedAll: row.submitterUnsub,
+    notifyReplies: row.submitterNotifyReplies,
+    notifyStatus: row.submitterNotifyStatus,
+    emailConfigured: emailConfigured(),
+  });
+}
+
+// Whether to call the sender. "not_configured" still calls it so the stdout
+// provider prints the email in dev; the sender reports that as not delivered,
+// so no ledger row is written and `emailed` stays false.
+function shouldSend(plan: NotifyPlan): boolean {
+  return plan.willEmail || plan.reason === "not_configured";
+}
+
 // ─── status change ───────────────────────────────────────────
+// `emailed` is true only when a real provider accepted the customer email (the
+// same fact the loop ledger records). The customer is emailed only for
+// outcomes (statusEmailsCustomer); every change still writes status_events and
+// fires webhooks + chat cards. `opts` is internal (reply-and-close): it can
+// suppress this core's email or put a message in it in place of the reason.
 export async function updateItemStatus(
   actor: VendorActor,
   input: { itemShortId: string; status: Status; reason?: string; origin?: string | null },
-): Promise<{ ok: true } | { ok: false; error: string }> {
+  opts: { customerEmail?: boolean; customerMessage?: string } = {},
+): Promise<{ ok: true; emailed: boolean } | { ok: false; error: string }> {
   if (!ALLOWED_STATUSES.includes(input.status)) return { ok: false, error: "bad_status" };
   const reason = input.reason?.trim() || null;
   if (REASON_REQUIRED.has(input.status) && !reason) return { ok: false, error: "reason_required" };
@@ -104,34 +135,18 @@ export async function updateItemStatus(
   const { workspace, user } = await loadActor(actor);
   if (!workspace || !user) return { ok: false, error: "not_found" };
 
-  const [row] = await db
-    .select({
-      id: items.id,
-      title: items.title,
-      type: items.type,
-      accountId: items.accountId,
-      source: items.source,
-      currentStatus: items.status,
-      submitterId: accountUsers.id,
-      submitterEmail: accountUsers.email,
-      submitterNotifyStatus: accountUsers.notifyStatus,
-      submitterUnsub: accountUsers.unsubscribedAll,
-      submitterUnsubToken: accountUsers.unsubToken,
-    })
-    .from(items)
-    .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
-    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, input.itemShortId)))
-    .limit(1);
+  const row = await loadItem(workspace.id, input.itemShortId);
   if (!row) return { ok: false, error: "not_found" };
+  const fromStatus = row.status;
 
   // No-op when status hasn't actually changed; avoids spamming the timeline
   // (and webhooks/notifications).
-  if (row.currentStatus === input.status) return { ok: true };
+  if (fromStatus === input.status) return { ok: true, emailed: false };
 
   await db.update(items).set({ status: input.status, updatedAt: new Date() }).where(eq(items.id, row.id));
   await db.insert(statusEvents).values({
     itemId: row.id,
-    fromStatus: row.currentStatus,
+    fromStatus,
     toStatus: input.status,
     reason,
     byWorkspaceUserId: actor.actorWorkspaceUserId,
@@ -144,7 +159,7 @@ export async function updateItemStatus(
     type: "item.status_changed",
     workspace: workspace.slug,
     item: { short_id: input.itemShortId, title: row.title, type: row.type },
-    from_status: row.currentStatus,
+    from_status: fromStatus,
     to_status: input.status,
     reason,
     at: new Date().toISOString(),
@@ -155,7 +170,7 @@ export async function updateItemStatus(
     kind: "status_change",
     shortId: input.itemShortId,
     title: row.title,
-    fromStatus: row.currentStatus,
+    fromStatus,
     toStatus: input.status,
     reason,
     url: origin ? `${origin}/thread/${input.itemShortId}` : null,
@@ -164,34 +179,34 @@ export async function updateItemStatus(
     kind: "status_change",
     shortId: input.itemShortId,
     title: row.title,
-    fromStatus: row.currentStatus,
+    fromStatus,
     toStatus: input.status,
     reason,
     url: workspace.productUrl ?? null,
   }, "status");
 
-  // Email the customer; never let a flaky provider undo a status write. Honor
-  // the submitter's prefs (skip if muted or status updates are off), and only
-  // auto-email widget-origin submitters — customers pulled from connectors never
-  // opted into Crumb's loop (see lib/feedback/source).
-  if (autoNotifiesSubmitter(row.source) && !row.submitterUnsub && row.submitterNotifyStatus) {
+  // Email the customer; never let a flaky provider undo a status write. Who
+  // may be emailed (widget-origin, has an address, not muted) is the shared
+  // plan; which statuses are worth an email is statusEmailsCustomer.
+  let emailed = false;
+  if (opts.customerEmail !== false && statusEmailsCustomer(input.status) && shouldSend(notifyPlanFor(row).status)) {
     try {
-      const delivered = await sendStatusChangeNotification({
+      emailed = await sendStatusChangeNotification({
         to: row.submitterEmail,
         workspaceName: workspace.name,
         vendorName: user.name,
         itemShortId: input.itemShortId,
         itemTitle: row.title,
-        fromStatus: row.currentStatus as Status,
+        fromStatus,
         toStatus: input.status,
-        reason,
+        reason: opts.customerMessage || reason,
         productUrl: workspace.productUrl,
         inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
         unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=status` : null,
       });
       // Loop ledger: a status notification for a terminal status is the loop
       // actually closing — the customer heard the outcome (see Insights).
-      if (delivered) {
+      if (emailed) {
         await db.insert(customerNotifications).values({
           itemId: row.id,
           accountUserId: row.submitterId,
@@ -204,14 +219,17 @@ export async function updateItemStatus(
     }
   }
 
-  return { ok: true };
+  return { ok: true, emailed };
 }
 
 // ─── vendor reply ────────────────────────────────────────────
+// `emailed`: as for updateItemStatus. `opts` is internal (reply-and-close): it
+// can suppress this core's email, or show the status the item is moving to.
 export async function createItemReply(
   actor: VendorActor,
   input: { itemShortId: string; body: string; internal: boolean; attachmentIds?: string[]; origin?: string | null },
-): Promise<{ ok: true; replyId: string } | { ok: false; error: string }> {
+  opts: { customerEmail?: boolean; shownStatus?: string } = {},
+): Promise<{ ok: true; replyId: string; emailed: boolean } | { ok: false; error: string }> {
   const body = input.body.trim();
   const attachmentIds = (input.attachmentIds ?? []).filter(Boolean);
   // A reply can be just an attachment with no body — accept that.
@@ -224,24 +242,7 @@ export async function createItemReply(
   const { workspace, user } = await loadActor(actor);
   if (!workspace || !user) return { ok: false, error: "not_found" };
 
-  const [row] = await db
-    .select({
-      id: items.id,
-      title: items.title,
-      type: items.type,
-      status: items.status,
-      accountId: items.accountId,
-      source: items.source,
-      submitterId: accountUsers.id,
-      submitterEmail: accountUsers.email,
-      submitterNotifyReplies: accountUsers.notifyReplies,
-      submitterUnsub: accountUsers.unsubscribedAll,
-      submitterUnsubToken: accountUsers.unsubToken,
-    })
-    .from(items)
-    .innerJoin(accountUsers, eq(accountUsers.id, items.submitterId))
-    .where(and(eq(items.workspaceId, workspace.id), eq(items.shortId, input.itemShortId)))
-    .limit(1);
+  const row = await loadItem(workspace.id, input.itemShortId);
   if (!row) return { ok: false, error: "not_found" };
 
   const [created] = await db.insert(replies).values({
@@ -302,25 +303,25 @@ export async function createItemReply(
     at: new Date().toISOString(),
   });
 
-  // Fire the customer notification asynchronously. Don't fail the action if
-  // email delivery hiccups — the reply is already in the DB. Honor the
-  // submitter's prefs (skip if muted or replies are off), and only auto-email
-  // widget-origin submitters (see lib/feedback/source).
-  if (!input.internal && autoNotifiesSubmitter(row.source) && !row.submitterUnsub && row.submitterNotifyReplies) {
+  // Email the customer. Don't fail the action if delivery hiccups — the reply
+  // is already in the DB. Who may be emailed is the shared plan (widget-origin,
+  // has an address, replies not muted).
+  let emailed = false;
+  if (!input.internal && opts.customerEmail !== false && shouldSend(notifyPlanFor(row).replies)) {
     try {
-      const delivered = await sendReplyNotification({
+      emailed = await sendReplyNotification({
         to: row.submitterEmail,
         workspaceName: workspace.name,
         vendorName: user.name,
         itemShortId: input.itemShortId,
         itemTitle: row.title,
         replyBody: body,
-        statusLabel: STATUS_LABELS[row.status as Status],
+        statusLabel: statusLabel(opts.shownStatus ?? row.status),
         productUrl: workspace.productUrl,
         inboundReplyAddress: inboundReplyAddressFor(input.itemShortId, workspace.signingSecret),
         unsubscribeUrl: origin ? `${origin}/api/v1/unsubscribe?u=${row.submitterId}&t=${row.submitterUnsubToken}&scope=replies` : null,
       });
-      if (delivered) {
+      if (emailed) {
         await db.insert(customerNotifications).values({
           itemId: row.id,
           accountUserId: row.submitterId,
@@ -345,7 +346,43 @@ export async function createItemReply(
     }, "replies");
   }
 
-  return { ok: true, replyId: created!.id };
+  return { ok: true, replyId: created!.id, emailed };
+}
+
+// ─── reply and close ─────────────────────────────────────────
+// Post a customer-facing reply and set the outcome in one go, with ONE email:
+// the status email carrying the reply as its message. When that email won't go
+// out (the status didn't move, or the customer turned status emails off), the
+// reply core sends its usual reply email instead, under the reply prefs. For
+// "declined" the reply doubles as the required reason.
+export async function replyAndSetItemStatus(
+  actor: VendorActor,
+  input: { itemShortId: string; body: string; status: "shipped" | "declined"; attachmentIds?: string[]; origin?: string | null },
+): Promise<{ ok: true; replyId: string; emailed: boolean } | { ok: false; error: string }> {
+  if (input.status !== "shipped" && input.status !== "declined") return { ok: false, error: "bad_status" };
+  const body = input.body.trim();
+  if (input.status === "declined" && !body) return { ok: false, error: "reason_required" };
+  // A manage action, like both cores below.
+  if (!canManage(actor.role)) return { ok: false, error: "forbidden" };
+
+  const row = await loadItem(actor.workspaceId, input.itemShortId);
+  if (!row) return { ok: false, error: "not_found" };
+  const combined = row.status !== input.status && shouldSend(notifyPlanFor(row).status);
+
+  const reply = await createItemReply(
+    actor,
+    { itemShortId: input.itemShortId, body, internal: false, attachmentIds: input.attachmentIds, origin: input.origin },
+    { customerEmail: !combined, shownStatus: input.status },
+  );
+  if (!reply.ok) return reply;
+  const moved = await updateItemStatus(
+    actor,
+    { itemShortId: input.itemShortId, status: input.status, reason: input.status === "declined" ? body : undefined, origin: input.origin },
+    { customerEmail: combined, customerMessage: body },
+  );
+  if (!moved.ok) return moved;
+
+  return { ok: true, replyId: reply.replyId, emailed: reply.emailed || moved.emailed };
 }
 
 // ─── assignment ──────────────────────────────────────────────

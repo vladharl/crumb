@@ -4,6 +4,8 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Btn, Card, CardHead, Ic, Pill } from "@crumb/ui";
+import { useToast } from "@/components/toast";
+import { errorMessage } from "@/lib/action-error";
 import {
   mergeItems,
   unmergeItem,
@@ -35,17 +37,6 @@ function formatArr(cents: number): string {
   return `$${Math.round(cents / 100)}`;
 }
 
-function mergeErrorText(e: string): string {
-  switch (e) {
-    case "source_has_duplicates": return "That item already has duplicates merged into it. Unmerge those first.";
-    case "target_is_duplicate":   return "Can't merge into an item that's already a duplicate.";
-    case "same_item":             return "Can't merge an item into itself.";
-    case "forbidden":             return "You don't have permission to merge.";
-    case "not_found":             return "That item no longer exists.";
-    default:                      return "Something went wrong. Try again.";
-  }
-}
-
 export function MergePanel({
   itemShortId, canManage, merge,
 }: {
@@ -54,40 +45,40 @@ export function MergePanel({
   merge: ThreadMergeData;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [pending, startTransition] = useTransition();
   const [candidates, setCandidates] = useState<DuplicateCandidateView[] | null>(null);
   const [searched, setSearched] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  const fail = (code: string) => toast.show({ message: errorMessage(code), tone: "error" });
 
   function doMerge(sourceShortId: string, targetShortId: string) {
-    setError(null);
     startTransition(async () => {
       const r = await mergeItems(sourceShortId, targetShortId);
       if (r.ok) router.refresh();
-      else setError(r.error);
+      else fail(r.error);
     });
   }
   function doUnmerge() {
-    setError(null);
     startTransition(async () => {
       const r = await unmergeItem(itemShortId);
       if (r.ok) router.refresh();
-      else setError(r.error);
+      else fail(r.error);
     });
   }
   function doDismiss() {
     startTransition(async () => {
       const r = await dismissDuplicateSuggestion(itemShortId);
       if (r.ok) router.refresh();
+      else fail(r.error);
     });
   }
   function findSimilar() {
-    setError(null);
     startTransition(async () => {
       const r = await listDuplicateCandidates(itemShortId);
       setSearched(true);
       if (r.ok) setCandidates(r.candidates);
-      else setError(r.error);
+      else fail(r.error);
     });
   }
 
@@ -172,8 +163,6 @@ export function MergePanel({
             )}
           </>
         )}
-
-        {error && <span className="text-xs" style={{ color: "var(--err-text)" }}>{mergeErrorText(error)}</span>}
       </div>
     </Card>
   );

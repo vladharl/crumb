@@ -1,4 +1,5 @@
 import "server-only";
+import { statusLabel } from "@crumb/ui";
 
 export type MagicLinkVars = {
   workspaceName?: string;
@@ -312,18 +313,6 @@ export type StatusChangeVars = {
   unsubscribeUrl?: string | null;
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  open:      "Open",
-  review:    "In review",
-  planned:   "Planned",
-  progress:  "In progress",
-  shipped:   "Shipped",
-  declined:  "Won't ship",
-  deferred:  "Set aside",
-  duplicate: "Duplicate",
-  resolved:  "Resolved",
-};
-
 const STATUS_BLURBS: Record<string, string> = {
   review:    "A PM is scoping this with the team.",
   planned:   "Picked up for an upcoming release.",
@@ -339,8 +328,8 @@ export function renderStatusChangeHtml(v: StatusChangeVars): string {
   const vendor = escapeHtml(v.vendorName);
   const shortId = escapeHtml(v.itemShortId);
   const title = escapeHtml(v.itemTitle);
-  const toLabel = escapeHtml(STATUS_LABELS[v.toStatus] ?? v.toStatus);
-  const fromLabel = v.fromStatus ? escapeHtml(STATUS_LABELS[v.fromStatus] ?? v.fromStatus) : "";
+  const toLabel = escapeHtml(statusLabel(v.toStatus));
+  const fromLabel = v.fromStatus ? escapeHtml(statusLabel(v.fromStatus)) : "";
   const blurb = escapeHtml(STATUS_BLURBS[v.toStatus] ?? "");
 
   return `<!doctype html>
@@ -415,8 +404,8 @@ export function renderStatusChangeHtml(v: StatusChangeVars): string {
 }
 
 export function renderStatusChangeText(v: StatusChangeVars): string {
-  const toLabel = STATUS_LABELS[v.toStatus] ?? v.toStatus;
-  const fromLabel = v.fromStatus ? (STATUS_LABELS[v.fromStatus] ?? v.fromStatus) : null;
+  const toLabel = statusLabel(v.toStatus);
+  const fromLabel = v.fromStatus ? statusLabel(v.fromStatus) : null;
   const blurb = STATUS_BLURBS[v.toStatus] ?? "";
   return `${v.workspaceName} · ${v.itemShortId}
 ${v.itemTitle}

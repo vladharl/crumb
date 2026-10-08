@@ -207,8 +207,9 @@ export type ReplyNotification = {
   unsubscribeUrl?: string | null;
 };
 
-// Returns whether the provider accepted the send, so callers can record the
-// delivery in the customer_notifications loop ledger.
+// Returns whether a real provider accepted the send, so callers can record the
+// delivery in the customer_notifications loop ledger. The stdout provider still
+// prints the email (dev) but never counts: nothing reached the customer.
 export async function sendReplyNotification(m: ReplyNotification): Promise<boolean> {
   const { provider, from } = selectProvider();
   const subject = `${m.vendorName} replied · ${m.itemShortId} ${m.itemTitle}`;
@@ -250,7 +251,7 @@ export async function sendReplyNotification(m: ReplyNotification): Promise<boole
   if (!result.ok) {
     log.error("reply-notification send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
-  return result.ok;
+  return result.ok && emailConfigured();
 }
 
 export type StatusChangeNotification = {
@@ -267,7 +268,8 @@ export type StatusChangeNotification = {
   unsubscribeUrl?: string | null;
 };
 
-// Returns whether the provider accepted the send (see sendReplyNotification).
+// Returns whether a real provider accepted the send; never true for stdout
+// (see sendReplyNotification).
 export async function sendStatusChangeNotification(m: StatusChangeNotification): Promise<boolean> {
   const { provider, from } = selectProvider();
   const subject = `Status update · ${m.itemShortId} ${m.itemTitle}`;
@@ -289,7 +291,7 @@ export async function sendStatusChangeNotification(m: StatusChangeNotification):
   if (!result.ok) {
     log.error("status-change send failed", { scope: "crumb/email", provider: provider.name, error: result.error, detail: result.detail });
   }
-  return result.ok;
+  return result.ok && emailConfigured();
 }
 
 // ─── Customer-reply notification (to vendor) ─────────────────

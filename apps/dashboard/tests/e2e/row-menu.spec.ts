@@ -1,8 +1,9 @@
 import { test, expect } from "@playwright/test";
 
 // The per-row "⋯" action menu: single-item triage without the checkbox→bulk
-// flow. Covers assign (avatar updates in place) and status (item moves to the
-// Closed tab via the loop-turn derivation).
+// flow. Covers assign (avatar updates in place) and status (a status that can
+// email the customer asks first, then the item moves to the Closed tab via the
+// loop-turn derivation).
 
 test("row ⋯ menu assigns a teammate in place", async ({ page }) => {
   await page.goto("/inbox");
@@ -31,6 +32,7 @@ test("row ⋯ menu sets status and the loop moves to Closed", async ({ page }) =
   await row.getByRole("button", { name: `Actions for ${shortId}` }).click();
   await page.getByRole("menu").getByText("Set status…").click();
   await page.getByRole("menu").getByText("Shipped").click();
+  await page.getByRole("dialog").getByRole("button", { name: "Move to Shipped" }).click();
 
   // Shipped is a terminal status: the loop closes, so the item leaves the
   // default "Your turn" tab and appears under Closed.

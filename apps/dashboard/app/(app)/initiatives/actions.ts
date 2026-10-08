@@ -22,6 +22,7 @@ type InitiativeStatus = (typeof ALLOWED_STATUSES)[number];
 
 const NAME_MAX = 120;
 const DESC_MAX = 4000;
+const NOTES_MAX = 4000;
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
 export type ActionResult<T = void> =
@@ -123,6 +124,7 @@ export async function updateInitiative(
   patch: {
     name?: string;
     description?: string | null;
+    internalNotes?: string | null;
     status?: string;
     color?: string | null;
     ownerWorkspaceUserId?: string | null;
@@ -147,6 +149,13 @@ export async function updateInitiative(
     const desc = patch.description?.trim() || null;
     if (desc && desc.length > DESC_MAX) return { ok: false, error: "description_too_long" };
     updates.description = desc;
+  }
+
+  // Team-only; never read by the public roadmap or changelog.
+  if (patch.internalNotes !== undefined) {
+    const notes = patch.internalNotes?.trim() || null;
+    if (notes && notes.length > NOTES_MAX) return { ok: false, error: "notes_too_long" };
+    updates.internalNotes = notes;
   }
 
   // Detect a transition INTO "shipped" so we can auto-draft a changelog entry

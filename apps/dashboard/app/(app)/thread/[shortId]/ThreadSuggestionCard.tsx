@@ -4,6 +4,8 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Btn, Card, CardHead, Ic } from "@crumb/ui";
+import { useToast } from "@/components/toast";
+import { errorMessage } from "@/lib/action-error";
 import { acceptSuggestion, dismissSuggestion } from "../../initiatives/actions";
 
 export type ThreadSuggestion = {
@@ -23,6 +25,7 @@ export function ThreadSuggestionCard({
   itemShortId: string;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [pending, startTransition] = useTransition();
   const dot = suggestion.initiativeColor ?? "var(--ink)";
   const pct = Math.round(suggestion.confidence * 100);
@@ -31,6 +34,7 @@ export function ThreadSuggestionCard({
     startTransition(async () => {
       const r = await acceptSuggestion(suggestion.id);
       if (r.ok) router.refresh();
+      else toast.show({ message: errorMessage(r.error), tone: "error" });
     });
   }
 
@@ -38,6 +42,7 @@ export function ThreadSuggestionCard({
     startTransition(async () => {
       const r = await dismissSuggestion(suggestion.id);
       if (r.ok) router.refresh();
+      else toast.show({ message: errorMessage(r.error), tone: "error" });
     });
   }
 

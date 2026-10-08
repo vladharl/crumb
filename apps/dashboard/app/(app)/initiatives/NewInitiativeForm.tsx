@@ -89,10 +89,14 @@ export function NewInitiativeForm({ disabled }: { disabled?: boolean }) {
           id="ini-desc"
           value={description}
           onChange={e => setDescription(e.target.value)}
-          placeholder="What this initiative covers. Visible to the team only."
+          placeholder="What this initiative covers."
           rows={3}
+          aria-describedby="ini-desc-help"
           style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
         />
+        <span id="ini-desc-help" className="text-2xs muted">
+          Customers see this on the public roadmap when the initiative is public. It also starts the changelog draft when it ships.
+        </span>
       </div>
 
       <div className="col gap-1">

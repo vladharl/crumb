@@ -18,6 +18,7 @@ const STATUSES = [
 type Patch = {
   name?: string;
   description?: string | null;
+  internalNotes?: string | null;
   status?: string;
   color?: string | null;
   ownerWorkspaceUserId?: string | null;
@@ -29,10 +30,11 @@ function humanError(code: string): string {
     case "name_required":        return "Name can't be empty.";
     case "name_too_long":        return "Name is too long.";
     case "description_too_long": return "Description is too long.";
+    case "notes_too_long":       return "Internal notes are too long.";
     case "bad_color":            return "That's not a valid color.";
     case "bad_owner":            return "That teammate isn't in this workspace.";
     case "forbidden":            return "Only admins and PMs can edit initiatives.";
-    default:                     return "Couldn't save — try again.";
+    default:                     return "Couldn't save. Try again.";
   }
 }
 
@@ -57,6 +59,7 @@ export function EditPanel({
     id: string;
     name: string;
     description: string | null;
+    internalNotes: string | null;
     status: string;
     color: string | null;
     ownerWorkspaceUserId: string | null;
@@ -69,6 +72,7 @@ export function EditPanel({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(initiative.name);
   const [description, setDescription] = useState(initiative.description ?? "");
+  const [notes, setNotes] = useState(initiative.internalNotes ?? "");
   const [status, setStatus] = useState(initiative.status);
   const [color, setColor] = useState<string | null>(initiative.color);
   const [ownerId, setOwnerId] = useState<string>(initiative.ownerWorkspaceUserId ?? "");
@@ -105,7 +109,7 @@ export function EditPanel({
 
   function commitName() {
     const trimmed = name.trim();
-    if (!trimmed) { setName(initiative.name); setError("Name can't be empty — reverted."); return; }
+    if (!trimmed) { setName(initiative.name); setError("Name can't be empty, so it was reverted."); return; }
     if (trimmed === initiative.name) return;
     persist({ name: trimmed });
   }
@@ -113,6 +117,11 @@ export function EditPanel({
     const next = description.trim() || null;
     if ((next ?? "") === (initiative.description ?? "")) return;
     persist({ description: next });
+  }
+  function commitNotes() {
+    const next = notes.trim() || null;
+    if ((next ?? "") === (initiative.internalNotes ?? "")) return;
+    persist({ internalNotes: next });
   }
   // Tracked events are managed as chips. Every add/remove normalizes the set
   // and auto-saves, but only when it actually changed (each control sends just
@@ -175,8 +184,25 @@ export function EditPanel({
           onChange={e => setDescription(e.target.value)}
           onBlur={commitDescription}
           rows={3}
+          aria-describedby="ed-desc-help"
           style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
         />
+        <span id="ed-desc-help" className="text-2xs muted">
+          Customers see this on the public roadmap when the initiative is public. It also starts the changelog draft when it ships.
+        </span>
+      </div>
+      <div className="col gap-1">
+        <label className="eyebrow" htmlFor="ed-notes">Internal notes</label>
+        <textarea
+          id="ed-notes"
+          value={notes}
+          onChange={e => setNotes(e.target.value)}
+          onBlur={commitNotes}
+          rows={3}
+          aria-describedby="ed-notes-help"
+          style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
+        />
+        <span id="ed-notes-help" className="text-2xs muted">Team only. Never shown to customers.</span>
       </div>
       <div className="col gap-1">
         <label className="eyebrow" htmlFor="ed-status">Status</label>

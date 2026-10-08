@@ -1,16 +1,18 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Card, CardHead, Ic, PageHead, Pill, StatusPill, type Status } from "@crumb/ui";
+import { Card, CardHead, Ic, PageHead, Pill, StatusPill, STATUS_LABELS, type Status } from "@crumb/ui";
 import { sql } from "drizzle-orm";
 import { db } from "@crumb/db";
 import { getActiveSession } from "@/lib/server";
 import { hasFeature } from "@/lib/entitlements";
 import { accountRiskSignals, atRiskAccounts, atRiskArrCents } from "@/lib/insights/churn";
+import { loopOpenSql } from "@/lib/loop-sql";
 
 export const dynamic = "force-dynamic";
 
-// Display order for the status breakdown (active → resolved → other).
-const STATUS_ORDER: Status[] = ["open", "review", "planned", "progress", "shipped", "declined", "deferred", "duplicate"];
+// Display order for the status breakdown: every status (the customer's own
+// "resolved" close included), so the bars add up to the item-count pill.
+const STATUS_ORDER = Object.keys(STATUS_LABELS) as Status[];
 const TYPE_LABEL: Record<string, string> = { bug: "Bugs", idea: "Ideas", question: "Questions", integration: "Integrations" };
 const TIER_LABEL: Record<string, string> = { enterprise: "Enterprise (≥$100k)", mid: "Mid-market ($10–100k)", smb: "SMB (<$10k)", none: "No ARR set" };
 const TIER_ORDER = ["enterprise", "mid", "smb", "none"] as const;
@@ -201,8 +203,12 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
   const scopedSub = wDays == null ? "all time" : `last ${windowLabel}`;
 
   // Window fragments, composed into the queries below. `i` is the items alias.
+  // Every card counts unmerged items only (i.merged_into_id is null), so a
+  // duplicate folded into its canonical item counts once.
   const curW = wDays == null ? sql`true` : sql`i.created_at >= now() - make_interval(days => ${wDays})`;
   const prevW = wDays == null ? sql`false` : sql`i.created_at >= now() - make_interval(days => ${wDays * 2}) and i.created_at < now() - make_interval(days => ${wDays})`;
+  // Open loop = not closed (Set aside included), the same set as the inbox.
+  const isOpen = loopOpenSql(sql`i.status`);
 
   const [byStatusRows, byTypeRows, volRows, respRows, awaitingRows, trendRows, loopRows, openLoopRows, tierRows, themeRows, signals] = await Promise.all([
     db.execute(sql`
@@ -233,12 +239,12 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
         from replies where workspace_user_id is not null and internal = false
         group by item_id
       ) fr on fr.item_id = i.id
-      where i.workspace_id = ${ws}::uuid
+      where i.workspace_id = ${ws}::uuid and i.merged_into_id is null
     `),
-    // Open items that have never had a vendor reply (snapshot — always "now").
+    // Open loops that have never had a vendor reply (snapshot — always "now").
     db.execute(sql`
       select count(*)::int as n from items i
-      where i.workspace_id = ${ws}::uuid and i.status = 'open'
+      where i.workspace_id = ${ws}::uuid and i.merged_into_id is null and ${isOpen}
         and not exists (
           select 1 from replies r
           where r.item_id = i.id and r.workspace_user_id is not null and r.internal = false
@@ -273,7 +279,7 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
         select item_id, min(sent_at) as first_told from customer_notifications
         where kind = 'status' and to_status in ('shipped','declined') group by item_id
       ) cn on cn.item_id = i.id
-      where i.workspace_id = ${ws}::uuid
+      where i.workspace_id = ${ws}::uuid and i.merged_into_id is null
     `),
     // Open loops + the combined ARR of the accounts they belong to (snapshot).
     db.execute(sql`
@@ -281,7 +287,7 @@ export default async function InsightsPage({ searchParams }: { searchParams?: { 
         select i.id, i.account_id from items i
         where i.workspace_id = ${ws}::uuid
           and i.merged_into_id is null
-          and i.status not in ('shipped','declined','duplicate')
+          and ${isOpen}
       )
       select (select count(*)::int from open_loops) as n,
              coalesce((

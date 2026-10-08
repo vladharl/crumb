@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Btn, Card, CardHead, Ic, Pill } from "@crumb/ui";
 import { useConfirm } from "@/components/confirm";
+import { useToast } from "@/components/toast";
+import { errorMessage } from "@/lib/action-error";
 import { unlinkExternalTicket } from "./actions";
 import { ExternalTicketModal } from "./ExternalTicketModal";
 
@@ -48,6 +50,7 @@ const STALE_MS = 24 * 60 * 60 * 1000;
 export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailable, workspace, item }: ExternalTicketTileProps) {
   const router = useRouter();
   const confirm = useConfirm();
+  const toast = useToast();
   const [modalOpen, setModalOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
@@ -84,6 +87,7 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
       startTransition(async () => {
         const r = await unlinkExternalTicket(itemShortId);
         if (r.ok) router.refresh();
+        else toast.show({ message: errorMessage(r.error), tone: "error" });
       });
     }
 

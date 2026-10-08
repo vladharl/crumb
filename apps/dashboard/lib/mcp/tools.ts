@@ -247,7 +247,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "update_item_status",
     description:
-      "Change a feedback item's status. Allowed: open, review, planned, progress, shipped, declined, deferred, duplicate. A reason is required for declined/deferred/duplicate. This notifies the customer and fires webhooks just like the dashboard.",
+      "Change a feedback item's status. Allowed: open, review, planned, progress, shipped, declined, deferred, duplicate. A reason is required for declined/deferred/duplicate. Fires webhooks just like the dashboard. Only planned, progress, shipped, declined (won't ship) and deferred (set aside) email the submitter, and only when they can be emailed: they submitted through the widget, have an address, haven't opted out, and the workspace has email delivery set up. `emailed` in the result says whether that email actually went out.",
     inputSchema: {
       type: "object",
       properties: {
@@ -261,19 +261,19 @@ export const TOOLS: ToolDef[] = [
     async handler(args, ctx) {
       const shortId = str(args.short_id) ?? fail("short_id is required");
       const status = str(args.status) ?? fail("status is required");
-      unwrap(await updateItemStatus(actorOf(ctx), {
+      const r = unwrap(await updateItemStatus(actorOf(ctx), {
         itemShortId: shortId,
         status: status as Status,
         reason: str(args.reason) ?? undefined,
         origin: ctx.origin,
       }));
-      return { ok: true, short_id: shortId, status };
+      return { ok: true, short_id: shortId, status, emailed: r.emailed };
     },
   },
   {
     name: "reply_to_item",
     description:
-      "Post a reply on a feedback item. By default it's a customer-facing reply (emails the submitter + fires webhooks). Set internal=true for a private team note.",
+      "Post a reply on a feedback item. By default it's a customer-facing reply: it fires webhooks, and emails the submitter only when they can be emailed (they submitted through the widget, have an address, haven't opted out, and the workspace has email delivery set up). `emailed` in the result says whether that email actually went out. Set internal=true for a private team note, which never emails.",
     inputSchema: {
       type: "object",
       properties: {
@@ -293,7 +293,7 @@ export const TOOLS: ToolDef[] = [
         internal: args.internal === true,
         origin: ctx.origin,
       }));
-      return { ok: true, short_id: shortId, reply_id: r.replyId, internal: args.internal === true };
+      return { ok: true, short_id: shortId, reply_id: r.replyId, internal: args.internal === true, emailed: r.emailed };
     },
   },
   {

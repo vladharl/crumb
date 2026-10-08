@@ -5,6 +5,7 @@ import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getActiveSession } from "@/lib/server";
 import { clusterConfigured } from "@/lib/ai/cluster";
+import { emailConfigured } from "@/lib/email";
 import { hasFeature } from "@/lib/entitlements";
 import { InboxTable, type InboxRow, type Assignee, type InitiativeOption } from "./InboxTable";
 import { CaptureTriage } from "./CaptureTriage";
@@ -314,6 +315,7 @@ export async function InboxTableTile() {
         initiatives={initiativeOptions}
         canManageInitiatives={canManageInitiatives}
         clusterEnabled={aiEntitled && clusterConfigured() && initiativeOptions.length > 0}
+        emailConfigured={emailConfigured()}
         nowMs={Date.now()}
       />
     </>

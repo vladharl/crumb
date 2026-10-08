@@ -6,25 +6,24 @@
  * close the loop: the customer is notified of shipped/declined, and merged
  * duplicates live under their canonical item.
  *
- * Pure module (no React/db imports) so the derivation is unit-testable and
- * shared between the inbox query mapping and the client table.
+ * Pure module (no db imports) so the derivation is unit-testable and shared
+ * between the inbox query mapping and the client table. The status sets come
+ * from @crumb/ui, the one definition the trail dots and SQL counts
+ * (lib/loop-sql.ts) also use.
  */
+
+import { CLOSED_STATUSES } from "@crumb/ui";
 
 export type LoopTurn = "yours" | "waiting" | "closed";
 
 export type ReplySide = "vendor" | "customer";
 
 /**
- * Statuses where the loop is closed — the customer has been told the outcome
- * (shipped/declined/duplicate) or closed it themselves from the widget
- * ("resolved").
+ * Statuses where the loop is closed: an outcome was reached
+ * (shipped/declined/duplicate) or the customer closed it themselves from the
+ * widget ("resolved").
  */
-export const LOOP_CLOSED_STATUSES: ReadonlySet<string> = new Set([
-  "shipped",
-  "declined",
-  "duplicate",
-  "resolved",
-]);
+export const LOOP_CLOSED_STATUSES: ReadonlySet<string> = CLOSED_STATUSES;
 
 export function loopTurn(item: { status: string; lastReplySide: ReplySide | null }): LoopTurn {
   if (LOOP_CLOSED_STATUSES.has(item.status)) return "closed";

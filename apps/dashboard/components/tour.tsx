@@ -121,13 +121,20 @@ export function TourProvider({ autoStart, children }: { autoStart: boolean; chil
   const stepRef = useRef(0);
   useEffect(() => { stepRef.current = step; }, [step]);
 
+  // The callout's Next button takes focus on open; on close, focus returns to
+  // whatever had it on relaunch (the sidebar launcher). Auto-start has none.
+  const returnFocus = useRef<HTMLElement | null>(null);
+
   const start = useCallback(() => {
+    returnFocus.current = document.activeElement as HTMLElement | null;
     setStep(0);
     setActive(true);
   }, []);
 
   const finish = useCallback(() => {
     setActive(false);
+    returnFocus.current?.focus();
+    returnFocus.current = null;
     // Fire-and-forget: closing the UI shouldn't wait on the network. A failed
     // write just means the tour reappears next sign-in, which is acceptable.
     void completeTour().catch(() => {});
@@ -140,12 +147,13 @@ export function TourProvider({ autoStart, children }: { autoStart: boolean; chil
 
   const back = useCallback(() => setStep(s => Math.max(0, s - 1)), []);
 
-  // Keyboard navigation while the tour is open (mirrors confirm.tsx).
+  // Keyboard navigation while the tour is open. Enter is left to the focused
+  // button, so Enter on Skip or Back does that instead of advancing.
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); finish(); }
-      else if (e.key === "ArrowRight" || e.key === "Enter") { e.preventDefault(); next(); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); next(); }
       else if (e.key === "ArrowLeft") { e.preventDefault(); back(); }
     };
     window.addEventListener("keydown", onKey);
@@ -330,7 +338,7 @@ const Callout = forwardRef<HTMLDivElement, CalloutProps>(function Callout(
         </div>
         <div className="row gap-2">
           {step > 0 && <Btn sm onClick={onBack}>Back</Btn>}
-          <Btn sm variant="primary" onClick={onNext}>{isLast ? "Done" : "Next"}</Btn>
+          <Btn sm variant="primary" autoFocus onClick={onNext}>{isLast ? "Done" : "Next"}</Btn>
         </div>
       </div>
     </div>

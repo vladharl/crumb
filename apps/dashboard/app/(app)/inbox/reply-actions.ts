@@ -5,6 +5,8 @@ import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
 import { replyConfigured } from "@/lib/ai/reply";
 import { hasFeature } from "@/lib/entitlements";
+import { emailConfigured } from "@/lib/email";
+import { customerNotifyPlan } from "@/lib/notify/customer-plan";
 
 export type ReplyDrawerMessage = {
   id: string;
@@ -38,6 +40,9 @@ export type ReplyContext = {
   teammates: { id: string; name: string; initials: string }[];
   aiReplyAvailable: boolean;
   canWrite: boolean;
+  // Whether a reply / status change will actually email the submitter: the
+  // same plan the send paths gate on, so the drawer's copy can't drift.
+  notifyPlan: ReturnType<typeof customerNotifyPlan>;
 };
 
 // How many recent messages each tab shows in the drawer. The full trail lives
@@ -60,6 +65,11 @@ export async function getReplyContext(
       accountArr: accounts.arrCents,
       submitterName: accountUsers.name,
       submitterInitials: accountUsers.initials,
+      source: items.source,
+      submitterEmail: accountUsers.email,
+      submitterUnsub: accountUsers.unsubscribedAll,
+      submitterNotifyReplies: accountUsers.notifyReplies,
+      submitterNotifyStatus: accountUsers.notifyStatus,
       detectedLang: items.detectedLang,
       titleTranslated: items.titleTranslated,
       bodyTranslated: items.bodyTranslated,
@@ -145,6 +155,14 @@ export async function getReplyContext(
       teammates: wsAuthor,
       aiReplyAvailable: replyConfigured() && hasFeature(workspace, "ai"),
       canWrite: user.role === "admin" || user.role === "pm",
+      notifyPlan: customerNotifyPlan({
+        source: head.source,
+        submitterEmail: head.submitterEmail,
+        unsubscribedAll: head.submitterUnsub,
+        notifyReplies: head.submitterNotifyReplies,
+        notifyStatus: head.submitterNotifyStatus,
+        emailConfigured: emailConfigured(),
+      }),
     },
   };
 }

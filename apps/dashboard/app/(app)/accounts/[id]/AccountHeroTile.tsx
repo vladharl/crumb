@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Avatar, Card, PageHead, Pill } from "@crumb/ui";
+import { Avatar, Card, PageHead, Pill, STATUS_LABELS } from "@crumb/ui";
 import { db, accounts, accountUsers, items } from "@crumb/db";
 import { and, eq, sql } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
+import { notMergedSql } from "@/lib/loop-sql";
+import { statusMix } from "@/lib/insights/status-mix";
 import { AccountArrEdit } from "./AccountArrEdit";
 
 async function loadHero(workspaceId: string, accountId: string) {
@@ -18,7 +20,7 @@ async function loadHero(workspaceId: string, accountId: string) {
     db
       .select({ status: items.status, count: sql<number>`COUNT(*)::int` })
       .from(items)
-      .where(eq(items.accountId, accountId))
+      .where(and(eq(items.accountId, accountId), notMergedSql(items.mergedIntoId)))
       .groupBy(items.status),
     db
       .select({ count: sql<number>`COUNT(*)::int` })
@@ -26,17 +28,7 @@ async function loadHero(workspaceId: string, accountId: string) {
       .where(eq(accountUsers.accountId, accountId)),
   ]);
 
-  const m = new Map(statsRows.map(r => [r.status, r.count]));
-  const get = (s: string) => m.get(s) ?? 0;
-  const stats = {
-    open: get("open") + get("review"),
-    progress: get("planned") + get("progress"),
-    shipped: get("shipped"),
-    declined: get("declined"),
-    deferred: get("deferred"),
-  };
-
-  return { account, stats, requesterCount };
+  return { account, stats: statusMix(statsRows), requesterCount };
 }
 
 export async function AccountHeroTile({ accountId }: { accountId: string }) {
@@ -70,12 +62,13 @@ export async function AccountHeroTile({ accountId }: { accountId: string }) {
               {requesterCount} {requesterCount === 1 ? "person" : "people"} have submitted feedback so far.
             </div>
           </div>
-          <div className="row gap-6" style={{ alignItems: "flex-end" }}>
+          <div className="row gap-6" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
             {[
               [String(stats.open),     "Open"],
               [String(stats.progress), "In progress"],
-              [String(stats.shipped),  "Shipped"],
-              [String(stats.declined + stats.deferred), "Won’t ship"],
+              [String(stats.shipped),  STATUS_LABELS.shipped],
+              [String(stats.declined), STATUS_LABELS.declined],
+              [String(stats.deferred), STATUS_LABELS.deferred],
             ].map(([n, l]) => (
               <div key={l} className="kpi" style={{ alignItems: "center" }}>
                 <span className="num">{n}</span>

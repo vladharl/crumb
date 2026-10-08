@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { Ic } from "@crumb/ui";
-import type { Status } from "@crumb/ui";
+import { Btn, Ic, REASON_PLACEHOLDER, REASON_REQUIRED, VENDOR_STATUS_OPTIONS, statusLabel } from "@crumb/ui";
+import type { VendorStatus } from "@crumb/ui";
+import { useToast } from "@/components/toast";
+import { useConfirm } from "@/components/confirm";
+import { errorMessage } from "@/lib/action-error";
+import { statusEmailsCustomer } from "@/lib/notify/customer-plan";
 import { bulkAssign, bulkUpdateStatus } from "./actions";
 import { bulkSetInitiative } from "../initiatives/actions";
 import type { Assignee, InitiativeOption } from "./InboxTable";
@@ -19,22 +23,78 @@ import type { Assignee, InitiativeOption } from "./InboxTable";
  * one popover, no hover-intent timing problems.
  */
 
-type Pane = "root" | "assign" | "status" | "initiative";
+type Pane = "root" | "assign" | "status" | "initiative" | "reason";
 
-const STATUS_OPTIONS: Array<{ value: Status; label: string }> = [
-  { value: "open",      label: "Open" },
-  { value: "review",    label: "In review" },
-  { value: "planned",   label: "Planned" },
-  { value: "progress",  label: "In progress" },
-  { value: "shipped",   label: "Shipped" },
-  { value: "declined",  label: "Won’t ship" },
-  { value: "deferred",  label: "Set aside" },
-  { value: "duplicate", label: "Duplicate" },
-];
+// ── Status-write helpers, shared with the bulk bar in InboxTable ──────────
+
+// Who a status that emails (statusEmailsCustomer) actually reaches: the
+// pipeline only emails widget-origin submitters who haven't opted out, and
+// nobody until a real email provider is set up (emailConfigured).
+export function emailNote(count: number, emailConfigured: boolean): string {
+  if (!emailConfigured) return "Email delivery isn't set up yet, so nobody gets emailed.";
+  return count === 1
+    ? "The submitter gets an email about this, unless they opted out or the item didn't come in through the widget."
+    : "Submitters get an email about this, unless they opted out or their item didn't come in through the widget.";
+}
+
+type StatusResult = Awaited<ReturnType<typeof bulkUpdateStatus>>;
+
+// What a status write actually did, as a toast: everything moved, nothing
+// moved (the error), or some did (counts, then the first error). `name`
+// labels a single row in place of the item count.
+export function statusToast(r: StatusResult, label: string, name?: string): { message: string; tone?: "error" } {
+  if (!r.ok) return { message: errorMessage(r.error), tone: "error" };
+  if (r.failed === 0) return { message: `${name ?? `${r.affected} ${r.affected === 1 ? "item" : "items"}`} moved to ${label}.` };
+  if (r.affected === 0) return { message: errorMessage(r.firstError), tone: "error" };
+  return { message: `${r.affected} moved, ${r.failed} failed. ${errorMessage(r.firstError)}`, tone: "error" };
+}
+
+/**
+ * The "say why" step before a reason-required status, in the thread status
+ * card's wording. The text lives here, so a failed write leaves it in place
+ * for a retry; the parent unmounts the form once the write lands.
+ */
+export function ReasonForm({ status, count, emailConfigured, pending, onCancel, onSubmit }: {
+  status: string;
+  count: number;
+  emailConfigured: boolean;
+  pending: boolean;
+  onCancel: () => void;
+  onSubmit: (reason: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const label = statusLabel(status);
+  return (
+    <div className="col gap-2" style={{ maxWidth: 520 }}>
+      <span className="eyebrow">{label}: say why</span>
+      <textarea
+        className="input"
+        rows={3}
+        autoFocus
+        aria-label={`Reason for ${label}`}
+        placeholder={REASON_PLACEHOLDER[status]}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        disabled={pending}
+      />
+      {statusEmailsCustomer(status) && (
+        <p className="note text-xs muted">
+          {emailNote(count, emailConfigured)}{emailConfigured && " The email includes your reason."}
+        </p>
+      )}
+      <div className="row gap-2">
+        <Btn sm onClick={onCancel} disabled={pending}>Cancel</Btn>
+        <Btn sm variant="primary" onClick={() => onSubmit(text.trim())} disabled={pending || !text.trim()}>
+          {pending ? "Saving…" : `Move to ${label}`}
+        </Btn>
+      </div>
+    </div>
+  );
+}
 
 export function RowActionMenu({
   itemId, shortId, assigneeId, status, initiativeId,
-  assignees, initiatives, canWrite, canManageInitiatives, onStatusOptimistic,
+  assignees, initiatives, canWrite, canManageInitiatives, emailConfigured, onStatusOptimistic,
 }: {
   itemId: string;
   shortId: string;
@@ -45,13 +105,18 @@ export function RowActionMenu({
   initiatives: InitiativeOption[];
   canWrite: boolean;
   canManageInitiatives: boolean;
+  emailConfigured: boolean;
   // Lets the inbox paint a single-row status change on the same frame it's
   // chosen (optimistic overlay), reverting with `null` if the write fails.
   onStatusOptimistic?: (status: string | null) => void;
 }) {
   const router = useRouter();
+  const toast = useToast();
+  const confirm = useConfirm();
   const [open, setOpen] = useState(false);
   const [pane, setPane] = useState<Pane>("root");
+  // The reason-required status the "reason" pane is asking a reason for.
+  const [reasonFor, setReasonFor] = useState<VendorStatus | null>(null);
   const [copied, setCopied] = useState(false);
   const [pending, startTransition] = useTransition();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -65,6 +130,7 @@ export function RowActionMenu({
   function close() {
     setOpen(false);
     setPane("root");
+    setReasonFor(null);
     setCopied(false);
   }
 
@@ -113,27 +179,57 @@ export function RowActionMenu({
     if (open) place();
   }, [open, pane, place]);
 
-  function run(fn: () => Promise<{ ok: boolean }>) {
+  function run(fn: () => Promise<{ ok: true } | { ok: false; error: string }>) {
     startTransition(async () => {
       const r = await fn();
       if (r.ok) {
         close();
         router.refresh();
+      } else {
+        toast.show({ message: errorMessage(r.error), tone: "error" });
       }
     });
   }
 
   // Status gets the optimistic path: the inbox repaints the row on this frame
   // (re-bucketing it, sliding it via FLIP), the menu closes, and the write
-  // reconciles in the background — reverting the paint if it fails.
-  function setStatus(next: Status) {
+  // reconciles in the background — reverting the paint if it fails. A status
+  // that needs a reason asks for it first, in the menu; one that emails the
+  // customer confirms first, like the bulk bar.
+  async function setStatus(next: VendorStatus) {
     if (next === status) { close(); return; }
-    onStatusOptimistic?.(next);
+    if (REASON_REQUIRED.has(next)) { setReasonFor(next); setPane("reason"); return; }
     close();
+    if (statusEmailsCustomer(next)) {
+      const label = statusLabel(next);
+      btnRef.current?.focus(); // the dialog hands focus back to what had it: the ⋯ trigger
+      if (!(await confirm({
+        title: `Move ${shortId} to ${label}?`,
+        body: emailNote(1, emailConfigured),
+        confirmLabel: `Move to ${label}`,
+      }))) return;
+    }
+    onStatusOptimistic?.(next);
     startTransition(async () => {
       const r = await bulkUpdateStatus([itemId], next);
-      if (r.ok) router.refresh();
+      if (r.ok && r.failed === 0) router.refresh();
       else onStatusOptimistic?.(null);
+      toast.show(statusToast(r, statusLabel(next), shortId));
+    });
+  }
+
+  // The reason path waits for the server instead: on a failure the pane stays
+  // open with the typed reason, so nothing has to be retyped.
+  function submitReason(reason: string) {
+    if (!reasonFor) return;
+    const next = reasonFor;
+    startTransition(async () => {
+      const r = await bulkUpdateStatus([itemId], next, reason);
+      toast.show(statusToast(r, statusLabel(next), shortId));
+      if (r.ok && r.failed === 0) {
+        close();
+        router.refresh();
+      }
     });
   }
 
@@ -149,6 +245,7 @@ export function RowActionMenu({
     onClick: () => void;
     selected?: boolean;
     drill?: boolean;
+    hint?: string;
   }) => (
     <button
       key={props.key ?? props.label}
@@ -158,6 +255,7 @@ export function RowActionMenu({
       onClick={props.onClick}
     >
       <span className="dd-opt-label">{props.label}</span>
+      {props.hint && <span className="text-2xs muted">{props.hint}</span>}
       {props.selected && <Ic.check className="dd-tick" />}
       {props.drill && <Ic.chevR style={{ width: 11, height: 11, flexShrink: 0, color: "var(--mute-2)" }} />}
     </button>
@@ -193,7 +291,8 @@ export function RowActionMenu({
         <div
           ref={menuRef}
           className="dd-menu"
-          role="menu"
+          // The reason pane holds a form, which a menu can't.
+          role={pane === "reason" ? "dialog" : "menu"}
           aria-label={`Actions for ${shortId}`}
           style={{
             position: "fixed",
@@ -230,10 +329,30 @@ export function RowActionMenu({
           {pane === "status" && (
             <>
               {backRow}
-              {STATUS_OPTIONS.map(s =>
-                opt({ key: s.value, label: s.label, selected: s.value === status, onClick: () => setStatus(s.value) }),
+              {/* The moves that email the customer say so, as in the thread. */}
+              {VENDOR_STATUS_OPTIONS.map(s =>
+                opt({
+                  key: s.value,
+                  label: s.label,
+                  selected: s.value === status,
+                  hint: emailConfigured && s.value !== status && statusEmailsCustomer(s.value) ? "emails" : undefined,
+                  onClick: () => void setStatus(s.value),
+                }),
               )}
             </>
+          )}
+
+          {pane === "reason" && reasonFor && (
+            <div style={{ padding: 4 }}>
+              <ReasonForm
+                status={reasonFor}
+                count={1}
+                emailConfigured={emailConfigured}
+                pending={pending}
+                onCancel={() => setPane("status")}
+                onSubmit={submitReason}
+              />
+            </div>
           )}
 
           {pane === "initiative" && (

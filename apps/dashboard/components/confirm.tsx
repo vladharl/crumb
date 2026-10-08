@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Btn } from "@crumb/ui";
 
 export type ConfirmOptions = {
@@ -31,24 +31,30 @@ export function useConfirm() {
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<Pending | null>(null);
+  // Whatever had focus when the dialog opened (usually the trigger button).
+  // Captured before render, since autoFocus moves focus during commit.
+  const returnFocus = useRef<HTMLElement | null>(null);
 
-  const confirm = useCallback(
-    (opts: ConfirmOptions) => new Promise<boolean>(resolve => setPending({ ...opts, resolve })),
-    [],
-  );
+  const confirm = useCallback((opts: ConfirmOptions) => {
+    returnFocus.current = document.activeElement as HTMLElement | null;
+    return new Promise<boolean>(resolve => setPending({ ...opts, resolve }));
+  }, []);
 
   const close = useCallback((ok: boolean) => {
     setPending(prev => {
       prev?.resolve(ok);
       return null;
     });
+    returnFocus.current?.focus();
+    returnFocus.current = null;
   }, []);
 
+  // Escape cancels. Enter is left to the focused button, so Enter on Cancel
+  // cancels (a window-level Enter used to confirm whatever had focus).
   useEffect(() => {
     if (!pending) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); close(false); }
-      else if (e.key === "Enter") { e.preventDefault(); close(true); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -86,10 +92,12 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             {pending.body && (
               <p className="text-sm muted" style={{ margin: "0 0 16px", lineHeight: 1.55 }}>{pending.body}</p>
             )}
+            {/* Initial focus: Cancel on destructive confirms so a reflex Enter
+                backs out, the primary action otherwise. */}
             <div className="row gap-2" style={{ justifyContent: "flex-end" }}>
-              <Btn onClick={() => close(false)}>{pending.cancelLabel ?? "Cancel"}</Btn>
+              <Btn autoFocus={!!pending.destructive} onClick={() => close(false)}>{pending.cancelLabel ?? "Cancel"}</Btn>
               <Btn
-                autoFocus
+                autoFocus={!pending.destructive}
                 variant={pending.destructive ? "danger" : "primary"}
                 onClick={() => close(true)}
               >

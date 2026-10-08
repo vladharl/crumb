@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { Avatar, Btn, Ic, Pill } from "@crumb/ui";
-import { createReply, draftReplyAction } from "@/app/(app)/thread/[shortId]/actions";
-
-// The reply composer's tab. The thread also has a "trail" view; on it the
-// composer still posts a customer-facing reply, so anything that isn't
-// "internal" is treated as customer-facing (matches the prior thread logic).
-export type ComposerTab = "customer" | "internal" | "trail";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Avatar, Btn, Ic, StatusDot, CLOSED_STATUSES, statusLabel } from "@crumb/ui";
+import type { VendorStatus } from "@crumb/ui";
+import { createReply, draftReplyAction, replyAndSetStatus, updateStatus } from "@/app/(app)/thread/[shortId]/actions";
+import { errorMessage } from "@/lib/action-error";
+import { statusEmailsCustomer, type NotifyPlan } from "@/lib/notify/customer-plan";
+import { useConfirm } from "@/components/confirm";
+import { useToast } from "@/components/toast";
 
 export type ComposerAttachment = {
   id: string;
@@ -18,27 +19,224 @@ export type ComposerAttachment = {
 
 export type ComposerTeammate = { id: string; name: string; initials: string };
 
+// Whether a reply / a status change will email the item's submitter
+// (customerNotifyPlan, computed server-side where the email config lives).
+export type ItemNotifyPlan = { replies: NotifyPlan; status: NotifyPlan };
+
+type Mode = "reply" | "note";
+
 function humanBytes(b: number): string {
   if (b < 1024) return `${b} B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
   return `${(b / 1024 / 1024).toFixed(1)} MB`;
 }
 
+// ── Copy: what the customer will (and won't) get ─────────────
+
+// Where an item came in, for the thread's "via Zendesk" and the no-email copy.
+const SOURCE_LABELS: Record<string, string> = {
+  widget: "the widget", email: "email", slack: "Slack", extension: "the browser extension",
+  gong: "Gong", zendesk: "Zendesk", intercom: "Intercom", freshdesk: "Freshdesk", freshchat: "Freshchat",
+};
+
+export function sourceLabel(source: string): string {
+  return SOURCE_LABELS[source] ?? source;
+}
+
+export function firstName(name: string): string {
+  return name.trim().split(/\s+/)[0] || "the customer";
+}
+
+// Why the customer won't be emailed, or null when they will. `kind` names the
+// emails a per-kind mute turned off.
+export function noEmailNote(plan: NotifyPlan, kind: "reply" | "status", first: string, source: string | null): string | null {
+  if (plan.willEmail) return null;
+  switch (plan.reason) {
+    case "source":         return `This came in through ${source ? sourceLabel(source) : "another tool"}, so ${first} won't be emailed. Follow up there too.`;
+    case "no_email":       return `There's no email address for ${first}, so nothing gets emailed.`;
+    case "unsubscribed":   return `${first} unsubscribed from email, so nothing gets emailed.`;
+    case "muted":          return `${first} turned off ${kind} emails, so nothing gets emailed.`;
+    case "not_configured": return `Email delivery isn't set up yet, so ${first} won't be emailed.`;
+  }
+}
+
+// The line beside the Reply / Internal note switch, in reply mode.
+export function replyNote(plan: NotifyPlan, first: string, accountName: string, source: string | null): string {
+  return noEmailNote(plan, "reply", first, source) ?? `Replying to ${first} at ${accountName}. They'll get this by email.`;
+}
+
+export function replySentMessage(emailed: boolean, first: string, closedAs?: string): string {
+  return emailed
+    ? `Reply sent to ${first} by email${closedAs ? `, and marked ${statusLabel(closedAs)}` : ""}.`
+    : `Reply posted${closedAs ? ` and marked ${statusLabel(closedAs)}` : ""}. ${first} wasn't emailed.`;
+}
+
+// Will moving the item from `current` to `status` email the customer? The
+// server's own rule (statusEmailsCustomer), gated by the submitter's plan.
+export function statusWillEmail(status: string, current: string, plan: NotifyPlan): boolean {
+  return status !== current && statusEmailsCustomer(status) && plan.willEmail;
+}
+
+export function statusMovedMessage(status: string, first: string, emailed: boolean): string {
+  const done = `Marked ${statusLabel(status)}.`;
+  if (!statusEmailsCustomer(status)) return done;
+  return `${done} ${first} ${emailed ? "was" : "wasn't"} emailed.`;
+}
+
+// ── Actions: errors, and a beat to undo status emails ────────
+
+type Toasts = ReturnType<typeof useToast>;
+
+// Calls a server action. A failure (an error code, or a throw) becomes an error
+// toast and returns null, so the caller can roll back.
+export async function runAction<R extends { ok: boolean }>(
+  toast: Toasts,
+  call: () => Promise<R>,
+): Promise<Extract<R, { ok: true }> | null> {
+  try {
+    const res = await call();
+    if (res.ok) return res as Extract<R, { ok: true }>;
+    toast.show({ message: errorMessage((res as { error?: string }).error), tone: "error" });
+  } catch {
+    toast.show({ message: errorMessage(null), tone: "error" });
+  }
+  return null;
+}
+
+export const STATUS_EMAIL_DELAY_MS = 6000;
+
+// Calls `send` after `ms` unless undone first; undo() says whether it stopped
+// the send in time. While it waits, leaving the page asks first, since that
+// would drop the send.
+export function sendAfterDelay(send: () => void, ms: number): { undo: () => boolean } {
+  let waiting = true;
+  const guard = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+  const stop = () => { waiting = false; window.removeEventListener("beforeunload", guard); };
+  window.addEventListener("beforeunload", guard);
+  const timer = setTimeout(() => { stop(); send(); }, ms);
+  return {
+    undo: () => {
+      if (!waiting) return false;
+      clearTimeout(timer);
+      stop();
+      return true;
+    },
+  };
+}
+
 /**
- * The customer/internal reply composer — extracted from the thread so the
- * inbox's reply-in-place drawer and the full thread page share one composer
- * (same @-mention autocomplete, attachments, AI draft, and send semantics).
- * Owns its own draft + send state; the parent supplies the active tab and is
- * told when a reply lands (onSent) so it can refresh / append / collapse.
+ * Status moves for one item, shared by the thread's Status card and the inbox
+ * drawer. A move that will email the customer shows at once but waits
+ * STATUS_EMAIL_DELAY_MS behind an Undo toast before anything is sent, and
+ * Shipped asks first. Other moves apply right away. A failed write rolls the
+ * shown status back and says why. The wait isn't tied to the component, so a
+ * move still sends (or undoes from its toast) after navigating away.
+ */
+export function useStatusMove({ itemShortId, status, first, source, plan, onMoved }: {
+  itemShortId: string;
+  status: string;          // the server's status
+  first: string;           // the submitter's first name
+  source: string | null;
+  plan: NotifyPlan;        // the submitter's status-email plan
+  onMoved?: (status: VendorStatus) => void;
+}) {
+  const router = useRouter();
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [optimistic, setOptimistic] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const waiting = useRef<{ undo: () => boolean; toastId: number } | null>(null);
+  const movedRef = useRef(onMoved);
+  movedRef.current = onMoved;
+
+  // The refreshed server status caught up: retire the overlay.
+  useEffect(() => { setOptimistic(o => (o === status ? null : o)); }, [status]);
+
+  // Drops the move waiting to send, if any; true when it stopped in time.
+  function dropWaiting(): boolean {
+    const w = waiting.current;
+    if (!w) return false;
+    waiting.current = null;
+    toast.dismiss(w.toastId);
+    return w.undo();
+  }
+
+  async function commit(next: VendorStatus, reason?: string) {
+    setSaving(true);
+    const res = await runAction(toast, () => updateStatus({ itemShortId, status: next, reason }));
+    setSaving(false);
+    if (!res) { setOptimistic(null); return; }
+    router.refresh();
+    toast.show({ message: statusMovedMessage(next, first, res.emailed) });
+    movedRef.current?.(next);
+  }
+
+  async function move(next: VendorStatus, reason?: string) {
+    if (next === (optimistic ?? status)) return;
+    // Back to where the server already is: that's an undo, nothing to write.
+    if (next === status) {
+      if (dropWaiting()) toast.show({ message: `Undone. ${first} wasn't emailed.` });
+      setOptimistic(null);
+      return;
+    }
+    const emails = statusWillEmail(next, status, plan);
+    if (next === "shipped" && !(await confirm({
+      title: "Mark this Shipped?",
+      body: emails ? `${first} will get an email saying it shipped.` : noEmailNote(plan, "status", first, source),
+      confirmLabel: "Mark Shipped",
+    }))) return;
+    // The latest choice wins: an earlier move still waiting never sends.
+    dropWaiting();
+    setOptimistic(next);
+    if (!emails) { await commit(next, reason); return; }
+
+    const pending = sendAfterDelay(() => {
+      waiting.current = null;
+      void commit(next, reason);
+    }, STATUS_EMAIL_DELAY_MS);
+    const toastId = toast.show({
+      message: `Marked ${statusLabel(next)}. Emailing ${first} in ${STATUS_EMAIL_DELAY_MS / 1000} seconds.`,
+      duration: STATUS_EMAIL_DELAY_MS,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          if (waiting.current?.toastId !== toastId || !dropWaiting()) return;
+          setOptimistic(null);
+          toast.show({ message: `Undone. ${first} wasn't emailed.` });
+        },
+      },
+    });
+    waiting.current = { undo: pending.undo, toastId };
+  }
+
+  return { shown: optimistic ?? status, saving, move };
+}
+
+// The mode an unsent inbox draft was written in, so a draft restored into a
+// re-opened drawer never changes audience. Lives as long as the tab does; the
+// drafts themselves are kept by the inbox.
+const draftModes = new Map<string, Mode>();
+
+/**
+ * The reply / internal-note composer, shared by the thread and the inbox's
+ * reply-in-place drawer (same @-mention autocomplete, attachments, AI draft,
+ * and send semantics). Who a message reaches is chosen right here, by the
+ * Reply / Internal note switch (Reply by default), and the send button says
+ * the consequence: "Send to Maya", or "Add note". The line beside the switch
+ * says whether the customer will actually be emailed, from the same plan the
+ * server sends by. Owns its draft + send state and toasts the outcome; the
+ * parent is told when something lands (onSent, with the status it closed as).
  *
  * Draft persistence (defaultDraft + onDraftChange) lets the inbox keep an
  * unsent draft alive across a collapse without keeping the drawer mounted.
  */
 export function ReplyComposer({
   itemShortId,
-  tab,
+  status,
   submitterName,
   accountName,
+  source,
+  notifyPlan,
   teammates,
   aiReplyAvailable,
   canWrite,
@@ -49,13 +247,16 @@ export function ReplyComposer({
   framed = true,
 }: {
   itemShortId: string;
-  tab: ComposerTab;
+  // The item's status as shown; reply-and-close is offered only while open.
+  status: string;
   submitterName: string;
   accountName: string;
+  source: string | null;
+  notifyPlan: ItemNotifyPlan;
   teammates: ComposerTeammate[];
   aiReplyAvailable: boolean;
   canWrite: boolean;
-  onSent?: () => void;
+  onSent?: (closedAs?: "shipped" | "declined") => void;
   autoFocus?: boolean;
   defaultDraft?: string;
   onDraftChange?: (value: string) => void;
@@ -63,15 +264,21 @@ export function ReplyComposer({
   // passes false for a borderless inset that the drawer's own padding frames.
   framed?: boolean;
 }) {
-  const isInternal = tab === "internal";
+  const toast = useToast();
+  const confirm = useConfirm();
+  const noteId = useId();
+  const first = firstName(submitterName);
+  // Viewers can only post notes, so they start there.
+  const [mode, setModeState] = useState<Mode>(
+    () => (defaultDraft && draftModes.get(itemShortId)) || (canWrite ? "reply" : "note"),
+  );
+  const isNote = mode === "note";
   const [draft, setDraftState] = useState(defaultDraft);
-  const [pending, startTransition] = useTransition();
-  const [sentAt, setSentAt] = useState<number | null>(null);
+  const [sending, setSending] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [drafting, setDrafting] = useState(false);
-  const [draftError, setDraftError] = useState<string | null>(null);
 
   // Single setter so every draft mutation also notifies the parent (for the
   // inbox's per-row draft persistence). Thread callers omit onDraftChange.
@@ -86,6 +293,19 @@ export function ReplyComposer({
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
 
+  const setMode = (m: Mode) => {
+    setModeState(m);
+    setMention(null);
+  };
+
+  // Keep the mode next to the inbox's persisted draft (see draftModes).
+  const persisted = !!onDraftChange;
+  useEffect(() => {
+    if (!persisted) return;
+    if (draft) draftModes.set(itemShortId, mode);
+    else draftModes.delete(itemShortId);
+  }, [persisted, draft, mode, itemShortId]);
+
   const mentionMatches = useMemo(() => {
     if (!mention) return [];
     const q = mention.query.toLowerCase();
@@ -95,7 +315,7 @@ export function ReplyComposer({
   // Detect an in-progress "@query" at the caret: an @ at line/word start, where
   // the text after it is a prefix of at least one teammate name.
   function detectMention(value: string, caret: number) {
-    if (!isInternal) { setMention(null); return; }
+    if (!isNote) { setMention(null); return; }
     const upto = value.slice(0, caret);
     const at = upto.lastIndexOf("@");
     if (at < 0) { setMention(null); return; }
@@ -180,77 +400,116 @@ export function ReplyComposer({
     setPendingAttachments(prev => prev.filter(a => a.id !== id));
   }
 
-  // Auto-clear the "Sent" confirmation after a moment so it doesn't linger past
-  // the next interaction.
-  useEffect(() => {
-    if (!sentAt) return;
-    const t = setTimeout(() => setSentAt(null), 2200);
-    return () => clearTimeout(t);
-  }, [sentAt]);
+  // A failed send keeps the draft and attachments for a retry; only a landed
+  // one clears them.
+  function landed() {
+    setDraft("");
+    setPendingAttachments([]);
+  }
 
-  const onSend = () => {
+  const onSend = async () => {
     const body = draft.trim();
     if (!body && pendingAttachments.length === 0) return;
-    const attachmentIds = pendingAttachments.map(a => a.id);
-    startTransition(async () => {
-      const res = await createReply({
-        itemShortId,
-        body,
-        internal: isInternal,
-        attachmentIds,
+    setSending(true);
+    const res = await runAction(toast, () => createReply({
+      itemShortId,
+      body,
+      internal: isNote,
+      attachmentIds: pendingAttachments.map(a => a.id),
+    }));
+    setSending(false);
+    if (!res) return;
+    landed();
+    toast.show({ message: isNote ? "Note added. Only your team can see it." : replySentMessage(res.emailed, first) });
+    onSent?.();
+  };
+
+  // Reply and close in one go: the customer gets one email (the outcome, with
+  // this reply in it). For Won't ship the reply is the reason, so it needs text.
+  const onSendAndClose = async (closeAs: "shipped" | "declined") => {
+    const body = draft.trim();
+    if (closeAs === "shipped") {
+      const emails = notifyPlan.status.willEmail || notifyPlan.replies.willEmail;
+      const ok = await confirm({
+        title: "Send and mark Shipped?",
+        body: emails
+          ? `${first} gets one email with your reply, and this is marked Shipped.`
+          : noEmailNote(notifyPlan.status, "status", first, source),
+        confirmLabel: "Send and mark Shipped",
       });
-      if (res.ok) {
-        setDraft("");
-        setPendingAttachments([]);
-        setSentAt(Date.now());
-        onSent?.();
-      }
-    });
+      if (!ok) return;
+    }
+    setSending(true);
+    const res = await runAction(toast, () => replyAndSetStatus({
+      itemShortId,
+      body,
+      status: closeAs,
+      attachmentIds: pendingAttachments.map(a => a.id),
+    }));
+    setSending(false);
+    if (!res) return;
+    landed();
+    toast.show({ message: replySentMessage(res.emailed, first, closeAs) });
+    onSent?.(closeAs);
   };
 
   // AI reply draft — fills the composer; the vendor edits + sends.
-  const onDraft = () => {
-    setDraftError(null);
+  const onDraft = async () => {
     setDrafting(true);
-    startTransition(async () => {
-      const res = await draftReplyAction(itemShortId);
-      setDrafting(false);
-      if (res.ok) setDraft(res.draft);
-      else setDraftError(res.error === "ai_cap_reached" ? "You've reached this month's AI usage limit. It resets on the 1st." : "Couldn't draft a reply. Try again.");
-    });
+    const res = await runAction(toast, () => draftReplyAction(itemShortId));
+    setDrafting(false);
+    if (res) setDraft(res.draft);
   };
 
-  const sendDisabled = pending || (!draft.trim() && pendingAttachments.length === 0) || (!canWrite && !isInternal);
+  const busy = sending || drafting;
+  const empty = !draft.trim() && pendingAttachments.length === 0;
+  const sendDisabled = busy || empty || (!canWrite && !isNote);
+  const offerClose = !isNote && canWrite && !CLOSED_STATUSES.has(status);
+  const sendLabel = isNote ? "Add note" : notifyPlan.replies.willEmail ? `Send to ${first}` : "Send reply";
 
   return (
     <div className={`${framed ? "card-foot" : "reply-composer-bare"} col gap-3`} style={{ alignItems: "stretch" }}>
-      <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
-        <Pill ring ringFill={!isInternal}>
-          {isInternal ? "Internal only" : `Replying to ${submitterName}. ${accountName} can see this`}
-        </Pill>
-        {!canWrite && !isInternal && (
-          <span className="text-xs muted">Viewers can only post internal notes. Switch to the Internal tab.</span>
-        )}
-        {sentAt && (
-          <Pill solid>
-            <Ic.check style={{ width: 10, height: 10 }} />
-            Sent
-          </Pill>
-        )}
+      <div className="row gap-3 center" style={{ flexWrap: "wrap" }}>
+        <div className="seg" role="tablist" aria-label="Who sees this message">
+          <button type="button" role="tab" aria-selected={!isNote} onClick={() => setMode("reply")} disabled={sending}>
+            Reply
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={isNote}
+            onClick={() => setMode("note")}
+            disabled={sending}
+            style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+          >
+            <Ic.lock style={{ width: 10, height: 10 }} />
+            Internal note
+          </button>
+        </div>
+        <span id={noteId} className="text-xs muted" style={{ flex: "1 1 220px", lineHeight: 1.45 }}>
+          {isNote
+            ? "Only your team can see notes."
+            : !canWrite
+              ? "Viewers can only add internal notes."
+              : replyNote(notifyPlan.replies, first, accountName, source)}
+        </span>
       </div>
       <div style={{ position: "relative" }}>
         <textarea
           ref={taRef}
           className="input"
           rows={3}
-          placeholder={isInternal ? "Internal note. Type @ to mention a teammate. (Customers can't see this.)" : "Write a reply."}
+          placeholder={isNote ? "Write an internal note. Type @ to mention a teammate." : `Write a reply to ${first}.`}
           value={draft}
           onChange={onDraftInput}
           onKeyDown={onComposerKeyDown}
           onBlur={() => setTimeout(() => setMention(null), 120)}
-          disabled={pending}
+          disabled={busy}
           autoFocus={autoFocus}
-          aria-label={isInternal ? "Internal note" : "Reply to customer"}
+          aria-label={isNote ? "Internal note" : `Reply to ${first}`}
+          aria-describedby={noteId}
+          // Notes sit on the darker paper tone, so the mode reads at a glance.
+          style={isNote ? { background: "var(--surface-2)" } : undefined}
         />
         {mention && mentionMatches.length > 0 && (
           <div className="mention-menu">
@@ -294,32 +553,52 @@ export function ReplyComposer({
         </div>
       )}
       {uploadError && <span className="text-xs" style={{ color: "var(--err-text)" }}>{uploadError}</span>}
-      {draftError && <span className="text-xs" style={{ color: "var(--err-text)" }}>{draftError}</span>}
-      <div className="row gap-2 center">
+      <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
         <Btn
           variant="ghost"
           iconOnly
           icon={<Ic.attach style={{ width: 13, height: 13 }} />}
           onClick={pickAndUpload}
-          disabled={pending || uploading}
+          disabled={busy || uploading}
           aria-label="Attach a file"
         />
-        {aiReplyAvailable && !isInternal && canWrite && (
+        {aiReplyAvailable && !isNote && canWrite && (
           <Btn
             sm
             variant="ghost"
             icon={<Ic.sparkle style={{ width: 12, height: 12 }} />}
             onClick={onDraft}
-            disabled={pending}
+            disabled={busy}
           >
             {drafting ? "Drafting…" : "AI draft"}
           </Btn>
         )}
         {uploading && <span className="text-xs muted">Uploading…</span>}
         <div style={{ flex: 1 }} />
-        <Btn sm onClick={() => { setDraft(""); setPendingAttachments([]); }} disabled={pending || (!draft && pendingAttachments.length === 0)}>Clear</Btn>
-        <Btn sm variant="primary" icon={<Ic.send style={{ width: 12, height: 12 }} />} onClick={onSend} disabled={sendDisabled}>
-          {pending ? "Sending…" : "Send"}
+        <Btn sm onClick={() => { setDraft(""); setPendingAttachments([]); }} disabled={busy || (!draft && pendingAttachments.length === 0)}>Clear</Btn>
+        {/* Reply-and-close sits beside Send like "Close with comment"; Shipped
+            (which asks first) is the one next to it. */}
+        {offerClose && (["declined", "shipped"] as const).map(s => (
+          <Btn
+            key={s}
+            sm
+            variant="ghost"
+            icon={<StatusDot status={s} />}
+            onClick={() => onSendAndClose(s)}
+            disabled={sendDisabled || (s === "declined" && !draft.trim())}
+            title={s === "declined" ? "Your reply is the reason" : undefined}
+          >
+            Send and mark {statusLabel(s)}
+          </Btn>
+        ))}
+        <Btn
+          sm
+          variant="primary"
+          icon={isNote ? <Ic.lock style={{ width: 12, height: 12 }} /> : <Ic.send style={{ width: 12, height: 12 }} />}
+          onClick={onSend}
+          disabled={sendDisabled}
+        >
+          {sending ? (isNote ? "Adding…" : "Sending…") : sendLabel}
         </Btn>
       </div>
     </div>

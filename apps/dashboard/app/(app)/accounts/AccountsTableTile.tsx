@@ -5,6 +5,7 @@ import { eq, sql } from "drizzle-orm";
 import { getActiveWorkspace } from "@/lib/server";
 import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { accountRiskSignals, atRiskArrCents } from "@/lib/insights/churn";
+import { loopOpenSql } from "@/lib/loop-sql";
 import { accountUsageSignals } from "@/lib/usage/signals";
 
 // Account · ARR (bar + value) · Open · Shipped · Total · [Active] · Since
@@ -36,27 +37,30 @@ async function loadAccounts(workspaceId: string) {
     SELECT COUNT(*)::int FROM account_users
     WHERE account_users.account_id = accounts.id
   )`.as("user_count");
+  // Item counts skip merged duplicates (each loop counts once). Open = not
+  // closed, Set aside included: the same set as the inbox (lib/loop-sql).
   const openCount = sql<number>`(
     SELECT COUNT(*)::int FROM items
-    WHERE items.account_id = accounts.id
-      AND items.status IN ('open','review','planned','progress')
+    WHERE items.account_id = accounts.id AND items.merged_into_id IS NULL
+      AND ${loopOpenSql(sql`items.status`)}
   )`.as("open_count");
   const shippedCount = sql<number>`(
     SELECT COUNT(*)::int FROM items
-    WHERE items.account_id = accounts.id AND items.status = 'shipped'
+    WHERE items.account_id = accounts.id AND items.merged_into_id IS NULL AND items.status = 'shipped'
   )`.as("shipped_count");
   const totalCount = sql<number>`(
-    SELECT COUNT(*)::int FROM items WHERE items.account_id = accounts.id
+    SELECT COUNT(*)::int FROM items WHERE items.account_id = accounts.id AND items.merged_into_id IS NULL
   )`.as("total_count");
-  // Open items with no vendor reply yet = awaiting first response. Drives the
-  // "at-risk" signal (high-ARR accounts waiting on us).
+  // Open loops with no vendor reply yet (internal notes don't count) =
+  // awaiting first response. Drives the "at-risk" signal (high-ARR accounts
+  // waiting on us).
   const awaitingCount = sql<number>`(
     SELECT COUNT(*)::int FROM items i
-    WHERE i.account_id = accounts.id
-      AND i.status IN ('open','review','planned','progress')
+    WHERE i.account_id = accounts.id AND i.merged_into_id IS NULL
+      AND ${loopOpenSql(sql`i.status`)}
       AND NOT EXISTS (
         SELECT 1 FROM replies r
-        WHERE r.item_id = i.id AND r.workspace_user_id IS NOT NULL
+        WHERE r.item_id = i.id AND r.internal = false AND r.workspace_user_id IS NOT NULL
       )
   )`.as("awaiting_count");
 
