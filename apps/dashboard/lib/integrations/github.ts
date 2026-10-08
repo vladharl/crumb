@@ -155,6 +155,12 @@ export type GithubIssueRef = {
   state: string;
 };
 
+// The externalTicketId stored for a linked issue. Repo-qualified because a
+// bare "#12" exists in every repo; the webhook matches on the same string.
+export function issueTicketRef(ownerRepo: string, issueNumber: number): string {
+  return `${ownerRepo}#${issueNumber}`;
+}
+
 export async function createIssue(
   installationId: string,
   ownerRepo: string,

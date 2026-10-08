@@ -234,7 +234,7 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
       return { ok: false, error: "provider_create_failed" };
     }
 
-    const ticketRef = `#${issue.number}`;
+    const ticketRef = Github.issueTicketRef(repo, issue.number);
     await db
       .update(items)
       .set({

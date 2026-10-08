@@ -155,6 +155,13 @@
       "when": 1782668467350,
       "tag": "0021_early_electro",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791299553956,
+      "tag": "0022_purple_rachel_grey",
+      "breakpoints": true
     }
   ]
 }

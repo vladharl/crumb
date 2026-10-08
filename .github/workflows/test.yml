@@ -9,6 +9,24 @@ jobs:
   typecheck-and-unit:
     name: typecheck + unit
     runs-on: ubuntu-latest
+    # tests/unit/tracker-webhook-scope.test.ts runs the tracker webhook
+    # handlers against a real (migrated) Postgres to pin tenant isolation.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: crumb
+          POSTGRES_PASSWORD: crumb
+          POSTGRES_DB: crumb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://crumb:crumb@localhost:5432/crumb
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v3
@@ -26,7 +44,9 @@ jobs:
           (cd packages/db    && npx tsc --noEmit)
           (cd packages/ui    && npx tsc --noEmit)
       - name: vitest
-        run: pnpm --filter dashboard test
+        run: |
+          pnpm db:migrate
+          pnpm --filter dashboard test
 
   # Compile BOTH editions so a broken cloud-lib stub, a missing ee/ overlay
   # file, or a webpack-alias regression fails the PR rather than only the

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
-import { db, items } from "@crumb/db";
-import { verifyWebhook } from "@/lib/integrations/linear";
+import { and, eq, inArray } from "drizzle-orm";
+import { db, items, workspaces } from "@crumb/db";
+import { resolveOrganizationIds, verifyWebhook } from "@/lib/integrations/linear";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
 
@@ -22,8 +22,13 @@ export const runtime = "nodejs";
 //     "action": "update",
 //     "type": "Issue",
 //     "data": { "id": "<uuid>", "identifier": "ENG-42", "state": { "name": "In Progress" }, "url": "..." },
-//     "updatedFrom": { "stateId": "..." }   // present when state changed
+//     "updatedFrom": { "stateId": "..." },  // present when state changed
+//     "organizationId": "<uuid>"            // the Linear org that sent it
 //   }
+//
+// The signing secret is deployment-wide (on Cloud every org's events share
+// it) and identifiers like ENG-42 repeat across orgs, so updates are scoped
+// to the workspace(s) whose install belongs to `organizationId`.
 //
 // Other event types (Comment, Project, etc.) return 200 ok — we never
 // trigger Linear retries for events we don't model.
@@ -31,6 +36,7 @@ export const runtime = "nodejs";
 type LinearWebhookEvent = {
   action: string;
   type: string;
+  organizationId?: string;
   data: {
     id: string;
     identifier?: string;
@@ -65,11 +71,13 @@ export async function POST(req: Request) {
   }
 
   const identifier = event.data.identifier;
-  if (!identifier) return NextResponse.json({ received: true });
+  const organizationId = event.organizationId;
+  if (!identifier || !organizationId) return NextResponse.json({ received: true });
 
   const newStatus = event.data.state?.name ?? null;
 
   try {
+    await resolveOrganizationIds();
     await db
       .update(items)
       .set({
@@ -78,6 +86,10 @@ export async function POST(req: Request) {
         updatedAt: new Date(),
       })
       .where(and(
+        inArray(items.workspaceId, db
+          .select({ id: workspaces.id })
+          .from(workspaces)
+          .where(eq(workspaces.linearOrganizationId, organizationId))),
         eq(items.externalProvider, "linear"),
         eq(items.externalTicketId, identifier),
       ));

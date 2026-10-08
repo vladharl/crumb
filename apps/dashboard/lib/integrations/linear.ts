@@ -1,7 +1,11 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { db, workspaces } from "@crumb/db";
 import { signState, verifyState } from "./state";
-import { IntegrationAuthError } from "./revoke";
+import { open } from "../crypto-at-rest";
+import { clearProviderInstall, IntegrationAuthError } from "./revoke";
+import { log } from "@/lib/log";
 
 // Linear OAuth 2.0. API is GraphQL-only; the auth flow is conventional.
 // Docs: https://linear.app/developers/oauth-2-0-authentication
@@ -130,6 +134,31 @@ export async function fetchDefaultTeam(token: string): Promise<{ id: string; nam
   const team = data.teams.nodes[0];
   if (!team) return null;
   return { id: team.id, name: team.name };
+}
+
+// The webhook scopes updates by Linear org id, which an install only learns
+// from its token. Fill it in for every install still missing one (connected
+// before the column existed, or reconnected since). The token guard on the
+// write skips a row whose install changed while we were asking Linear.
+// ponytail: one Linear call per unresolved install, once each; if that shows
+// up in webhook latency, look it up in the OAuth callback and backfill once.
+export async function resolveOrganizationIds(): Promise<void> {
+  const pending = await db
+    .select({ id: workspaces.id, token: workspaces.linearAccessToken })
+    .from(workspaces)
+    .where(and(isNotNull(workspaces.linearAccessToken), isNull(workspaces.linearOrganizationId)));
+  await Promise.all(pending.map(async ({ id, token }) => {
+    try {
+      const { organization } = await gql<{ organization: { id: string } }>(open(token!), `query { organization { id } }`);
+      await db
+        .update(workspaces)
+        .set({ linearOrganizationId: organization.id })
+        .where(and(eq(workspaces.id, id), eq(workspaces.linearAccessToken, token!)));
+    } catch (err) {
+      if (err instanceof IntegrationAuthError) await clearProviderInstall(id, "linear");
+      else log.warn("linear org lookup failed; retrying on the next webhook", { scope: "crumb/linear", workspaceId: id, err });
+    }
+  }));
 }
 
 // ─── tickets ─────────────────────────────────────────────────

@@ -1,0 +1,1 @@
+ALTER TABLE "workspaces" ADD COLUMN "linear_organization_id" text;
