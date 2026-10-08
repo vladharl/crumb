@@ -48,6 +48,8 @@ services:
         required: false
     # These win over .env: each derives a value or supplies a default.
     environment:
+      # Only cloudflared needs the tunnel token; keep it out of the app.
+      CLOUDFLARE_TUNNEL_TOKEN: ""
       DATABASE_URL: postgres://${POSTGRES_USER:-crumb}:${POSTGRES_PASSWORD:-crumb}@postgres:5432/${POSTGRES_DB:-crumb}
       NODE_ENV: production
       # Runtime tier. Self-host keeps AI / billing / session-replay off;

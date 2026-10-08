@@ -48,7 +48,8 @@ export function askIntent(question: string): AskIntent {
     : one ? UNIT_DAYS[one[1]]
     : /\btoday\b/.test(q) ? 1
     : /\byesterday\b/.test(q) ? 2
-    : /\b(recent|recently|lately)\b/.test(q) ? 30
+    // No bare "recent"/"lately": it names features as often as it sets a time
+    // ("the recent activity feed"), and a wrong window answers "nothing came in".
     : 0;
   return { byArr: ARR_RE.test(q), windowDays: days > 0 ? Math.min(days, 730) : null };
 }
@@ -153,7 +154,7 @@ export async function askFeedback(
         })
         .join("\n");
       const prompt = `You are answering a question using ONLY the customer feedback items below. Each item shows the account that sent it and that account's ARR, how many accounts are asking for it when more than one, its status, and the date it came in. Cite the items you rely on by their bracketed id (e.g. FB-12) inline. If the items don't answer the question, say so plainly. Never invent facts.
-${intent.byArr ? "\nThe items are listed from the highest-ARR account down. When revenue matters to the answer, name the accounts and their ARR.\n" : ""}${totals ? `\nTotals counted by the database (use these for any count or total; never count or add up yourself):\n${totals}\n` : ""}
+${intent.byArr ? "\nThe items are listed from the highest-ARR account down. When revenue matters to the answer, name the accounts and their ARR.\n" : ""}${totals ? `\nAll feedback received in this window, across every topic, counted by the database. Use these numbers only for questions about overall volume; for a specific topic, count only the matching items listed below, and never add up ARR yourself:\n${totals}\n` : ""}
 Feedback items:
 ${context}
 

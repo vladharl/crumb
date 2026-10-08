@@ -49,6 +49,8 @@ describe("askIntent", () => {
     expect(askIntent("What came in today from our top customers?")).toEqual({ byArr: true, windowDays: 1 });
     expect(askIntent("Which bugs are blocking the most customers?")).toEqual({ byArr: false, windowDays: null });
     expect(askIntent("Does the export array sort?")).toEqual({ byArr: false, windowDays: null });
+    // A feature name, not a time window: older feedback must stay in scope.
+    expect(askIntent("What do people say about the recent activity feed?")).toEqual({ byArr: false, windowDays: null });
   });
 });
 
