@@ -66,7 +66,7 @@ test("a visitor follows by email, confirms from the emailed link, and unsubscrib
   await expect(card.getByRole("status")).toHaveText("Check your inbox to confirm.");
 
   // Nothing is followed until the link is used, and the GET only asks.
-  const confirmMail = () => stdoutEmails()?.findLast((m) => m.to === email && /^Confirm updates/.test(m.subject ?? ""));
+  const confirmMail = () => (stdoutEmails() ?? []).filter((m) => m.to === email && /^Confirm updates/.test(m.subject ?? "")).pop();
   await expect.poll(() => confirmMail()?.link ?? "", { timeout: 15_000 }).toMatch(new RegExp(`/${SLUG}/confirm\\?t=`));
   const link = confirmMail()!.link!;
   await page.goto(link);
