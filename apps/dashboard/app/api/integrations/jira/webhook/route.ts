@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { and, eq, inArray, type SQL } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { db, items, workspaces } from "@crumb/db";
-import { verifyWebhook, verifyWebhookToken } from "@/lib/integrations/jira";
+import { issueUid, verifyWebhook, verifyWebhookToken } from "@/lib/integrations/jira";
 import { isCloud } from "@/lib/tier";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
-import { syncExternalStatus } from "@/lib/webhooks";
+import { byTicket, syncExternalStatus } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,20 +18,29 @@ export const runtime = "nodejs";
 // status changes by inspecting the `changelog.items` array for an entry
 // whose `field` is "status".
 //
-// Project keys repeat across Jira sites, so every delivery is scoped:
+// Project keys and issue ids repeat across Jira sites, so every delivery is
+// scoped to workspaces connected to the site it came from: the origin of
+// `issue.self`, the same site URL stored as jiraSiteUrl at connect / token
+// refresh.
 //  - The webhook each Cloud install registers (ensureWebhook in
 //    lib/integrations/jira.ts) posts to ?ws=<workspaceId>&t=<token>. A valid
-//    token limits the update to that workspace's items.
+//    token limits the update to that workspace's items, while it is still on
+//    that site: a site it left keeps posting here until that webhook lapses.
 //  - A manual admin webhook signed with the deployment-wide
-//    JIRA_WEBHOOK_SECRET (self-host) is scoped to the workspace(s) connected
-//    to the site the event came from: the origin of `issue.self`, which is the
-//    same site URL stored as jiraSiteUrl at connect / token refresh. Cloud
-//    refuses it: every tenant would need that secret, and with it could sign
-//    an event naming another tenant's site.
+//    JIRA_WEBHOOK_SECRET (self-host) reaches every workspace on the site.
+//    Cloud refuses it: every tenant would need that secret, and with it could
+//    sign an event naming another tenant's site.
+//
+// Within that scope an item matches on the issue's id on that site (issueUid),
+// which a move to another project keeps (PROJ-7 becomes NEW-3), and takes the
+// current key and its browse URL. Rows linked before that id was stored match
+// once on what they hold, the bare issue id or (older still) the key, and only
+// with a link on this site; they get the id then.
 
 type JiraWebhookEvent = {
   webhookEvent: string;
   issue?: {
+    id?: string;
     key: string;
     self?: string; // "https://<site>.atlassian.net/rest/api/2/issue/10002"
     fields?: { status?: { name?: string } };
@@ -68,30 +77,35 @@ export async function POST(req: Request) {
   }
 
   const key = event.issue?.key;
-  if (!key) return NextResponse.json({ received: true });
-  let scope: SQL;
-  if (workspaceId !== null) {
-    scope = eq(items.workspaceId, workspaceId);
-  } else {
-    const self = event.issue?.self;
-    if (!self || !URL.canParse(self)) return NextResponse.json({ received: true });
-    scope = inArray(items.workspaceId, db
-      .select({ id: workspaces.id })
-      .from(workspaces)
-      .where(eq(workspaces.jiraSiteUrl, new URL(self).origin)));
-  }
+  const self = event.issue?.self;
+  if (!key || !self || !URL.canParse(self)) return NextResponse.json({ received: true });
+  const site = new URL(self).origin;
+  const issueId = event.issue?.id;
 
   // Pull the new status either from the changelog (preferred — it has the
   // actual transition) or fall back to issue.fields.status.name.
   const statusChange = event.changelog?.items.find(i => i.field === "status");
   const newStatus = statusChange?.toString ?? event.issue?.fields?.status?.name ?? null;
 
+  // A link made on this site (or one that never had a URL).
+  const onSite = or(isNull(items.externalTicketUrl), sql`starts_with(${items.externalTicketUrl}, ${`${site}/`})`)!;
   try {
-    await syncExternalStatus(and(
-      scope,
-      eq(items.externalProvider, "jira"),
-      eq(items.externalTicketId, key),
-    ), newStatus);
+    const connected = await db
+      .select({ id: workspaces.id, site: workspaces.jiraSiteUrl, cloudId: workspaces.jiraCloudId })
+      .from(workspaces)
+      .where(workspaceId !== null ? eq(workspaces.id, workspaceId) : eq(workspaces.jiraSiteUrl, site));
+    for (const ws of connected) {
+      if (!ws.site || !URL.canParse(ws.site) || new URL(ws.site).origin !== site) continue;
+      const uid = issueId && ws.cloudId ? issueUid(ws.cloudId, issueId) : null;
+      await syncExternalStatus(and(
+        eq(items.workspaceId, ws.id),
+        eq(items.externalProvider, "jira"),
+        or(
+          byTicket(uid, and(eq(items.externalTicketId, key), onSite)!),
+          issueId ? and(eq(items.externalTicketUid, issueId), onSite) : undefined,
+        ),
+      ), newStatus, { uid, key, url: `${site}/browse/${key}` });
+    }
   } catch (err) {
     log.error("jira webhook DB update failed", { scope: "crumb/jira", key, err });
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });

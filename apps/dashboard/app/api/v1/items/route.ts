@@ -3,7 +3,7 @@ import { db, accounts, items, replaySessions } from "@crumb/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { cors, fail, preflight, resolveCustomer } from "@/lib/public-api";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
-import { createItem } from "@/lib/items/create";
+import { createItem, SubmitterBlockedError } from "@/lib/items/create";
 import { WIDGET_SOURCE } from "@/lib/feedback/source";
 import { createItemSchema, parseJsonBody } from "@/lib/validation";
 import { loopTurn } from "@/lib/loop";
@@ -181,7 +181,18 @@ export async function POST(req: Request) {
     // Page / browser / app build; capped and redacted by createItemSchema.
     context: context ?? null,
     attachmentIds: attachment_ids,
+  }).catch((err: unknown) => {
+    if (err instanceof SubmitterBlockedError) return null;
+    throw err;
   });
+  // Their feedback was marked as spam: a plain refusal the widget can show,
+  // without saying why.
+  if (!created) {
+    return cors(NextResponse.json(
+      { error: "submitter_blocked", message: "We can't accept feedback from you here." },
+      { status: 403 },
+    ));
+  }
 
   // Link a replay session if the widget passed a token. Best-effort: the
   // session must belong to this workspace and have ≥1 chunk (empty rows

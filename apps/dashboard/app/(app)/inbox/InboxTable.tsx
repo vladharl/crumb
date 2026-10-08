@@ -1,12 +1,12 @@
 "use client";
 
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { navigateWithTrailMorph } from "@/lib/view-transition";
 import {
   Avatar, BrandMark, Btn, Card, Dropdown, Ic, Pill, StatusPill, TypeChip, trailProgress, statusLabel,
-  REASON_REQUIRED, VENDOR_STATUS_OPTIONS,
+  REASON_REQUIRED, STATUS_LABELS, VENDOR_STATUS_OPTIONS,
 } from "@crumb/ui";
 import type { Status, TypeKind } from "@crumb/ui";
 import { engDoneUntold, loopTurn, waitingDays, waitingSince, type LoopTurn, type ReplySide } from "@/lib/loop";
@@ -23,6 +23,15 @@ import { bulkSetInitiative, clusterItems, acceptSuggestion, dismissSuggestion } 
 import { InitiativeChip } from "../initiatives/InitiativeChip";
 import { RowActionMenu, ReasonForm, emailNote, statusToast } from "./RowActionMenu";
 import { RowReplyDrawer } from "./RowReplyDrawer";
+import { ShortcutsDialog } from "./ShortcutsDialog";
+import { deleteInboxView, saveInboxView, type SavedView } from "./views-actions";
+import {
+  ASSIGNEE_ME, ASSIGNEE_NONE, INITIATIVE_NONE, inTab, matchesFilters, readFilters, viewQuery, withFilters,
+  type InboxFilters, type SortMode, type Tab,
+} from "./view-query";
+import { triageAction } from "./triage-keys";
+import { useDeleteItems } from "@/components/useDeleteItems";
+import css from "./inbox.module.css";
 
 export type TriageAssignee = { id: string; initials: string; name: string };
 
@@ -105,8 +114,18 @@ export type InitiativeOption = {
   status: string;
 };
 
-const INITIATIVE_ANY = "__any";
-const INITIATIVE_NONE = "__none";
+// The "any" option of each filter dropdown (no filter, so nothing in the URL).
+const ANY = "__any";
+
+const STATUS_FILTER_OPTIONS = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }));
+const TYPE_FILTER_OPTIONS = [
+  { value: "bug", label: "Bug" },
+  { value: "idea", label: "Idea" },
+  { value: "question", label: "Question" },
+];
+
+// bulkUpdateStatus's cap: each status runs the item's whole pipeline.
+const STATUS_BATCH_MAX = 50;
 
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
@@ -126,20 +145,16 @@ function ageFrom(iso: string, now: number): string {
 }
 
 // The inbox is an obligation queue first: it lands on the loops that are
-// waiting on you, with the rest one tab away. "eng-done" is the saved view of
-// open loops whose ticket is done while the customer hasn't heard (any turn).
-type Tab = LoopTurn | "mine" | "all" | "eng-done";
-
-const TABS: ReadonlySet<string> = new Set(["yours", "waiting", "closed", "mine", "all", "eng-done"]);
-
+// waiting on you, with the rest one tab away (Tab in view-query.ts). "eng-done"
+// is the view of open loops whose ticket is done while the customer hasn't
+// heard (any turn).
+//
 // Sort order is orthogonal to the loop-turn tabs: the tab picks *which* loops,
 // the sort picks *what order*. "newest" keeps the per-tab default (your-turn is
-// a longest-waiting-first queue); "revenue" overrides every tab to rank by the
-// ARR-at-stake composite (lib/priority) — Crumb's "revenue is the unit" made
-// the queue order, not just a badge.
-type SortMode = "newest" | "revenue";
-
-const SORTS: ReadonlySet<string> = new Set(["newest", "revenue"]);
+// a longest-waiting-first queue, so it reads "Longest waiting" there);
+// "revenue" overrides every tab to rank by the ARR-at-stake composite
+// (lib/priority) — Crumb's "revenue is the unit" made the queue order, not
+// just a badge.
 
 /**
  * The empty inbox — distinct states for a distinct feeling. Reaching zero on
@@ -212,13 +227,17 @@ function InboxEmpty({
 const RENDER_WINDOW = 60;
 
 export function InboxTable({
-  rows, assignees, meId, canWrite, aiEntitled, initiatives, canManageInitiatives, clusterEnabled, emailConfigured,
+  rows, assignees, meId, canWrite, isAdmin, views, aiEntitled, initiatives, canManageInitiatives, clusterEnabled, emailConfigured,
   nowMs: serverNowMs, aiUpgrade,
 }: {
   rows: InboxRow[];
   assignees: Assignee[];
   meId: string;
   canWrite: boolean;
+  // Delete and Mark as spam are admin-only.
+  isAdmin: boolean;
+  // This member's saved views.
+  views: SavedView[];
   aiEntitled: boolean;
   initiatives: InitiativeOption[];
   canManageInitiatives: boolean;
@@ -260,18 +279,23 @@ export function InboxTable({
   const [bulkReason, setBulkReason] = useState<string | null>(null);
   if (selected.size === 0 && bulkReason !== null) setBulkReason(null);
   const [pending, startTransition] = useTransition();
-  // Working state seeds from the URL so a refresh or an accidental back-nav
-  // returns you to the same tab / search / initiative — you don't lose your place.
-  const [tab, setTab] = useState<Tab>(() => {
-    const t = searchParams.get("tab");
-    return t && TABS.has(t) ? (t as Tab) : "yours";
-  });
+  // The view lives in the URL (view-query.ts). The tab, sort and filters are
+  // read from it and each change pushes a history entry, so Back undoes it, a
+  // refresh keeps your place, and a link (the account page's "View all in
+  // inbox", a saved view) opens the same rows. The search is local state for
+  // instant typing, mirrored into the URL without a new entry per keystroke.
+  const filters = useMemo(() => readFilters(searchParams), [searchParams]);
+  const { tab, sort } = filters;
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
-  const [initiativeFilter, setInitiativeFilter] = useState<string>(() => searchParams.get("initiative") ?? INITIATIVE_ANY);
-  const [sort, setSort] = useState<SortMode>(() => {
-    const s = searchParams.get("sort");
-    return s && SORTS.has(s) ? (s as SortMode) : "newest";
-  });
+
+  // Read the live URL, not `filters`: Next applies a push a frame later, and a
+  // quick second change must not land on top of a stale first one.
+  function setFilters(patch: Partial<InboxFilters>) {
+    const now = new URLSearchParams(window.location.search);
+    const qs = withFilters(now, { ...readFilters(now), ...patch }).toString();
+    if (qs === now.toString()) return;
+    window.history.pushState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+  }
   // Merged duplicates (feature 4) are hidden from the default view — they live
   // under their canonical item. Toggle to audit them.
   const [showMerged, setShowMerged] = useState(false);
@@ -285,8 +309,12 @@ export function InboxTable({
   // when the refreshed rows confirm it, the overlay entry retires itself (the
   // effect below). A failed write clears its entry, snapping the row back.
   const [optStatus, setOptStatus] = useState<Map<string, string>>(new Map());
-  const rowsView = useMemo(
-    () => (optStatus.size === 0 ? rows : rows.map(r => {
+  // Rows a delete or spam is hiding while its Undo is open (useDeleteItems),
+  // by short id. They drop out of every count on the same frame.
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  const rowsView = useMemo(() => {
+    const live = hidden.size === 0 ? rows : rows.filter(r => !hidden.has(r.shortId));
+    return optStatus.size === 0 ? live : live.map(r => {
       const status = optStatus.get(r.id);
       if (status === undefined) return r;
       // Setting an item aside is the vendor's move (lastTurnSideSql), so it
@@ -295,9 +323,8 @@ export function InboxTable({
       return status === "deferred" && r.status !== "deferred"
         ? { ...r, status, lastReplySide: "vendor" as const }
         : { ...r, status };
-    })),
-    [rows, optStatus],
-  );
+    });
+  }, [rows, optStatus, hidden]);
   // Ids from a write that partly failed. Its result has counts, not ids, so the
   // refreshed server rows decide: these entries drop when the next rows land.
   const unsettled = useRef<Set<string>>(new Set());
@@ -313,6 +340,13 @@ export function InboxTable({
       for (const r of rows) if (next.get(r.id) === r.status) { next.delete(r.id); changed = true; }
       for (const id of drop) if (next.delete(id)) changed = true;
       return changed ? next : prev;
+    });
+    // A hidden row the server no longer returns is gone for good.
+    setHidden(prev => {
+      if (prev.size === 0) return prev;
+      const present = new Set(rows.map(r => r.shortId));
+      const next = new Set([...prev].filter(s => present.has(s)));
+      return next.size === prev.size ? prev : next;
     });
   }, [rows]);
   // Apply (or revert, with status=null) an optimistic status for a set of ids.
@@ -349,6 +383,12 @@ export function InboxTable({
     setOpenReplyId(id);
   }
   function collapseReply(id: string) {
+    // Leaving the drawer from inside it (Esc, Collapse, a send that closes the
+    // loop) puts focus back on its row, so keyboard triage carries on there.
+    const drawer = rowEls.current.get(id)?.nextElementSibling;
+    if (drawer?.classList.contains("reply-drawer") && drawer.contains(document.activeElement)) {
+      rowEls.current.get(id)?.querySelector<HTMLElement>(".row-link")?.focus({ preventScroll: true });
+    }
     if (openReplyId === id) setOpenReplyId(null);
     markClosing(id);
   }
@@ -369,18 +409,25 @@ export function InboxTable({
     else openReply(it.id);
   }
 
-  // Mirror working state into the URL without a server round-trip (replaceState,
-  // not router.replace) so search keystrokes don't refetch the inbox.
+  // The search goes into the URL as you type, replacing the current entry (no
+  // server round-trip, no history step per keystroke). Only `q` is touched, so
+  // compose=1 stays until the Compose panel takes it. Passing null state lets
+  // Next adopt the URL, so a later router.refresh() doesn't put the old one back.
   useEffect(() => {
-    const params = new URLSearchParams();
-    if (tab !== "yours") params.set("tab", tab);
-    if (query.trim()) params.set("q", query.trim());
-    if (initiativeFilter !== INITIATIVE_ANY) params.set("initiative", initiativeFilter);
-    if (sort !== "newest") params.set("sort", sort);
+    const params = new URLSearchParams(window.location.search);
+    const q = query.trim();
+    if ((params.get("q") ?? "") === q) return;
+    if (q) params.set("q", q);
+    else params.delete("q");
     const qs = params.toString();
-    const url = `${window.location.pathname}${qs ? `?${qs}` : ""}`;
-    window.history.replaceState(window.history.state, "", url);
-  }, [tab, query, initiativeFilter, sort]);
+    window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+  }, [query]);
+  // Back and Forward bring their entry's search back with them.
+  useEffect(() => {
+    const onPop = () => setQuery(new URLSearchParams(window.location.search).get("q") ?? "");
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Tab counts respect the merged toggle so numbers match what each tab shows
   // (otherwise every merged duplicate would inflate "Closed").
@@ -406,7 +453,7 @@ export function InboxTable({
     [rowsView],
   );
 
-  // Initiative + search narrow the whole table BEFORE the tabs bucket it, so
+  // The filters + search narrow the whole table BEFORE the tabs bucket it, so
   // the tab counts answer "of what I'm looking at, whose turn is it?" instead
   // of quietly reporting the unfiltered workspace.
   const scopedRows = useMemo(() => {
@@ -414,22 +461,24 @@ export function InboxTable({
     // people, initiative, status, and every comment — with typo tolerance
     // (lib/fuzzy). Terms split once here, not per row.
     const terms = splitTerms(query);
-    return baseRows.filter(r => {
-      if (initiativeFilter === INITIATIVE_NONE && r.initiativeId !== null) return false;
-      if (initiativeFilter !== INITIATIVE_ANY && initiativeFilter !== INITIATIVE_NONE && r.initiativeId !== initiativeFilter) return false;
-      if (terms.length === 0) return true;
-      return matchesTerms(terms, r.searchText);
-    });
-  }, [baseRows, query, initiativeFilter]);
+    return baseRows.filter(r =>
+      matchesFilters(r, filters, meId) && (terms.length === 0 || matchesTerms(terms, r.searchText)));
+  }, [baseRows, query, filters, meId]);
 
   const turnCounts = useMemo(() => {
     const counts = { yours: 0, waiting: 0, closed: 0 };
     for (const r of scopedRows) counts[loopTurn(r)] += 1;
     return counts;
   }, [scopedRows]);
-  const mineCount = useMemo(() => scopedRows.filter(r => r.assigneeId === meId).length, [scopedRows, meId]);
+  const mineCount = useMemo(() => scopedRows.filter(r => inTab(r, "mine", meId)).length, [scopedRows, meId]);
   const engDoneCount = useMemo(() => scopedRows.filter(engDoneUntold).length, [scopedRows]);
-  const mergedTotal = useMemo(() => rows.filter(r => r.mergedIntoId !== null).length, [rows]);
+  const mergedTotal = useMemo(() => rowsView.filter(r => r.mergedIntoId !== null).length, [rowsView]);
+  // Every account with feedback, for the account filter.
+  const accountOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const r of rows) byId.set(r.accountId, r.accountName);
+    return [...byId].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
+  }, [rows]);
   // The Eng done view only means something once a ticket is linked somewhere
   // (or someone lands on it from a saved URL).
   const showEngDone = useMemo(() => tab === "eng-done" || rows.some(r => r.externalProvider !== null), [rows, tab]);
@@ -437,12 +486,7 @@ export function InboxTable({
   // Tab bucketing on top of the scoped set. Client-side so the UI is instant;
   // bulk ops below operate on the filtered visible set.
   const visibleRows = useMemo(() => {
-    const filtered = scopedRows.filter(r => {
-      if (tab === "mine") return r.assigneeId === meId;
-      if (tab === "eng-done") return engDoneUntold(r);
-      if (tab === "yours" || tab === "waiting" || tab === "closed") return loopTurn(r) === tab;
-      return true;
-    });
+    const filtered = scopedRows.filter(r => inTab(r, tab, meId));
     // "By revenue" is an explicit choice that overrides every tab's default
     // order: rank by the ARR-at-stake composite (revenue-dominant, ties broken
     // by reach/severity/wait, then newest).
@@ -473,11 +517,24 @@ export function InboxTable({
   // so a fresh view always starts at row one. Reset during render (React's
   // sanctioned pattern) rather than in an effect, so we never paint a frame of
   // the previous, larger window against the newly-chosen view.
-  const filterKey = `${tab} ${query} ${initiativeFilter} ${sort}`;
+  const filterKey = `${JSON.stringify(filters)} ${query}`;
   const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
+  // The row the keyboard last stood on (j/k or focus), and its last index, so
+  // the row that takes its place can take the cursor when it leaves the view.
+  const [cursorId, setCursorId] = useState<string | null>(null);
+  const cursorAt = useRef(0);
   if (prevFilterKey !== filterKey) {
     setPrevFilterKey(filterKey);
     setRenderCount(RENDER_WINDOW);
+    // A new view starts the keyboard at the top, and keeps only the selected
+    // rows it still shows, so a bulk action never reaches rows you can't see.
+    setCursorId(null);
+    setSelected(prev => {
+      if (prev.size === 0) return prev;
+      const shown = new Set(visibleRows.map(r => r.id));
+      const next = new Set([...prev].filter(id => shown.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
   }
   const renderedRows = renderCount >= visibleRows.length ? visibleRows : visibleRows.slice(0, renderCount);
   const hasMoreRows = visibleRows.length > renderedRows.length;
@@ -531,9 +588,12 @@ export function InboxTable({
     prevTops.current = nextTops;
   }, [visibleRows]);
 
-  const allSelected = visibleRows.length > 0 && selected.size === visibleRows.length;
-  const someSelected = selected.size > 0 && !allSelected;
-  const filtersActive = query.trim() !== "" || initiativeFilter !== INITIATIVE_ANY;
+  // "Select all" takes the rows on the page first. The bulk bar then offers
+  // the whole view, with its real count, as an explicit second step.
+  const pageSelected = renderedRows.length > 0 && renderedRows.every(r => selected.has(r.id));
+  const someSelected = selected.size > 0 && !pageSelected;
+  const filtersActive = query.trim() !== "" || filters.status !== null || filters.type !== null
+    || filters.assignee !== null || filters.account !== null || filters.initiative !== null;
 
   function toggle(id: string) {
     setSelected(prev => {
@@ -545,7 +605,11 @@ export function InboxTable({
   }
 
   function toggleAll() {
-    setSelected(allSelected ? new Set() : new Set(visibleRows.map(r => r.id)));
+    setSelected(prev => (pageSelected ? new Set() : new Set([...prev, ...renderedRows.map(r => r.id)])));
+  }
+
+  function selectAllInView() {
+    setSelected(new Set(visibleRows.map(r => r.id)));
   }
 
   function clearSelection() {
@@ -554,8 +618,187 @@ export function InboxTable({
 
   function clearFilters() {
     setQuery("");
-    setInitiativeFilter(INITIATIVE_ANY);
+    setFilters({ status: null, type: null, assignee: null, account: null, initiative: null });
   }
+
+  // ── Saved views: the current filters + search under a name, per member. ──
+  const currentView = useMemo(() => {
+    const p = withFilters(new URLSearchParams(), filters);
+    if (query.trim()) p.set("q", query.trim());
+    return viewQuery(p);
+  }, [filters, query]);
+  const activeView = views.find(v => v.query === currentView) ?? null;
+  const [namingView, setNamingView] = useState(false);
+  const [viewName, setViewName] = useState("");
+  const viewTools = useRef<HTMLDivElement>(null);
+
+  // Closing the name form puts focus on the button that takes its place (Save
+  // view, which turns into Delete view in place once the saved view arrives).
+  function closeNaming() {
+    setNamingView(false);
+    requestAnimationFrame(() => (viewTools.current?.lastElementChild as HTMLElement | null)?.focus());
+  }
+
+  function openView(id: string) {
+    const v = views.find(x => x.id === id);
+    if (!v || v.query === currentView) return;
+    setQuery(new URLSearchParams(v.query).get("q") ?? "");
+    window.history.pushState(null, "", `${window.location.pathname}?${v.query}`);
+  }
+
+  function saveView() {
+    const name = viewName.trim();
+    if (!name) return;
+    startTransition(async () => {
+      const r = await saveInboxView(name, currentView);
+      if (!r.ok) { toast.show({ message: errorMessage(r.error), tone: "error" }); return; }
+      closeNaming();
+      setViewName("");
+      toast.show({ message: `Saved the view “${r.view.name}”.` });
+    });
+  }
+
+  async function removeView(v: SavedView) {
+    const ok = await confirm({
+      title: `Delete the view “${v.name}”?`,
+      body: "Only the saved view goes. The feedback in it stays as it is.",
+      confirmLabel: "Delete view",
+      destructive: true,
+    });
+    if (!ok) return;
+    startTransition(async () => {
+      const r = await deleteInboxView(v.id);
+      toast.show(r.ok ? { message: `Deleted the view “${v.name}”.` } : { message: errorMessage(r.error), tone: "error" });
+    });
+  }
+
+  // ── Delete / Mark as spam (admins): rows hide at once, Undo brings them
+  //    back, and nothing is removed until the Undo window closes. ──
+  // The commit's revalidation brings the refreshed rows (no refresh here),
+  // and the effect on `rows` then forgets the hidden ids.
+  const deleteItems = useDeleteItems({
+    onHidden: shortIds => {
+      // Focus was in a hidden row's menu or in the bulk bar, which goes with
+      // the selection: the cursor takes the first hidden row's place, so the
+      // row after it (or the list) gets focus, not the page (effect below).
+      const at = visibleRows.findIndex(r => shortIds.includes(r.shortId));
+      if (at >= 0) { cursorAt.current = at; setCursorId(visibleRows[at]!.id); }
+      setHidden(prev => new Set([...prev, ...shortIds]));
+      const gone = new Set(rows.filter(r => shortIds.includes(r.shortId)).map(r => r.id));
+      setSelected(prev => {
+        const next = new Set([...prev].filter(id => !gone.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
+    },
+    onRestored: shortIds => setHidden(prev => new Set([...prev].filter(s => !shortIds.includes(s)))),
+  });
+
+  function removeSelected(mode: "delete" | "spam") {
+    deleteItems(rows.filter(r => selected.has(r.id)).map(r => ({ shortId: r.shortId, title: r.title })), mode);
+  }
+
+  // ── Keyboard triage (triage-keys.ts): j/k walk the rows by focusing each
+  //    title link (the row's one tab stop, so Enter opens it natively); r, s,
+  //    a and x act on the row that has focus; ? lists them all. ──
+  const [showKeys, setShowKeys] = useState(false);
+  const closeKeys = useCallback(() => setShowKeys(false), []);
+  const focusPending = useRef(false);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  function focusRow(id: string) {
+    const el = rowEls.current.get(id);
+    if (!el) { focusPending.current = true; return; } // not rendered yet: after the next render
+    el.querySelector<HTMLElement>(".row-link")?.focus({ preventScroll: true });
+    el.scrollIntoView({ block: "nearest" });
+  }
+
+  // The row holding focus, if any.
+  function focusedRow(): InboxRow | undefined {
+    const id = (document.activeElement as HTMLElement | null)?.closest?.(".inbox-row")?.getAttribute("data-row-id");
+    return id ? visibleRows.find(r => r.id === id) : undefined;
+  }
+
+  function moveCursor(step: 1 | -1) {
+    if (visibleRows.length === 0) return;
+    const focused = focusedRow();
+    const from = focused?.id ?? cursorId;
+    const at = from ? visibleRows.findIndex(r => r.id === from) : -1;
+    // From outside the rows, the first key lands back on the remembered row.
+    const next = at < 0 ? 0 : focused ? Math.min(visibleRows.length - 1, Math.max(0, at + step)) : at;
+    if (next >= renderedRows.length) setRenderCount(c => c + RENDER_WINDOW);
+    const id = visibleRows[next]!.id;
+    setCursorId(id);
+    focusRow(id);
+  }
+
+  // A row the cursor reached before it was rendered gets focus once it is.
+  useEffect(() => {
+    if (!focusPending.current || !cursorId || !rowEls.current.has(cursorId)) return;
+    focusPending.current = false;
+    focusRow(cursorId);
+  });
+
+  // The cursor row left the view (a status moved it to another tab, a delete
+  // hid it): the row that took its place gets the cursor, and the focus too
+  // when focus fell to the page with it (the list, when no row is left).
+  useEffect(() => {
+    if (!cursorId) return;
+    const i = visibleRows.findIndex(r => r.id === cursorId);
+    if (i >= 0) { cursorAt.current = i; return; }
+    const next = visibleRows[Math.min(cursorAt.current, visibleRows.length - 1)];
+    setCursorId(next?.id ?? null);
+    if (document.activeElement && document.activeElement !== document.body) return;
+    if (next) focusRow(next.id);
+    else listRef.current?.focus();
+  }, [visibleRows, cursorId]);
+
+  function assignToMe(row: InboxRow) {
+    if (!canWrite) { toast.show({ message: "Viewers can't modify items.", tone: "error" }); return; }
+    if (row.assigneeId === meId) { toast.show({ message: `${row.shortId} is already assigned to you.` }); return; }
+    const prev = new Map([[row.id, row.assigneeId]]);
+    startTransition(async () => {
+      const res = await bulkAssign([row.id], meId);
+      if (!res.ok) { toast.show({ message: errorMessage(res.error), tone: "error" }); return; }
+      router.refresh();
+      toast.show({ message: `${row.shortId} assigned to you.`, action: { label: "Undo", onClick: () => undoAssign(prev) } });
+    });
+  }
+
+  // Latest-render handler behind one window listener.
+  const onTriageKey = useRef<(e: KeyboardEvent) => void>(() => {});
+  onTriageKey.current = (e: KeyboardEvent) => {
+    const action = triageAction(e);
+    // An open modal (a confirm, Compose, the shortcuts list) has the keyboard.
+    // The Help panel stays mounted while closed, hidden with aria-hidden.
+    if (!action || document.querySelector('[aria-modal="true"]:not([aria-hidden="true"])')) return;
+    if (action === "help") { e.preventDefault(); setShowKeys(true); return; }
+    if (action === "next" || action === "prev") {
+      // Arrows move the cursor only from a focused row; anywhere else they
+      // scroll the page as usual. j and k work from anywhere on the page.
+      if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !focusedRow()) return;
+      if (visibleRows.length === 0) return;
+      e.preventDefault();
+      moveCursor(action === "next" ? 1 : -1);
+      return;
+    }
+    const row = focusedRow();
+    if (!row) return;
+    e.preventDefault();
+    const el = rowEls.current.get(row.id);
+    if (action === "select") toggle(row.id);
+    else if (action === "assign") assignToMe(row);
+    else if (action === "menu") el?.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')?.click();
+    else if (action === "reply") {
+      // Already open: into its composer. Otherwise open it (a phone goes to the thread).
+      if (openReplyId === row.id) el?.nextElementSibling?.querySelector<HTMLElement>("textarea")?.focus();
+      else toggleReply(row);
+    }
+  };
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => onTriageKey.current(e);
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, []);
 
   // ── Bulk writes: every one confirms what changed (with Undo) or surfaces the
   //    failure, so the inbox's core write path is never silent or one-way. ──
@@ -591,9 +834,11 @@ export function InboxTable({
   function applyStatus(status: string, reason?: string) {
     if (selected.size === 0) return;
     const ids = Array.from(selected);
+    // Merged duplicates stay put: they follow the item they were merged into
+    // (bulkUpdateStatus skips them), so only the rest are painted and undone.
     const prev = new Map<string, string>();
-    for (const r of rows) if (selected.has(r.id)) prev.set(r.id, r.status);
-    setOptimisticStatus(ids, status);   // paint the move on this frame
+    for (const r of rows) if (selected.has(r.id) && r.mergedIntoId === null) prev.set(r.id, r.status);
+    setOptimisticStatus([...prev.keys()], status);   // paint the move on this frame
     startTransition(async () => {
       const res = await writeStatus(ids, status, reason);
       const outcome = statusToast(res, statusLabel(status));
@@ -606,7 +851,7 @@ export function InboxTable({
       // Undo only when it's clean: no email went out and none would on the way
       // back, so only between the quiet triage statuses (open, review). Undoing
       // anything else would email the customer again or need a reason.
-      const undoable = res.failed === 0 && !statusEmailsCustomer(status)
+      const undoable = res.failed === 0 && prev.size > 0 && !statusEmailsCustomer(status)
         && [...prev.values()].every(s => s === "open" || s === "review");
       toast.show(undoable ? { ...outcome, action: { label: "Undo", onClick: () => undoStatus(prev) } } : outcome);
     });
@@ -765,116 +1010,201 @@ export function InboxTable({
 
   return (
     <div className="inbox-board">
-      {selected.size === 0 ? (
-        // Toolbar lays out as two governed groups: the loop-turn tabs (the
-        // product's primary scope) lead with search beside them, and the
-        // secondary tools (sort + filters) cluster after — so on a narrow
-        // viewport the options wrap as one block to a second line instead of
-        // scattering. The sort-basis caption gets its own quiet line below.
-        <div className="inbox-toolbar">
-          <div className="inbox-toolbar-main">
-            <div className="seg" role="tablist" aria-label="Filter by loop turn">
+      {/* Toolbar lays out as two governed groups: the loop-turn tabs (the
+          product's primary scope) lead with search beside them, and the
+          secondary tools (sort + merged) cluster after, so on a narrow
+          viewport the options wrap as one block to a second line instead of
+          scattering. The filters and saved views take the line below, and the
+          sort-basis caption gets its own quiet line. The toolbar stays while
+          rows are selected, so the view you're acting on stays in sight. */}
+      <div className="inbox-toolbar">
+        <div className="inbox-toolbar-main">
+          <div className="seg" role="tablist" aria-label="Filter by loop turn">
+            <button
+              role="tab"
+              aria-selected={tab === "yours"}
+              onClick={() => setFilters({ tab: "yours" })}
+              title="Open loops waiting on you: no answer yet, or the customer wrote after your last reply or update"
+            >Your turn · {turnCounts.yours}</button>
+            <button
+              role="tab"
+              aria-selected={tab === "waiting"}
+              onClick={() => setFilters({ tab: "waiting" })}
+              title="You moved last: a reply, a status email the customer got, or Set aside. Waiting on the customer or the fix to ship"
+            >Waiting · {turnCounts.waiting}</button>
+            <button
+              role="tab"
+              aria-selected={tab === "closed"}
+              onClick={() => setFilters({ tab: "closed" })}
+              title="Loops with an outcome: shipped, won't ship, duplicate, or closed by the customer"
+            >Closed · {turnCounts.closed}</button>
+            <button
+              role="tab"
+              aria-selected={tab === "mine"}
+              onClick={() => setFilters({ tab: "mine" })}
+              title="Open loops assigned to you. Closed ones are under Closed"
+            >Mine · {mineCount}</button>
+            <button role="tab" aria-selected={tab === "all"} onClick={() => setFilters({ tab: "all" })}>All · {scopedRows.length}</button>
+            {showEngDone && (
               <button
                 role="tab"
-                aria-selected={tab === "yours"}
-                onClick={() => setTab("yours")}
-                title="Open loops waiting on you: no answer yet, or the customer wrote after your last reply or update"
-              >Your turn · {turnCounts.yours}</button>
-              <button
-                role="tab"
-                aria-selected={tab === "waiting"}
-                onClick={() => setTab("waiting")}
-                title="You moved last: a reply, a status email the customer got, or Set aside. Waiting on the customer or the fix to ship"
-              >Waiting · {turnCounts.waiting}</button>
-              <button
-                role="tab"
-                aria-selected={tab === "closed"}
-                onClick={() => setTab("closed")}
-                title="Loops with an outcome: shipped, won't ship, duplicate, or closed by the customer"
-              >Closed · {turnCounts.closed}</button>
-              <button role="tab" aria-selected={tab === "mine"} onClick={() => setTab("mine")}>Mine · {mineCount}</button>
-              <button role="tab" aria-selected={tab === "all"}  onClick={() => setTab("all")}>All · {scopedRows.length}</button>
-              {showEngDone && (
-                <button
-                  role="tab"
-                  aria-selected={tab === "eng-done"}
-                  onClick={() => setTab("eng-done")}
-                  title="Open loops whose linked Linear, Jira or GitHub ticket is done, and the customer hasn't been told since"
-                >Eng done, not told · {engDoneCount}</button>
-              )}
-            </div>
-            <div className="inbox-search">
-              <Ic.search style={{ width: 13, height: 13, color: "var(--mute)" }} />
-              <input
-                className="input search"
-                placeholder="Search everything: titles, comments, people…"
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                aria-label="Search feedback, comments, and people"
-                style={{ border: 0, padding: 0, background: "transparent" }}
-              />
-              {query && (
-                <button
-                  type="button"
-                  onClick={() => setQuery("")}
-                  aria-label="Clear search"
-                  className="cmdk-esc"
-                  style={{ border: 0, background: "transparent", cursor: "pointer", color: "var(--mute)", padding: 2, lineHeight: 0 }}
-                >
-                  <Ic.x style={{ width: 12, height: 12 }} />
-                </button>
-              )}
-            </div>
-            <div className="inbox-tools">
-              <div className="inbox-sort">
-                <span className="text-sm muted">Sort</span>
-                <Dropdown
-                  size="sm"
-                  ariaLabel="Sort feedback"
-                  value={sort}
-                  onChange={v => setSort(v as SortMode)}
-                  buttonStyle={{ minWidth: 124 }}
-                  options={[
-                    { value: "newest", label: "Newest" },
-                    { value: "revenue", label: "By revenue" },
-                  ]}
-                />
-              </div>
-              {initiatives.length > 0 && (
-                <Dropdown
-                  ariaLabel="Filter by initiative"
-                  value={initiativeFilter}
-                  onChange={setInitiativeFilter}
-                  searchable={initiatives.length > 8}
-                  buttonStyle={{ minWidth: 180 }}
-                  options={[
-                    { value: INITIATIVE_ANY, label: "Initiative · all" },
-                    { value: INITIATIVE_NONE, label: "No initiative" },
-                    ...initiatives.map(i => ({ value: i.id, label: i.name })),
-                  ]}
-                />
-              )}
-              {mergedTotal > 0 && (
-                <label className="row gap-2 center text-sm muted" style={{ flex: "0 0 auto", cursor: "pointer" }} title="Show duplicates that were merged into another item">
-                  <input type="checkbox" checked={showMerged} onChange={e => setShowMerged(e.target.checked)} style={{ cursor: "pointer" }} />
-                  Merged · {mergedTotal}
-                </label>
-              )}
-            </div>
+                aria-selected={tab === "eng-done"}
+                onClick={() => setFilters({ tab: "eng-done" })}
+                title="Open loops whose linked Linear, Jira or GitHub ticket is done, and the customer hasn't been told since"
+              >Eng done, not told · {engDoneCount}</button>
+            )}
           </div>
-          {/* When ranking by revenue, name the basis so the order is never a
-              black box. The copy degrades on self-host, where AI severity isn't
-              part of the composite. Uses --mute (toasted brown 74%, AA on cream),
-              not --mute-2 (warm gray ~3.5:1): the caption is load-bearing. */}
-          {sort === "revenue" && (
-            <p className="inbox-sort-note">
-              {aiEntitled
-                ? "Ranked by ARR at stake, weighted by reach, severity & wait"
-                : "Ranked by ARR at stake, weighted by reach & wait"}
-            </p>
-          )}
+          <div className="inbox-search">
+            <Ic.search style={{ width: 13, height: 13, color: "var(--mute)" }} />
+            <input
+              className="input search"
+              placeholder="Search everything: titles, comments, people…"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              aria-label="Search feedback, comments, and people"
+              style={{ border: 0, padding: 0, background: "transparent" }}
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="Clear search"
+                className="cmdk-esc"
+                style={{ border: 0, background: "transparent", cursor: "pointer", color: "var(--mute)", padding: 2, lineHeight: 0 }}
+              >
+                <Ic.x style={{ width: 12, height: 12 }} />
+              </button>
+            )}
+          </div>
+          <div className="inbox-tools">
+            <div className="inbox-sort">
+              <span className="text-sm muted">Sort</span>
+              <Dropdown
+                size="sm"
+                ariaLabel="Sort feedback"
+                value={sort}
+                onChange={v => setFilters({ sort: v as SortMode })}
+                buttonStyle={{ minWidth: 124 }}
+                options={[
+                  // Your turn's default order is the queue: longest wait first.
+                  { value: "newest", label: tab === "yours" ? "Longest waiting" : "Newest" },
+                  { value: "revenue", label: "By revenue" },
+                ]}
+              />
+            </div>
+            {mergedTotal > 0 && (
+              <label className="row gap-2 center text-sm muted" style={{ flex: "0 0 auto", cursor: "pointer" }} title="Show duplicates that were merged into another item">
+                <input type="checkbox" checked={showMerged} onChange={e => setShowMerged(e.target.checked)} style={{ cursor: "pointer" }} />
+                Merged · {mergedTotal}
+              </label>
+            )}
+          </div>
         </div>
-      ) : (
+        <div className={css.filters}>
+          <Dropdown
+            size="sm"
+            ariaLabel="Filter by status"
+            value={filters.status ?? ANY}
+            onChange={v => setFilters({ status: v === ANY ? null : v })}
+            options={[{ value: ANY, label: "Any status" }, ...STATUS_FILTER_OPTIONS]}
+          />
+          <Dropdown
+            size="sm"
+            ariaLabel="Filter by type"
+            value={filters.type ?? ANY}
+            onChange={v => setFilters({ type: v === ANY ? null : v })}
+            options={[{ value: ANY, label: "Any type" }, ...TYPE_FILTER_OPTIONS]}
+          />
+          <Dropdown
+            size="sm"
+            ariaLabel="Filter by assignee"
+            value={filters.assignee ?? ANY}
+            onChange={v => setFilters({ assignee: v === ANY ? null : v })}
+            searchable={assignees.length > 8}
+            options={[
+              { value: ANY, label: "Anyone" },
+              { value: ASSIGNEE_ME, label: "Assigned to me" },
+              { value: ASSIGNEE_NONE, label: "Unassigned" },
+              ...assignees.map(a => ({ value: a.id, label: a.name })),
+            ]}
+          />
+          <Dropdown
+            size="sm"
+            ariaLabel="Filter by account"
+            value={filters.account ?? ANY}
+            onChange={v => setFilters({ account: v === ANY ? null : v })}
+            searchable={accountOptions.length > 8}
+            options={[{ value: ANY, label: "Any account" }, ...accountOptions]}
+          />
+          {initiatives.length > 0 && (
+            <Dropdown
+              size="sm"
+              ariaLabel="Filter by initiative"
+              value={filters.initiative ?? ANY}
+              onChange={v => setFilters({ initiative: v === ANY ? null : v })}
+              searchable={initiatives.length > 8}
+              options={[
+                { value: ANY, label: "Any initiative" },
+                { value: INITIATIVE_NONE, label: "No initiative" },
+                ...initiatives.map(i => ({ value: i.id, label: i.name })),
+              ]}
+            />
+          )}
+          {filtersActive && <Btn sm variant="ghost" onClick={clearFilters}>Clear filters</Btn>}
+          <div ref={viewTools} className={css.filtersEnd}>
+            {views.length > 0 && (
+              <Dropdown
+                size="sm"
+                ariaLabel="Saved views"
+                placeholder="Saved views"
+                value={activeView?.id ?? null}
+                onChange={openView}
+                searchable={views.length > 8}
+                options={views.map(v => ({ value: v.id, label: v.name }))}
+              />
+            )}
+            {namingView ? (
+              <form
+                className="row gap-2 center"
+                onSubmit={e => { e.preventDefault(); saveView(); }}
+              >
+                <input
+                  className={`input ${css.viewName}`}
+                  aria-label="View name"
+                  placeholder="Name this view"
+                  maxLength={60}
+                  autoFocus
+                  value={viewName}
+                  onChange={e => setViewName(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); closeNaming(); } }}
+                  disabled={pending}
+                />
+                <Btn sm variant="primary" type="submit" disabled={pending || !viewName.trim()}>Save</Btn>
+                <Btn sm variant="ghost" type="button" onClick={closeNaming} disabled={pending}>Cancel</Btn>
+              </form>
+            ) : activeView ? (
+              <Btn sm variant="ghost" onClick={() => void removeView(activeView)} disabled={pending}>Delete view</Btn>
+            ) : currentView ? (
+              <Btn sm variant="ghost" icon={<Ic.plus style={{ width: 11, height: 11 }} />} onClick={() => setNamingView(true)}>
+                Save view
+              </Btn>
+            ) : null}
+          </div>
+        </div>
+        {/* When ranking by revenue, name the basis so the order is never a
+            black box. The copy degrades on self-host, where AI severity isn't
+            part of the composite. Uses --mute (toasted brown 74%, AA on cream),
+            not --mute-2 (warm gray ~3.5:1): the caption is load-bearing. */}
+        {sort === "revenue" && (
+          <p className="inbox-sort-note">
+            {aiEntitled
+              ? "Ranked by ARR at stake, weighted by reach, severity & wait"
+              : "Ranked by ARR at stake, weighted by reach & wait"}
+          </p>
+        )}
+      </div>
+
+      {selected.size > 0 && (
         <div className="inbox-bulkbar row gap-3 center" style={{
           flexWrap: "wrap",
           padding: "10px 14px",
@@ -883,6 +1213,11 @@ export function InboxTable({
           borderRadius: "var(--r-sm)",
         }}>
           <span className="fw-med">{selected.size} selected</span>
+          {pageSelected && selected.size < visibleRows.length && (
+            <Btn sm variant="ghost" onClick={selectAllInView} disabled={pending}>
+              Select all {visibleRows.length}
+            </Btn>
+          )}
 
           {canWrite ? (<>
           <label className="row gap-2 center text-sm" style={{ flex: "0 0 auto" }}>
@@ -892,11 +1227,14 @@ export function InboxTable({
               ariaLabel="Set status"
               placeholder="Set status…"
               value={null}
-              disabled={pending}
+              disabled={pending || selected.size > STATUS_BATCH_MAX}
               onChange={chooseStatus}
               options={[...VENDOR_STATUS_OPTIONS]}
             />
           </label>
+          {selected.size > STATUS_BATCH_MAX && (
+            <span className="text-xs muted">Status changes take up to {STATUS_BATCH_MAX} items at a time.</span>
+          )}
 
           <label className="row gap-2 center text-sm" style={{ flex: "0 0 auto" }}>
             <span className="muted">Assign</span>
@@ -937,6 +1275,11 @@ export function InboxTable({
             <span className="text-sm muted">Viewers can't modify items.</span>
           )}
 
+          {isAdmin && (<>
+            <Btn sm variant="ghost" onClick={() => removeSelected("spam")} disabled={pending}>Mark as spam</Btn>
+            <Btn sm variant="ghost" onClick={() => removeSelected("delete")} disabled={pending}>Delete</Btn>
+          </>)}
+
           <div style={{ flex: 1 }} />
           <Btn sm variant="ghost" onClick={clearSelection} disabled={pending}>Clear</Btn>
 
@@ -958,15 +1301,17 @@ export function InboxTable({
 
       <Card style={{ padding: 0 }}>
         <div className="inbox-scroll">
-          <div className="list" role="table" aria-label="Feedback inbox">
+          {/* Focusable from script only: where focus goes when a delete
+              hides the last row it could land on. */}
+          <div ref={listRef} className="list" role="table" aria-label="Feedback inbox" tabIndex={-1}>
             <div className="list-row head inbox-grid" role="row">
               <span role="columnheader" className="inbox-col-check">
                 <input
                   type="checkbox"
-                  checked={allSelected}
+                  checked={pageSelected}
                   ref={el => { if (el) el.indeterminate = someSelected; }}
                   onChange={toggleAll}
-                  aria-label="Select all"
+                  aria-label="Select all on this page"
                   style={{ cursor: "pointer" }}
                 />
               </span>
@@ -1002,8 +1347,10 @@ export function InboxTable({
                 <Fragment key={it.id}>
                 <div
                   ref={setRowEl(it.id)}
-                  className={`list-row inbox-grid inbox-row ${isSel ? "selected" : ""} ${replyOpen ? "expanded" : ""}`}
+                  className={`list-row inbox-grid inbox-row ${css.row} ${isSel ? "selected" : ""} ${replyOpen ? "expanded" : ""}`}
                   role="row"
+                  data-row-id={it.id}
+                  onFocus={() => setCursorId(it.id)}
                 >
                   <span role="cell" className="inbox-col-check row-interactive">
                     <input
@@ -1205,7 +1552,9 @@ export function InboxTable({
                         canWrite={canWrite}
                         canManageInitiatives={canManageInitiatives}
                         emailConfigured={emailConfigured}
+                        merged={it.mergedIntoId !== null}
                         onStatusOptimistic={s => setOptimisticStatus([it.id], s)}  // s===null reverts
+                        onDelete={isAdmin ? mode => deleteItems([{ shortId: it.shortId, title: it.title }], mode) : undefined}
                       />
                     </div>
                   </span>
@@ -1236,7 +1585,12 @@ export function InboxTable({
       </Card>
 
       <div className="row between" style={{ flexWrap: "wrap", gap: 12 }}>
-        <span className="text-sm muted">Showing {visibleRows.length} of {scopedRows.length}</span>
+        <span className="row gap-3 center" style={{ flexWrap: "wrap" }}>
+          <span className="text-sm muted">Showing {visibleRows.length} of {scopedRows.length}</span>
+          <button type="button" className={css.hint} onClick={() => setShowKeys(true)}>
+            Keyboard shortcuts <kbd className={css.kbd}>?</kbd>
+          </button>
+        </span>
         {/* Cluster these: AI-only feature. Hidden entirely on self-host. On
             Cloud Free it shows locked and opens the upgrade notice; on a paid
             plan it's enabled when a key is set + at least one initiative
@@ -1270,6 +1624,7 @@ export function InboxTable({
           </div>
         )}
       </div>
+      {showKeys && <ShortcutsDialog onClose={closeKeys} />}
     </div>
   );
 }

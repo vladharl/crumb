@@ -1,24 +1,30 @@
-import { Avatar, Card, CardHead, STATUS_LABELS } from "@crumb/ui";
+import { Avatar, Card, CardHead, Pill, STATUS_LABELS } from "@crumb/ui";
 import { db, accountUsers, items } from "@crumb/db";
 import { and, eq, sql } from "drizzle-orm";
+import { getActiveSession } from "@/lib/server";
 import { notMergedSql } from "@/lib/loop-sql";
 import { statusMix } from "@/lib/insights/status-mix";
+import { UnblockButton } from "./UnblockButton";
 
-// Both cards count unmerged items only, like the account hero.
-async function loadRequesters(accountId: string) {
+// Both cards count unmerged items only, like the account hero. People blocked
+// by Mark as spam come first: their spam was deleted, so they'd otherwise sink
+// off the list, and their Unblock with them.
+// ponytail: past 5 blocked people on one account, the rest only unblock in SQL.
+async function loadRequesters(workspaceId: string, accountId: string) {
   return db
     .select({
       id: accountUsers.id,
       name: accountUsers.name,
       initials: accountUsers.initials,
       role: accountUsers.role,
+      blockedAt: accountUsers.blockedAt,
       count: sql<number>`COUNT(${items.id})::int`,
     })
     .from(accountUsers)
     .leftJoin(items, and(eq(items.submitterId, accountUsers.id), notMergedSql(items.mergedIntoId)))
-    .where(eq(accountUsers.accountId, accountId))
+    .where(and(eq(accountUsers.workspaceId, workspaceId), eq(accountUsers.accountId, accountId)))
     .groupBy(accountUsers.id)
-    .orderBy(sql`COUNT(${items.id}) DESC`)
+    .orderBy(sql`${accountUsers.blockedAt} IS NULL`, sql`COUNT(${items.id}) DESC`)
     .limit(5);
 }
 
@@ -32,8 +38,9 @@ async function loadStatusMix(accountId: string) {
 }
 
 export async function AccountSidebarTile({ accountId }: { accountId: string }) {
+  const { workspace, user } = await getActiveSession();
   const [requesters, stats] = await Promise.all([
-    loadRequesters(accountId),
+    loadRequesters(workspace.id, accountId),
     loadStatusMix(accountId),
   ]);
 
@@ -50,8 +57,14 @@ export async function AccountSidebarTile({ accountId }: { accountId: string }) {
               <Avatar size="sm">{r.initials}</Avatar>
               <div className="col grow">
                 <span className="fw-med text-sm">{r.name}</span>
-                <span className="text-xs muted">{r.role === "admin" ? "Admin" : "Member"}</span>
+                <span className="row gap-2 center">
+                  <span className="text-xs muted">{r.role === "admin" ? "Admin" : "Member"}</span>
+                  {r.blockedAt && (
+                    <Pill variant="rust" title="Marked as spam: their new feedback and email replies are turned away.">Blocked</Pill>
+                  )}
+                </span>
               </div>
+              {r.blockedAt && user.role === "admin" && <UnblockButton accountUserId={r.id} name={r.name} />}
               <span className="text-xs muted">{r.count} {r.count === 1 ? "item" : "items"}</span>
             </div>
           ))}

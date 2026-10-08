@@ -152,6 +152,7 @@ export const en = {
   errTooLong: "That’s longer than we can take. Shorten it and try again.",
   errSignIn: "We couldn’t confirm you’re signed in. Reload the page and try again.",
   errServer: "Something went wrong on our end. Try again in a moment.",
+  errBlocked: "We can’t accept feedback from this address.",
   errCapture: "Couldn’t capture the screen. Attach a file instead.",
   errWebhook: "That isn't a valid https webhook URL.",
   errAdminOnly: "Only account admins can change this.",

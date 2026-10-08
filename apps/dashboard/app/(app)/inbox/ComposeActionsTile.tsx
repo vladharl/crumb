@@ -1,10 +1,12 @@
 import { asc, eq } from "drizzle-orm";
 import { db, accounts } from "@crumb/db";
-import { getActiveWorkspace } from "@/lib/server";
+import { getActiveSession } from "@/lib/server";
 import { ComposePanel } from "./ComposePanel";
 
+// Compose is for admins and PMs (composeOnBehalf refuses viewers too).
 export async function ComposeActionsTile() {
-  const ws = await getActiveWorkspace();
+  const { workspace: ws, user } = await getActiveSession();
+  if (user.role !== "admin" && user.role !== "pm") return null;
   const rows = await db
     .select({ name: accounts.name })
     .from(accounts)

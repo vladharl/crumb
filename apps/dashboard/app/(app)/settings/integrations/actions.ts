@@ -3,22 +3,25 @@
 import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { db, workspaces, workspaceUsers } from "@crumb/db";
 import { getActiveSession } from "@/lib/server";
 import { integrationsAllowed } from "@/lib/entitlements";
+import { originFromHeaders } from "@/lib/origin";
 import { callbackUrlFromHeaders } from "@/lib/integrations/callback-url";
 import { buildAuthUrl as buildSlackAuthUrl, SLACK_REDIRECT_URL, slackConfigured } from "@/lib/slack/install";
 import {
   buildAuthUrl as buildLinearAuthUrl,
   LINEAR_REDIRECT_URL,
   linearConfigured,
-  listTeams as listLinearTeamsApi,
 } from "@/lib/integrations/linear";
-import { IntegrationAuthError, clearProviderInstall, withoutAlert } from "@/lib/integrations/revoke";
+import { IntegrationAuthError, withoutAlert } from "@/lib/integrations/revoke";
 import {
   buildAuthUrl as buildJiraAuthUrl,
   JIRA_REDIRECT_URL,
   jiraConfigured,
+  jiraSites,
+  setUpSite,
 } from "@/lib/integrations/jira";
 import {
   buildAuthUrl as buildGithubAuthUrl,
@@ -77,45 +80,6 @@ export async function disconnectLinear(): Promise<{ ok: true } | { ok: false; er
   return { ok: true };
 }
 
-// List the Linear teams the connected token can see, for the settings team
-// switcher. Admin-only (it changes where this workspace's tickets land).
-export async function listLinearTeams(): Promise<
-  | { ok: true; teams: Array<{ id: string; name: string; key: string }> }
-  | { ok: false; error: string }
-> {
-  const { workspace, user } = await getActiveSession();
-  if (user.role !== "admin") return { ok: false, error: "forbidden" };
-  if (!workspace.linearAccessToken) return { ok: false, error: "not_connected" };
-  try {
-    const teams = await listLinearTeamsApi(open(workspace.linearAccessToken));
-    return { ok: true, teams: teams.map(t => ({ id: t.id, name: t.name, key: t.key })) };
-  } catch (err) {
-    // A revoked token clears the install so the card flips to "not connected".
-    if (err instanceof IntegrationAuthError) {
-      await clearProviderInstall(workspace.id, "linear");
-      return { ok: false, error: "revoked" };
-    }
-    return { ok: false, error: "list_failed" };
-  }
-}
-
-// Change the default Linear team new tickets are created in. The team name is
-// cached on the workspace for the connected-card label.
-export async function setLinearDefaultTeam(
-  teamId: string,
-  teamName: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { workspace, user } = await getActiveSession();
-  if (user.role !== "admin") return { ok: false, error: "forbidden" };
-  if (!teamId) return { ok: false, error: "missing_team" };
-  await db
-    .update(workspaces)
-    .set({ linearTeamId: teamId, linearTeamName: teamName })
-    .where(eq(workspaces.id, workspace.id));
-  revalidatePath("/settings/integrations");
-  return { ok: true };
-}
-
 export async function startJiraInstall(): Promise<StartResult> {
   const { workspace, user } = await getActiveSession();
   if (user.role !== "admin") return { ok: false, error: "forbidden" };
@@ -142,6 +106,61 @@ export async function disconnectJira(): Promise<{ ok: true } | { ok: false; erro
     })
     .where(eq(workspaces.id, workspace.id));
 
+  revalidatePath("/settings/integrations");
+  return { ok: true };
+}
+
+function jiraSitesFailed(err: unknown, workspaceId: string): { ok: false; error: string } {
+  // A dead refresh token has already cleared the install.
+  if (err instanceof IntegrationAuthError) return { ok: false, error: "revoked" };
+  log.error("jira site list failed", { scope: "crumb/jira", workspaceId, err });
+  return { ok: false, error: "list_failed" };
+}
+
+// The Jira sites the connected Atlassian login reaches, for the picker a login
+// with several gets after connecting. Admin only.
+export async function listJiraSites(): Promise<
+  | { ok: true; sites: Array<{ id: string; name: string; url: string }> }
+  | { ok: false; error: string }
+> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin") return { ok: false, error: "forbidden" };
+  try {
+    const r = await jiraSites(workspace);
+    if (!r) return { ok: false, error: "not_connected" };
+    return { ok: true, sites: r.sites.map(s => ({ id: s.id, name: s.name, url: s.url })) };
+  } catch (err) {
+    return jiraSitesFailed(err, workspace.id);
+  }
+}
+
+// Finish connecting Jira on the site the admin picked, which must be one this
+// workspace's own login reaches: the default project, and on Cloud the
+// status webhook (its outcome shows on the card).
+export async function setJiraSite(cloudId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { workspace, user } = await getActiveSession();
+  if (user.role !== "admin") return { ok: false, error: "forbidden" };
+  // The rest of connecting, so gated like the Connect button.
+  if (!integrationsAllowed(workspace)) return { ok: false, error: "plan_required" };
+  let r: Awaited<ReturnType<typeof jiraSites>>;
+  try {
+    r = await jiraSites(workspace);
+  } catch (err) {
+    return jiraSitesFailed(err, workspace.id);
+  }
+  if (!r) return { ok: false, error: "not_connected" };
+  const site = r.sites.find(s => s.id === cloudId);
+  if (!site) return { ok: false, error: "site_not_found" };
+
+  await db
+    .update(workspaces)
+    // Another site's projects are different: drop a default chosen on the old one.
+    .set({
+      jiraCloudId: site.id, jiraSiteUrl: site.url, jiraInstalledAt: new Date(),
+      ...(workspace.jiraCloudId !== site.id ? { jiraDefaultProjectKey: null } : {}),
+    })
+    .where(eq(workspaces.id, workspace.id));
+  await setUpSite(workspace.id, { accessToken: r.accessToken, cloudId: site.id }, originFromHeaders(headers()));
   revalidatePath("/settings/integrations");
   return { ok: true };
 }

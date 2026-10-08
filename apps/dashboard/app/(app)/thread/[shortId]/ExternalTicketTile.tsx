@@ -1,24 +1,25 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Btn, Card, CardHead, Ic, Pill } from "@crumb/ui";
 import { useConfirm } from "@/components/confirm";
 import { useToast } from "@/components/toast";
 import { errorMessage } from "@/lib/action-error";
-import { unlinkExternalTicket } from "./actions";
+import { gmailTime } from "@/lib/timefmt";
+import { externalStatusSetup, unlinkExternalTicket } from "./actions";
 import { ExternalTicketModal } from "./ExternalTicketModal";
 
-// Single sidebar tile that handles all four states for the engineering
+// Single sidebar tile that handles all three states for the engineering
 // link, across all three providers. Derives state internally so we don't
 // branch on (provider × state) in the parent.
 //
 // States:
 //   (a) no provider connected on this workspace → empty prompt
 //   (b) provider connected, no ticket linked → "Create ticket" button
-//   (c) ticket linked → ID + URL + last-known status + Unlink
-//   (d) linked + sync stale (>24h) → (c) with a "syncing…" badge
+//   (c) ticket linked → ID + URL + last-known status + Unlink, and the truth
+//       about sync: when the tracker last reported, or that it can't yet
 
 export type ExternalTicketTileProps = {
   itemShortId: string;
@@ -45,13 +46,27 @@ const PROVIDER_LABEL: Record<"linear" | "jira" | "github", string> = {
   github: "GitHub",
 };
 
-const STALE_MS = 24 * 60 * 60 * 1000;
+// What to do when `provider` can't push status updates here. On Cloud, Jira
+// registers a webhook per install, which reconnecting retries; the rest need
+// the deployment's own webhook secret.
+function syncFix(provider: "linear" | "jira" | "github", cloud: boolean): ReactNode {
+  const settings = <Link href="/settings/integrations" style={{ color: "var(--ink)" }}>Settings, Integrations</Link>;
+  if (provider === "jira" && cloud) return <>An admin can reconnect Jira in {settings} to set them up.</>;
+  if (cloud) return <>This deployment hasn&apos;t configured its {PROVIDER_LABEL[provider]} webhook.</>;
+  if (provider === "github") {
+    return <>Set <span className="mono">GITHUB_WEBHOOK_SECRET</span> to your GitHub App&apos;s webhook secret, then restart Crumb.</>;
+  }
+  const secret = provider === "jira" ? "JIRA_WEBHOOK_SECRET" : "LINEAR_WEBHOOK_SECRET";
+  return <>They need a webhook in {PROVIDER_LABEL[provider]} signed with <span className="mono">{secret}</span>; {settings} shows how.</>;
+}
 
 export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailable, workspace, item }: ExternalTicketTileProps) {
   const router = useRouter();
   const confirm = useConfirm();
   const toast = useToast();
-  const [modalOpen, setModalOpen] = useState(false);
+  // null until first opened. Closed after that, the modal stays mounted (and
+  // hidden) so the vendor's edits and a paid-for AI draft survive Esc.
+  const [modalOpen, setModalOpen] = useState<boolean | null>(null);
   const [pending, startTransition] = useTransition();
 
   const linearReady = !!workspace.linearInstalledAt;
@@ -59,6 +74,17 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
   const githubReady = !!workspace.githubInstalledAt;
   const anyConnected = linearReady || jiraReady || githubReady;
   const linked = !!(item.externalProvider && item.externalTicketId);
+
+  // Whether the linked ticket's tracker can push status updates here.
+  const linkedProvider = linked ? item.externalProvider : null;
+  const [sync, setSync] = useState<{ setUp: boolean; cloud: boolean } | null>(null);
+  useEffect(() => {
+    setSync(null);
+    if (!linkedProvider) return;
+    let live = true;
+    externalStatusSetup(linkedProvider).then(s => { if (live) setSync(s); }, () => {});
+    return () => { live = false; };
+  }, [linkedProvider]);
 
   // Multiple providers can be connected at once. The modal lets the vendor
   // pick among the connected ones; this fixed priority (Linear > Jira > GitHub)
@@ -74,8 +100,6 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
   // ── State (c): ticket linked ──────────────────────────────
   if (linked) {
     const providerLabel = PROVIDER_LABEL[item.externalProvider!];
-    const syncedAt = item.externalSyncedAt ? new Date(item.externalSyncedAt) : null;
-    const stale = syncedAt ? (Date.now() - syncedAt.getTime() > STALE_MS) : false;
 
     async function onUnlink() {
       if (!(await confirm({
@@ -110,11 +134,19 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
               <span className="mono text-sm">{item.externalTicketId}</span>
             )}
             <Pill>{providerLabel}</Pill>
-            {stale && <Pill ring>syncing…</Pill>}
           </div>
-          <span className="text-xs muted">
-            Engineering status syncs from {providerLabel}, not authoritative.
-          </span>
+          {sync && !sync.setUp ? (
+            <span className="text-xs muted" style={{ lineHeight: 1.55 }}>
+              Status updates aren&apos;t set up for {providerLabel} yet. {syncFix(item.externalProvider!, sync.cloud)}
+            </span>
+          ) : item.externalSyncedAt ? (
+            // Local time: the server's render and the browser's can differ.
+            <span className="text-xs muted" suppressHydrationWarning>
+              Last update from {providerLabel}: {gmailTime(item.externalSyncedAt)}
+            </span>
+          ) : sync ? (
+            <span className="text-xs muted">No updates from {providerLabel} yet. Its status changes show up here.</span>
+          ) : null}
           <div className="row gap-2">
             <Btn sm onClick={onUnlink} disabled={pending}>
               {pending ? "Unlinking…" : "Unlink"}
@@ -157,8 +189,8 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
         <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.55 }}>
           {createReady
             ? multiProvider
-              ? "Push this item out as a ticket and pick the tracker. Engineering status will sync back."
-              : `Push this item out as a ${providerLabel} ticket. Engineering status will sync back.`
+              ? "Push this item out as a ticket in the tracker you pick."
+              : `Push this item out as a ${providerLabel} ticket.`
             : "Connect a provider in Settings to create a ticket from here."}
         </p>
         <div className="row gap-2">
@@ -174,8 +206,9 @@ export function ExternalTicketTile({ itemShortId, itemTitle, itemBody, aiAvailab
         </div>
       </div>
 
-      {modalOpen && (
+      {modalOpen !== null && (
         <ExternalTicketModal
+          open={modalOpen}
           itemShortId={itemShortId}
           connectedProviders={connectedProviders}
           defaultProvider={defaultProvider}

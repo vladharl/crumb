@@ -1,8 +1,8 @@
 import "server-only";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 import { db, accounts, accountUsers } from "@crumb/db";
-import type { Workspace } from "@crumb/db";
-import { createItem } from "@/lib/items/create";
+import type { Item, Workspace } from "@crumb/db";
+import { createItem, SubmitterBlockedError } from "@/lib/items/create";
 
 // Session-free "create an item on behalf of a customer": upsert the account +
 // submitter, then hand off to createItem (lib/items/create.ts), the core every
@@ -56,11 +56,22 @@ export async function composeItem(input: {
   if (!COMPOSE_ALLOWED_TYPES.has(input.type)) return { ok: false, error: "Pick a type." };
   if (!title) return { ok: false, error: "Title is required." };
 
-  // Upsert account
+  // Someone marked as spam gets nothing created, not even a new account.
+  const [blocked] = await db
+    .select({ id: accountUsers.id })
+    .from(accountUsers)
+    .where(and(eq(accountUsers.workspaceId, input.workspaceId), eq(accountUsers.email, submitterEmail), isNotNull(accountUsers.blockedAt)))
+    .limit(1);
+  if (blocked) return { ok: false, error: new SubmitterBlockedError().message };
+
+  // Upsert account. The name matches ignoring case, so "acme co" lands in
+  // "Acme Co" instead of starting a second account. An exact-case match wins,
+  // then the oldest, where earlier case-sensitive matching left near-twins.
   let [account] = await db
     .select()
     .from(accounts)
-    .where(and(eq(accounts.workspaceId, input.workspaceId), eq(accounts.name, accountName)))
+    .where(and(eq(accounts.workspaceId, input.workspaceId), sql`lower(${accounts.name}) = lower(${accountName})`))
+    .orderBy(sql`${accounts.name} <> ${accountName}`, asc(accounts.createdAt))
     .limit(1);
   if (!account) {
     const inserted = await db.insert(accounts).values({ workspaceId: input.workspaceId, name: accountName }).returning();
@@ -87,22 +98,31 @@ export async function composeItem(input: {
     submitter = inserted[0]!;
   }
 
-  const created = await createItem({
-    workspaceId: input.workspaceId,
-    workspace: input.workspace,
-    accountId: account.id,
-    accountName,
-    submitterId: submitter.id,
-    submitterName,
-    type: input.type,
-    title,
-    body,
-    source: input.source,
-    sourceUrl: input.sourceUrl,
-    announce: input.announce,
-    triage: input.triage,
-    actorWorkspaceUserId: input.actorWorkspaceUserId,
-  });
+  let created: Item;
+  try {
+    created = await createItem({
+      workspaceId: input.workspaceId,
+      workspace: input.workspace,
+      accountId: account.id,
+      accountName: account.name,
+      submitterId: submitter.id,
+      submitterName,
+      type: input.type,
+      title,
+      body,
+      source: input.source,
+      sourceUrl: input.sourceUrl,
+      announce: input.announce,
+      triage: input.triage,
+      actorWorkspaceUserId: input.actorWorkspaceUserId,
+    });
+  } catch (err) {
+    // createItem turns away a submitter whose feedback was marked as spam.
+    // Every caller gets a result, not an exception, and the error is its
+    // sentence: Slack and the capture form show it as is.
+    if (err instanceof SubmitterBlockedError) return { ok: false, error: err.message };
+    throw err;
+  }
 
-  return { ok: true, shortId: created.shortId, itemId: created.id, accountId: account.id, accountName };
+  return { ok: true, shortId: created.shortId, itemId: created.id, accountId: account.id, accountName: account.name };
 }

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { secretMatches } from "@/lib/secret-match";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { db, items, accountUsers, replies, workspaces } from "@crumb/db";
 import { parseReplyAddress, pickReplyTarget } from "@/lib/reply-token";
 import { extractSender, extractSenderName, normalizeMessageId, stripQuotedTail } from "@/lib/inbound-text";
 import { createInboundCapture } from "@/lib/captures";
+import { isBlockedSender } from "@/lib/items/delete";
 import { notifyVendorsOfCustomerReply, dashboardOriginFromHeaders } from "@/lib/customer-reply-notify";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { LIMITS } from "@/lib/validation";
@@ -52,6 +53,25 @@ function pickReplyAddress(to: InboundPayload["to"]): { shortId: string; token: s
     if (parsed) return parsed;
   }
   return null;
+}
+
+// The workspaces that issued this FB number and no longer have its item: it
+// was deleted (numbers are never reused, next_item_seq only grows). As for a
+// live item, the one whose secret signed the address is the one that sent it.
+// ponytail: an unmatched token scans the workspaces past this number; the
+// workspace hint in new addresses (see POST) would make it one row.
+async function deletedFrom(shortId: string) {
+  const seq = Number(/^FB-([1-9]\d{0,8})$/.exec(shortId)?.[1]);
+  if (!seq) return [];
+  return db
+    .select({ id: workspaces.id, signingSecret: workspaces.signingSecret })
+    .from(workspaces)
+    .where(and(
+      gt(workspaces.nextItemSeq, seq),
+      // Raw qualified refs: drizzle would render ${workspaces.id} unqualified.
+      sql`NOT EXISTS (SELECT 1 FROM items i WHERE i.workspace_id = workspaces.id AND i.short_id = ${shortId})`,
+    ))
+    .limit(REPLY_CANDIDATE_CAP);
 }
 
 function authorized(req: Request): boolean {
@@ -117,14 +137,27 @@ export async function POST(req: Request) {
     .orderBy(desc(items.updatedAt))
     .limit(REPLY_CANDIDATE_CAP);
 
-  if (candidates.length === 0) return NextResponse.json({ error: "item_not_found" }, { status: 404 });
-
   const row = pickReplyTarget(parsed.shortId, parsed.token, candidates);
   if (!row) {
+    // A reply to the notification about an item deleted since (Delete, Mark
+    // as spam): still a 200, so the provider doesn't retry what no thread takes.
+    const gone = pickReplyTarget(parsed.shortId, parsed.token, await deletedFrom(parsed.shortId));
+    if (gone) {
+      log.info("inbound reply to a deleted item dropped", { scope: "crumb/inbound", workspaceId: gone.id, shortId: parsed.shortId });
+      return NextResponse.json({ ok: true, accepted: false, reason: "item_deleted" });
+    }
+    if (candidates.length === 0) return NextResponse.json({ error: "item_not_found" }, { status: 404 });
     if (candidates.length === REPLY_CANDIDATE_CAP) {
       log.warn("inbound reply token matched none of the capped candidates", { scope: "crumb/inbound", shortId: parsed.shortId });
     }
     return NextResponse.json({ error: "invalid_token" }, { status: 403 });
+  }
+
+  // A sender whose feedback was marked as spam: nothing posted or captured,
+  // and still a 200 so the provider doesn't retry.
+  if (await isBlockedSender(row.itemWorkspaceId, senderEmail)) {
+    log.info("inbound reply from a blocked sender dropped", { scope: "crumb/inbound", workspaceId: row.itemWorkspaceId, shortId: parsed.shortId });
+    return NextResponse.json({ ok: true, accepted: false, reason: "blocked" });
   }
 
   const messageId = normalizeMessageId(payload.message_id ?? payload.messageId);

@@ -4,7 +4,7 @@ import { db, items, workspaces } from "@crumb/db";
 import { verifyWebhook } from "@/lib/integrations/linear";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
-import { syncExternalStatus } from "@/lib/webhooks";
+import { byTicket, syncExternalStatus } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,6 +36,11 @@ export const runtime = "nodejs";
 // has no org id; its items match only when their own stored issue URL is in
 // the org the event's issue URL names (the org's URL key). Nothing here calls
 // Linear, so an expired install token never stops the sync.
+//
+// Within that scope an item matches on the issue's id, which a move to another
+// team keeps (ENG-42 becomes DES-7), and takes the event's identifier and URL.
+// Items linked before ids were stored match on their identifier once and get
+// the id then.
 //
 // Other event types (Comment, Project, etc.) return 200 ok — we never
 // trigger Linear retries for events we don't model.
@@ -90,7 +95,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ received: true });
   }
 
-  const identifier = event.data.identifier;
+  const { id, identifier } = event.data;
   const organizationId = event.organizationId;
   if (!identifier || !organizationId) return NextResponse.json({ received: true });
 
@@ -100,7 +105,7 @@ export async function POST(req: Request) {
   try {
     await syncExternalStatus(and(
       eq(items.externalProvider, "linear"),
-      eq(items.externalTicketId, identifier),
+      byTicket(id, eq(items.externalTicketId, identifier)),
       or(
         inArray(items.workspaceId, installs(eq(workspaces.linearOrganizationId, organizationId))),
         urlKey ? and(
@@ -108,7 +113,7 @@ export async function POST(req: Request) {
           sql`starts_with(${items.externalTicketUrl}, ${`https://linear.app/${urlKey}/issue/`})`,
         ) : undefined,
       ),
-    ), newStatus);
+    ), newStatus, { uid: id, key: identifier, url: urlKey ? event.data.url : null });
   } catch (err) {
     log.error("linear webhook DB update failed", { scope: "crumb/linear", identifier, err });
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });

@@ -1,0 +1,66 @@
+/* Inbox triage extras that live with the inbox (globals.css holds the table).
+
+   A row the keyboard moves to scrolls clear of the sticky 52px top bar. */
+.row { scroll-margin-top: 64px; scroll-margin-bottom: 12px; }
+
+/* The filters and saved views line under the tabs. */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+}
+.filtersEnd {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.viewName {
+  width: 180px;
+  padding: 5px 8px;
+  font-size: var(--fs-xs);
+}
+
+/* Keyboard shortcuts sheet */
+.keys {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 10px 18px;
+  margin: 0;
+  align-items: center;
+  font-size: var(--fs-body);
+}
+.keys dt { display: flex; gap: 4px; }
+.keys dd { margin: 0; color: var(--text); }
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--hair-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+}
+.hint {
+  border: 0;
+  background: transparent;
+  padding: 2px 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--mute);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.hint:hover { color: var(--text); background: var(--hover); }
+.hint:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--accent-soft); }

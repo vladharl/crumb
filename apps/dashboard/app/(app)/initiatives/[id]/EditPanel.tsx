@@ -2,11 +2,13 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Btn, Ic } from "@crumb/ui";
+import { Btn, Ic, Switch } from "@crumb/ui";
 import type { Announce } from "@/lib/changelog";
 import { AnnouncePrompt } from "@/app/(app)/changelog/Announce";
-import { updateInitiative } from "../actions";
+import { setInitiativePublic, updateInitiative } from "../actions";
+import type { BoardCol } from "../InitiativesBoard";
 import { PRESET_COLORS } from "../presetColors";
+import { useColumnMove } from "../useColumnMove";
 
 // "Parked" is just a status — selecting it here is the same as the old "Park"
 // button (which only set status='parked'), so there's no separate control.
@@ -66,6 +68,9 @@ export function EditPanel({
     color: string | null;
     ownerWorkspaceUserId: string | null;
     trackedEventNames: string[] | null;
+    roadmapColumn: BoardCol | null;
+    isPublic: boolean;
+    followers: number;
   };
   members: Array<{ id: string; name: string }>;
   eventOptions: Array<{ name: string; count: number }>;
@@ -86,6 +91,16 @@ export function EditPanel({
   const [announce, setAnnounce] = useState<Announce | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
+  const [isPublic, setIsPublic] = useState(initiative.isPublic);
+  // The board's Now / Next / Later without a drag. Moving a public initiative
+  // waits behind Undo before its followers are emailed, as a drop does.
+  const column = useColumnMove({
+    id: initiative.id,
+    column: initiative.roadmapColumn,
+    isPublic,
+    followers: initiative.followers,
+    onSaved: () => setSaved(true),
+  });
 
   if (!canManage) return null;
 
@@ -157,6 +172,19 @@ export function EditPanel({
   }
   function pickOwner(v: string) { setOwnerId(v); persist({ ownerWorkspaceUserId: v || null }); }
   function pickColor(c: string) { if (c === color) return; setColor(c); persist({ color: c }); }
+  function pickColumn(v: string) { setSaved(false); column.move((v || null) as BoardCol | null); }
+  function togglePublic() {
+    const next = !isPublic;
+    setIsPublic(next);
+    setError(null);
+    setSaved(false);
+    startTransition(async () => {
+      const r = await setInitiativePublic(initiative.id, next);
+      if (r.ok) { setSaved(true); router.refresh(); }
+      else { setIsPublic(!next); setError(humanError(r.error)); }
+    });
+  }
+  const emailsOnMove = isPublic && initiative.followers > 0;
 
   return (
     <div
@@ -171,7 +199,7 @@ export function EditPanel({
     >
       <div className="row between center">
         <span className="eyebrow">Edit initiative</span>
-        <span className="text-2xs muted">{pending ? "Saving…" : saved ? "Saved" : "Auto-saves"}</span>
+        <span className="text-2xs muted">{pending || column.saving ? "Saving…" : saved ? "Saved" : "Auto-saves"}</span>
       </div>
 
       <div className="col gap-1">
@@ -221,6 +249,39 @@ export function EditPanel({
         </select>
       </div>
       {announce && <AnnouncePrompt announce={announce} onClose={() => setAnnounce(null)} />}
+      <div className="col gap-1">
+        <label className="eyebrow" htmlFor="ed-column">Column</label>
+        <select
+          id="ed-column"
+          value={column.shown ?? ""}
+          onChange={e => pickColumn(e.target.value)}
+          aria-describedby={emailsOnMove ? "ed-column-help" : undefined}
+          style={inputStyle}
+        >
+          <option value="">Unscheduled</option>
+          <option value="now">Now</option>
+          <option value="next">Next</option>
+          <option value="later">Later</option>
+        </select>
+        {emailsOnMove && (
+          <span id="ed-column-help" className="text-2xs muted">
+            Moving it to Now, Next or Later emails its {initiative.followers} {initiative.followers === 1 ? "follower" : "followers"}, after a few seconds to undo.
+          </span>
+        )}
+      </div>
+      <div className="col gap-1">
+        <span className="eyebrow">Public</span>
+        {/* The label names the switch for screen readers. */}
+        <label className="row gap-2 center" style={{ alignSelf: "flex-start", cursor: "pointer" }}>
+          <Switch on={isPublic} onClick={togglePublic} />
+          <span className="text-sm">Show on the customer roadmap</span>
+        </label>
+        <span className="text-2xs muted">
+          {column.shown === null
+            ? "Customers only see a public initiative once it's in Now, Next or Later."
+            : "Public initiatives show on the roadmap in the widget, where customers can follow them."}
+        </span>
+      </div>
       <div className="col gap-1">
         <label className="eyebrow" htmlFor="ed-owner">Owner</label>
         <select id="ed-owner" value={ownerId} onChange={e => pickOwner(e.target.value)} style={inputStyle}>

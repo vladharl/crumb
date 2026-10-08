@@ -258,6 +258,7 @@ export function RowReplyDrawer({
           accountName={row.accountName}
           source={row.source}
           notifyPlan={ctx.notifyPlan}
+          mergedReach={ctx.mergedReach}
           teammates={ctx.teammates}
           aiReplyAvailable={ctx.aiReplyAvailable}
           canWrite={canWrite}

@@ -9,13 +9,13 @@ import { originFromHeaders } from "@/lib/origin";
 import { hasFeature, integrationsAllowed, workspacePlan } from "@/lib/entitlements";
 import { slackConfigured } from "@/lib/slack/install";
 import { linearConfigured } from "@/lib/integrations/linear";
-import { jiraConfigured } from "@/lib/integrations/jira";
+import { jiraConfigured, statusSyncReady as jiraStatusSyncReady } from "@/lib/integrations/jira";
 import { githubConfigured } from "@/lib/integrations/github";
 import { crmConfigured, getCrmAdapter } from "@/lib/integrations/crm";
 import { ConnectSlackButton, DisconnectSlackButton } from "./SlackActions";
 import { ConnectLinearButton, DisconnectLinearButton } from "./LinearActions";
-import { LinearTeamSwitcher } from "./LinearTeamSwitcher";
-import { ConnectJiraButton, DisconnectJiraButton } from "./JiraActions";
+import { TrackerDefaultPicker } from "./TrackerDefaultPicker";
+import { ConnectJiraButton, DisconnectJiraButton, JiraSitePicker } from "./JiraActions";
 import { ConnectGithubButton, DisconnectGithubButton } from "./GithubActions";
 import {
   ConnectHubspotButton, DisconnectHubspotButton,
@@ -62,6 +62,7 @@ const JIRA_BANNER: Record<string, { kind: "ok" | "err"; text: string }> = {
   ...SESSION_BANNER,
   connected:               { kind: "ok",  text: "Jira connected. From any thread, click Create ticket in the Engineering panel to push the item out." },
   connected_no_sync:       { kind: "ok",  text: "Jira connected, but status sync couldn't be set up. Reconnect to retry; ticket creation works." },
+  pick_site:               { kind: "ok",  text: "Jira connected. Your Atlassian login reaches more than one Jira site, so choose the one this workspace uses below." },
   error_missing_params:    { kind: "err", text: "Jira didn't include a valid response. Please try again." },
   error_bad_state:         { kind: "err", text: "Install request couldn't be verified. Please start the connection from this page." },
   error_workspace_gone:    { kind: "err", text: "Workspace not found while finishing the install." },
@@ -138,6 +139,7 @@ export default async function IntegrationsPage({
 
   const jiraInstalled = !!ws.jiraAccessToken;
   const jiraCanInstall = jiraConfigured();
+  const jiraStatusSync = jiraStatusSyncReady(ws);
   const jiraBanner = searchParams.jira
     ? (JIRA_BANNER[searchParams.jira] ?? { kind: "err" as const, text: searchParams.jira.replace(/^error_/, "") })
     : null;
@@ -222,24 +224,27 @@ export default async function IntegrationsPage({
               <p className="text-xs muted note">
                 Crumb status stays canonical. Engineering status from Linear writes to a separate field on the item, displayed in the thread sidebar, never authoritative.
               </p>
-              <details style={{ borderTop: "var(--border)", paddingTop: 10 }}>
-                <summary className="text-xs" style={{ cursor: "pointer", color: "var(--ink)" }}>
-                  Status sync needs a webhook in Linear
-                </summary>
-                <div className="col gap-2" style={{ marginTop: 10 }}>
-                  <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
-                    Linear can&apos;t register webhooks automatically. In Linear, open Settings → API → Webhooks, add the URL below, subscribe to Issue events, and sign it with your <span className="mono">LINEAR_WEBHOOK_SECRET</span>. Until then, tickets are created but engineering status won&apos;t sync back.
-                  </p>
-                  <div className="col gap-1">
-                    <span className="eyebrow">Webhook URL</span>
-                    <div className="code" style={{ wordBreak: "break-all" }}>{`${origin ?? "https://your-dashboard.example.com"}/api/integrations/linear/webhook`}</div>
+              {/* Cloud's Linear app carries the webhook; self-host adds its own. */}
+              {!cloud && (
+                <details style={{ borderTop: "var(--border)", paddingTop: 10 }}>
+                  <summary className="text-xs" style={{ cursor: "pointer", color: "var(--ink)" }}>
+                    Status sync needs a webhook in Linear
+                  </summary>
+                  <div className="col gap-2" style={{ marginTop: 10 }}>
+                    <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
+                      Linear can&apos;t register webhooks automatically. In Linear, open Settings → API → Webhooks, add the URL below, subscribe to Issue events, and sign it with your <span className="mono">LINEAR_WEBHOOK_SECRET</span>. Until then, tickets are created but engineering status won&apos;t sync back.
+                    </p>
+                    <div className="col gap-1">
+                      <span className="eyebrow">Webhook URL</span>
+                      <div className="code" style={{ wordBreak: "break-all" }}>{`${origin ?? "https://your-dashboard.example.com"}/api/integrations/linear/webhook`}</div>
+                    </div>
                   </div>
-                </div>
-              </details>
+                </details>
+              )}
               {isAdmin
                 ? (
                   <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
-                    <LinearTeamSwitcher currentTeamId={ws.linearTeamId} />
+                    {integrationsEntitled && <TrackerDefaultPicker provider="linear" current={ws.linearTeamId} />}
                     <DisconnectLinearButton teamName={ws.linearTeamName} />
                   </div>
                 )
@@ -284,7 +289,22 @@ export default async function IntegrationsPage({
         <div className="card-body col gap-3">
           {jiraBanner && <Banner kind={jiraBanner.kind} text={jiraBanner.text} />}
 
-          {jiraInstalled ? (
+          {jiraInstalled && !ws.jiraCloudId ? (
+            // No site yet: the login reaches several, or lost the one it had.
+            <>
+              <p className="text-sm note">
+                Choose the Jira site this workspace creates tickets in. Until then, tickets can&apos;t go to Jira.
+              </p>
+              {isAdmin
+                ? (
+                  <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
+                    {integrationsEntitled && <JiraSitePicker />}
+                    <DisconnectJiraButton siteUrl={null} />
+                  </div>
+                )
+                : <p className="text-xs muted" style={{ margin: 0 }}>A workspace admin needs to choose the site.</p>}
+            </>
+          ) : jiraInstalled ? (
             <>
               <p className="text-sm note">
                 Connected to <strong style={{ fontWeight: 500 }}>{ws.jiraSiteUrl ? ws.jiraSiteUrl.replace(/^https?:\/\//, "") : "Jira"}</strong>
@@ -298,8 +318,35 @@ export default async function IntegrationsPage({
               <p className="text-xs muted note">
                 Crumb status stays canonical. Engineering status from Jira writes to a separate field on the item, displayed in the thread sidebar, never authoritative.
               </p>
+              {cloud && !jiraStatusSync && (
+                <p className="text-xs note" style={{ color: "var(--err-text)" }}>
+                  Status sync isn&apos;t set up, so linked tickets won&apos;t update here. Reconnect Jira to try again; creating tickets still works.
+                </p>
+              )}
+              {!cloud && (
+                <details style={{ borderTop: "var(--border)", paddingTop: 10 }}>
+                  <summary className="text-xs" style={{ cursor: "pointer", color: "var(--ink)" }}>
+                    Status sync needs a webhook in Jira
+                  </summary>
+                  <div className="col gap-2" style={{ marginTop: 10 }}>
+                    <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
+                      In Jira, open Settings → System → WebHooks, create a webhook with the URL below for issue updated events, and set its secret to your <span className="mono">JIRA_WEBHOOK_SECRET</span>. Until then, tickets are created but engineering status won&apos;t sync back.
+                    </p>
+                    <div className="col gap-1">
+                      <span className="eyebrow">Webhook URL</span>
+                      <div className="code" style={{ wordBreak: "break-all" }}>{`${origin ?? "https://your-dashboard.example.com"}/api/integrations/jira/webhook`}</div>
+                    </div>
+                  </div>
+                </details>
+              )}
               {isAdmin
-                ? <DisconnectJiraButton siteUrl={ws.jiraSiteUrl} />
+                ? (
+                  <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
+                    {integrationsEntitled && <TrackerDefaultPicker provider="jira" current={ws.jiraDefaultProjectKey} />}
+                    {cloud && !jiraStatusSync && jiraCanInstall && integrationsEntitled && <ConnectJiraButton reconnect />}
+                    <DisconnectJiraButton siteUrl={ws.jiraSiteUrl} />
+                  </div>
+                )
                 : <p className="text-xs muted" style={{ margin: 0 }}>Only workspace admins can disconnect.</p>}
             </>
           ) : (
@@ -353,10 +400,17 @@ export default async function IntegrationsPage({
                 )}.
               </p>
               <p className="text-xs muted note">
-                When AI drafting is enabled (Cloud + ANTHROPIC_API_KEY), README + repo structure also feed Linear/Jira drafts, not just GitHub.
+                {ws.githubDefaultRepo
+                  ? "When AI drafting is enabled (Cloud + ANTHROPIC_API_KEY), README + repo structure also feed Linear/Jira drafts, not just GitHub."
+                  : "Choose a default repository. New issues start there, and AI drafts and Slack sizing (Cloud) read its README and file layout."}
               </p>
               {isAdmin
-                ? <DisconnectGithubButton account={ws.githubAppInstallAccount} />
+                ? (
+                  <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
+                    {integrationsEntitled && <TrackerDefaultPicker provider="github" current={ws.githubDefaultRepo} />}
+                    <DisconnectGithubButton account={ws.githubAppInstallAccount} />
+                  </div>
+                )
                 : <p className="text-xs muted" style={{ margin: 0 }}>Only workspace admins can disconnect.</p>}
             </>
           ) : (

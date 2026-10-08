@@ -180,6 +180,8 @@ export async function POST(req: Request, { params }: { params: { shortId: string
     email: payload.account_user_email ?? null,
   });
   if (!r.ok) return fail(r.status, r.error);
+  // Marked as spam: turned away like their new requests (POST /api/v1/items).
+  if (r.ctx.user.blockedAt) return fail(403, "submitter_blocked");
 
   // Per-workspace bucket — both must pass; looser cap than the per-IP one.
   const wsRl = await checkRateLimitAsync(`reply:ws:${r.ctx.workspace.id}`, { capacity: 600, refillPerSec: 10 });

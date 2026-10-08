@@ -1,10 +1,10 @@
 import { eq } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import {
-  ensureWebhook,
   exchangeCode,
   fetchAccessibleResources,
-  listProjectsWithToken,
+  pickSite,
+  setUpSite,
   JIRA_REDIRECT_URL,
 } from "@/lib/integrations/jira";
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
@@ -12,7 +12,6 @@ import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
 import { seal } from "@/lib/crypto-at-rest";
 import { withoutAlert } from "@/lib/integrations/revoke";
 import { originFromHeaders } from "@/lib/origin";
-import { isCloud } from "@/lib/tier";
 import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +34,7 @@ export async function GET(req: Request) {
   if (!v.ok) return v.redirect;
 
   const [ws] = await db
-    .select({ id: workspaces.id })
+    .select({ id: workspaces.id, jiraCloudId: workspaces.jiraCloudId })
     .from(workspaces)
     .where(eq(workspaces.id, v.workspaceId))
     .limit(1);
@@ -58,19 +57,11 @@ export async function GET(req: Request) {
     log.error("jira accessible-resources failed", { scope: "crumb/jira", err });
     return redirectBack(req, "error_resources_failed");
   }
-  const target = resources[0];
-  if (!target) return redirectBack(req, "error_no_resources");
-
-  // Convenience: if the site has exactly one project, pre-select it as the
-  // default so the admin can create tickets immediately. Best-effort — a
-  // failure here must not break the connect.
-  let defaultProjectKey: string | null = null;
-  try {
-    const projects = await listProjectsWithToken(target.id, token.access_token);
-    if (projects.length === 1) defaultProjectKey = projects[0].key;
-  } catch (err) {
-    log.warn("jira project pre-select failed (non-fatal)", { scope: "crumb/jira", err });
-  }
+  if (resources.length === 0) return redirectBack(req, "error_no_resources");
+  // A reconnect keeps its site while the login still reaches it. Otherwise a
+  // login that reaches several sites leaves the choice to the admin: the Jira
+  // card lists them, and picking one (setJiraSite) finishes the connect.
+  const site = pickSite(resources, ws.jiraCloudId);
 
   await db
     .update(workspaces)
@@ -78,25 +69,24 @@ export async function GET(req: Request) {
       jiraAccessToken:       seal(token.access_token),
       jiraRefreshToken:      seal(token.refresh_token),
       jiraTokenExpiresAt:    new Date(Date.now() + token.expires_in * 1000),
-      jiraCloudId:           target.id,
-      jiraSiteUrl:           target.url,
-      jiraDefaultProjectKey: defaultProjectKey,
-      jiraInstalledAt:       new Date(),
+      jiraCloudId:           site?.id ?? null,
+      jiraSiteUrl:           site?.url ?? null,
+      // The admin's default project stays with its site.
+      ...(site && site.id === ws.jiraCloudId ? {} : { jiraDefaultProjectKey: null }),
+      // Stamped once tickets have somewhere to go; the thread offers Jira from then.
+      jiraInstalledAt:       site ? new Date() : null,
       integrationAlerts:     withoutAlert("jira"),
     })
     .where(eq(workspaces.id, ws.id));
+  if (!site) return redirectBack(req, "pick_site");
 
-  // Status sync on Cloud needs this install's own webhook (see ensureWebhook).
-  // Like the pre-select it can't undo the connect: on failure the connection
-  // stays and the banner says status sync isn't set up.
-  if (isCloud()) {
-    const hook = await ensureWebhook(
-      ws.id,
-      { accessToken: token.access_token, cloudId: target.id },
-      originFromHeaders(req.headers),
-    );
-    if (!hook.ok) return redirectBack(req, "connected_no_sync");
-  }
-
-  return redirectBack(req, "connected");
+  // The default project, and on Cloud the status webhook (see ensureWebhook).
+  // Neither can undo the connect: on failure the connection stays and the
+  // banner says status sync isn't set up.
+  const synced = await setUpSite(
+    ws.id,
+    { accessToken: token.access_token, cloudId: site.id },
+    originFromHeaders(req.headers),
+  );
+  return redirectBack(req, synced ? "connected" : "connected_no_sync");
 }

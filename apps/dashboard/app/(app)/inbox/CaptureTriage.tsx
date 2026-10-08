@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Btn, Card, CardHead, Dropdown, Ic, Pill } from "@crumb/ui";
 import { useConfirm } from "@/components/confirm";
 import { useToast } from "@/components/toast";
+import { errorMessage } from "@/lib/action-error";
 import { createItemFromCapture, dismissCapture, restoreCapture } from "../captures/actions";
 import type { CaptureRow, AccountOption } from "../captures/CapturesList";
 
@@ -74,7 +75,7 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
       if (r.ok) {
         router.refresh();
         toast.show({ message: "Added to the inbox." });
-      } else setError(r.error);
+      } else setError(errorMessage(r.error));
     });
   }
 
@@ -105,7 +106,7 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
             },
           },
         });
-      } else setError(r.error);
+      } else setError(errorMessage(r.error));
     });
   }
 

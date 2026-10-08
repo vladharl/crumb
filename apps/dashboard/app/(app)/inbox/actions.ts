@@ -21,8 +21,9 @@ function actorOf(workspaceId: string, user: { id: string; role: string }): Vendo
 }
 
 export type BulkResult = { ok: true; affected: number } | { ok: false; error: string };
+// `skipped`: merged duplicates left out (they follow the item they were merged into).
 export type BulkStatusResult =
-  | { ok: true; affected: number; failed: number; firstError?: string }
+  | { ok: true; affected: number; failed: number; firstError?: string; skipped?: number }
   | { ok: false; error: string };
 
 function validIds(ids: unknown): ids is string[] {
@@ -48,6 +49,10 @@ async function pooled<T>(list: T[], fn: (t: T) => Promise<void>): Promise<void> 
 // writes status_events, fires webhooks + chat cards and emails the customer
 // exactly like a single one. Items already in `status` count as affected (the
 // core no-ops without re-notifying); ids outside this workspace count as failed.
+// Merged duplicates are skipped: the item they were merged into emails their
+// customers when it moves, so moving them too would email those people twice.
+// A customer with several requests in the batch hears about each one: every
+// request is its own loop, and each gets its own ledger row.
 export async function bulkUpdateStatus(itemIds: string[], status: string, reason?: string): Promise<BulkStatusResult> {
   if (!validIds(itemIds)) return { ok: false, error: "no_items" };
   if (new Set(itemIds).size > BULK_STATUS_MAX) return { ok: false, error: "too_many_items" };
@@ -60,27 +65,35 @@ export async function bulkUpdateStatus(itemIds: string[], status: string, reason
 
   const ids = [...new Set(itemIds)];
   const rows = await db
-    .select({ shortId: items.shortId })
+    .select({ id: items.id, shortId: items.shortId, status: items.status, mergedIntoId: items.mergedIntoId })
     .from(items)
     .where(and(eq(items.workspaceId, ws.id), inArray(items.id, ids)));
+  const moving = rows.filter(r => !r.mergedIntoId);
+  const skipped = rows.length - moving.length;
 
   const actor = actorOf(ws.id, user);
   const origin = originFromHeaders(headers());
   let affected = 0;
   let failed = ids.length - rows.length;
   let firstError: string | undefined = failed > 0 ? "not_found" : undefined;
-  await pooled(rows, async ({ shortId }) => {
-    const r = await updateItemStatus(actor, { itemShortId: shortId, status: status as VendorStatus, reason: why, origin })
-      .catch((err: unknown) => {
-        log.error("bulk status update failed", { scope: "crumb/inbox", shortId, err });
-        return { ok: false as const, error: "update_failed" };
-      });
+  await pooled(moving, async ({ shortId }) => {
+    const r = await updateItemStatus(
+      actor,
+      { itemShortId: shortId, status: status as VendorStatus, reason: why, origin },
+    ).catch((err: unknown) => {
+      log.error("bulk status update failed", { scope: "crumb/inbox", shortId, err });
+      return { ok: false as const, error: "update_failed" };
+    });
     if (r.ok) affected++;
     else { failed++; firstError ??= r.error; }
   });
 
   revalidatePath("/inbox");
-  return firstError ? { ok: true, affected, failed, firstError } : { ok: true, affected, failed };
+  return {
+    ok: true, affected, failed,
+    ...(firstError ? { firstError } : {}),
+    ...(skipped > 0 ? { skipped } : {}),
+  };
 }
 
 // Each item goes through the same assignment core as the thread, so

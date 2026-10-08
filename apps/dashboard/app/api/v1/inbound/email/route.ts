@@ -5,8 +5,10 @@ import { db, workspaces } from "@crumb/db";
 import { parseInboxAddress, verifyInboxToken } from "@/lib/inbound-address";
 import { captureFromEmail, normalizeMessageId } from "@/lib/inbound-text";
 import { createInboundCapture } from "@/lib/captures";
+import { isBlockedSender } from "@/lib/items/delete";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { LIMITS } from "@/lib/validation";
+import { log } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -71,6 +73,12 @@ export async function POST(req: Request) {
   if (!ws) return NextResponse.json({ error: "workspace_not_found" }, { status: 404 });
 
   const mail = captureFromEmail(payload);
+  // From a customer whose feedback was marked as spam: no capture, and still
+  // a 200 so the provider doesn't retry.
+  if (await isBlockedSender(ws.id, mail.fromEmail)) {
+    log.info("inbound email from a blocked sender dropped", { scope: "crumb/inbound", workspaceId: ws.id });
+    return NextResponse.json({ ok: true, accepted: false, reason: "blocked" });
+  }
   const subject = mail.subject?.slice(0, 300) || null;
   const body = mail.body.slice(0, LIMITS.reply);
   if (!subject && !body) return NextResponse.json({ error: "empty" }, { status: 400 });

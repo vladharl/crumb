@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { Btn, Field, Ic } from "@crumb/ui";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Btn, Dropdown, Field, Ic } from "@crumb/ui";
+import { errorMessage } from "@/lib/action-error";
 import { composeOnBehalf } from "./compose-actions";
 
 const TYPES: Array<{ key: "bug" | "idea" | "question"; label: string }> = [
@@ -22,6 +23,18 @@ export function ComposePanel({ knownAccounts }: { knownAccounts: string[] }) {
   const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  // The command palette's "Compose" lands on /inbox?compose=1: open, then drop
+  // the param so a refresh or Back doesn't open it again.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get("compose") !== "1") return;
+    setOpen(true);
+    const params = new URLSearchParams(window.location.search);
+    params.delete("compose");
+    const qs = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+  }, [searchParams]);
 
   // Closing keeps the draft — only a successful create clears it, so a stray
   // scrim click or Escape can't eat a half-typed email transcription.
@@ -52,7 +65,7 @@ export function ComposePanel({ knownAccounts }: { knownAccounts: string[] }) {
         reset();
         router.push(`/thread/${res.shortId}`);
       } else {
-        setError(res.error);
+        setError(errorMessage(res.error));
       }
     });
   }
@@ -108,6 +121,18 @@ function ComposeModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Account names match ignoring case on the server (lib/compose.ts), so say
+  // up front which account the item lands in, and when it starts a new one.
+  const typed = fields.accountName.trim();
+  const existing = typed ? knownAccounts.find(n => n.toLowerCase() === typed.toLowerCase()) : undefined;
+  const accountRef = useRef<HTMLInputElement>(null);
+  // Picking one removes the picker with the warning: focus goes back to the
+  // field, after the picker has put it on its own button.
+  function pickAccount(name: string) {
+    fields.setAccountName(name);
+    requestAnimationFrame(() => accountRef.current?.focus());
+  }
+
   return (
     <div
       role="dialog"
@@ -139,6 +164,7 @@ function ComposeModal({
         <div className="col gap-3">
           <Field label="Customer account">
             <input
+              ref={accountRef}
               className="input"
               list="known-accounts"
               placeholder="Acme Co"
@@ -146,10 +172,34 @@ function ComposeModal({
               onChange={e => fields.setAccountName(e.target.value)}
               disabled={pending}
               autoFocus
+              aria-label="Customer account"
+              aria-describedby={typed && !existing ? "compose-new-account" : undefined}
             />
             <datalist id="known-accounts">
               {knownAccounts.map(n => <option key={n} value={n} />)}
             </datalist>
+            {typed && !existing && (
+              <div className="row gap-2 center" style={{ flexWrap: "wrap", marginTop: 6 }}>
+                <span id="compose-new-account" className="text-xs fw-med">
+                  This creates a new account, {typed}.
+                </span>
+                {knownAccounts.length > 0 && (
+                  <Dropdown
+                    size="sm"
+                    ariaLabel="Pick an existing account"
+                    placeholder="Pick an existing one"
+                    value={null}
+                    disabled={pending}
+                    searchable={knownAccounts.length > 8}
+                    onChange={pickAccount}
+                    options={knownAccounts.map(n => ({ value: n, label: n }))}
+                  />
+                )}
+              </div>
+            )}
+            {existing && existing !== typed && (
+              <span className="text-xs muted" style={{ marginTop: 6 }}>Adds to {existing}.</span>
+            )}
           </Field>
 
           <div className="row gap-2" style={{ flexWrap: "wrap" }}>

@@ -2,7 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
-  db, workspaces, workspaceUsers, items, itemEmbeddings, dedupeSuggestions, replies, statusEvents, attachments,
+  db, workspaces, workspaceUsers, accountUsers, items, itemEmbeddings, dedupeSuggestions, replies, statusEvents, attachments,
   type Item, type ItemContext, type Workspace,
 } from "@crumb/db";
 import { emitEvent } from "@/lib/webhooks";
@@ -61,10 +61,28 @@ export type CreateItemInput = {
   triage?: boolean;
 };
 
+// Thrown by createItem when the submitter's feedback was marked as spam
+// (account_users.blocked_at, lib/items/delete.ts). Its message is a sentence a
+// teammate can be shown; the widget route answers with its own refusal.
+export class SubmitterBlockedError extends Error {
+  constructor() {
+    super("This person's feedback was marked as spam, so new requests from them are turned away.");
+    this.name = "SubmitterBlockedError";
+  }
+}
+
 export async function createItem(input: CreateItemInput): Promise<Item> {
   const title = input.title.trim();
   const body = (input.body ?? "").trim();
   const attachmentIds = input.attachmentIds ?? [];
+
+  // Before anything is written, so a refusal uses no FB number.
+  const [submitter] = await db
+    .select({ blockedAt: accountUsers.blockedAt })
+    .from(accountUsers)
+    .where(eq(accountUsers.id, input.submitterId))
+    .limit(1);
+  if (submitter?.blockedAt) throw new SubmitterBlockedError();
 
   const [bumped] = await db
     .update(workspaces)

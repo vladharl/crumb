@@ -9,6 +9,7 @@ import { statusMix } from "@/lib/insights/status-mix";
 import { usageAnalyticsAllowed } from "@/lib/entitlements";
 import { knownEventNames } from "@/lib/usage/signals";
 import { InitiativeStatusPill } from "../InitiativeChip";
+import type { BoardCol } from "../InitiativesBoard";
 import { EditPanel } from "./EditPanel";
 
 async function loadHeader(workspaceId: string, id: string) {
@@ -25,6 +26,13 @@ async function loadHeader(workspaceId: string, id: string) {
       updatedAt: initiatives.updatedAt,
       ownerWorkspaceUserId: initiatives.ownerWorkspaceUserId,
       trackedEventNames: initiatives.trackedEventNames,
+      roadmapColumn: initiatives.roadmapColumn,
+      isPublic: initiatives.isPublic,
+      // Fully-qualified correlation, as on the board (a raw ${initiatives.id}
+      // renders unqualified and would match roadmap_follows.id).
+      followers: sql<number>`(
+        SELECT COUNT(*)::int FROM roadmap_follows WHERE roadmap_follows.initiative_id = initiatives.id
+      )`,
       ownerName: workspaceUsers.name,
       ownerInitials: workspaceUsers.initials,
     })
@@ -86,6 +94,9 @@ export async function InitiativeHeaderTile({ id }: { id: string }) {
               color: initiative.color,
               ownerWorkspaceUserId: initiative.ownerWorkspaceUserId,
               trackedEventNames: initiative.trackedEventNames,
+              roadmapColumn: (initiative.roadmapColumn as BoardCol | null) ?? null,
+              isPublic: initiative.isPublic,
+              followers: initiative.followers,
             }}
             members={members}
             eventOptions={eventOptions}

@@ -473,11 +473,12 @@ export async function createItemReply(
 // the status email carrying the reply as its message. When that email won't go
 // out (the status didn't move, or the customer turned status emails off), the
 // reply core sends its usual reply email instead, under the reply prefs. For
-// "declined" the reply doubles as the required reason.
+// "declined" the reply doubles as the required reason. `mergedEmailed` is
+// updateItemStatus's: the merged requesters told the outcome (without the reply).
 export async function replyAndSetItemStatus(
   actor: VendorActor,
   input: { itemShortId: string; body: string; status: "shipped" | "declined"; attachmentIds?: string[]; origin?: string | null },
-): Promise<{ ok: true; replyId: string; emailed: boolean } | { ok: false; error: string }> {
+): Promise<{ ok: true; replyId: string; emailed: boolean; mergedEmailed: number } | { ok: false; error: string }> {
   if (input.status !== "shipped" && input.status !== "declined") return { ok: false, error: "bad_status" };
   const body = input.body.trim();
   if (input.status === "declined" && !body) return { ok: false, error: "reason_required" };
@@ -501,7 +502,7 @@ export async function replyAndSetItemStatus(
   );
   if (!moved.ok) return moved;
 
-  return { ok: true, replyId: reply.replyId, emailed: reply.emailed || moved.emailed };
+  return { ok: true, replyId: reply.replyId, emailed: reply.emailed || moved.emailed, mergedEmailed: moved.mergedEmailed };
 }
 
 // ─── assignment ──────────────────────────────────────────────

@@ -57,8 +57,8 @@ test("a delivery answered with a redirect isn't followed and counts as failed", 
   await page.locator(".list-row", { hasText: shortId }).getByRole("button", { name: `Actions for ${shortId}` }).click();
   const menu = page.getByRole("menu");
   await menu.getByText("Set status…").click();
-  const inReview = menu.getByRole("button", { name: "In review", exact: true });
-  const next = (await inReview.locator(".dd-tick").count()) ? menu.getByRole("button", { name: "Open", exact: true }) : inReview;
+  const inReview = menu.getByRole("menuitem", { name: "In review", exact: true });
+  const next = (await inReview.locator(".dd-tick").count()) ? menu.getByRole("menuitem", { name: "Open", exact: true }) : inReview;
   await next.click();
 
   await expect.poll(() => endpointHits, { timeout: 15_000 }).toContain("item.status_changed");

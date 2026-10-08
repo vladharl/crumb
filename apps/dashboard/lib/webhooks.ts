@@ -2,7 +2,7 @@ import "server-only";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import net from "node:net";
 import { lookup } from "node:dns/promises";
-import { and, eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, isNull, or, sql, type SQL } from "drizzle-orm";
 import { db, items, webhookDeliveries, webhookEndpoints, workspaces, type WebhookEndpoint } from "@crumb/db";
 import { isCloud } from "./tier";
 import { EVENT_TYPES, isEventType, type EventType } from "./event-catalog";
@@ -337,14 +337,31 @@ export async function sendTestEvent(
 }
 
 // ─── tracker status sync ─────────────────────────────────────
+// The linked items a tracker event is about: those holding the ticket's
+// stable id, plus rows linked before ids were stored (no uid yet) that match
+// `legacy`, the route's old key (or URL) match. A key never matches a row
+// that has an id, so a key that moved on can't pull in the wrong item.
+export function byTicket(uid: string | null | undefined, legacy: SQL): SQL {
+  return uid
+    ? or(eq(items.externalTicketUid, uid), and(isNull(items.externalTicketUid), legacy))!
+    : legacy;
+}
+
 // The Linear/Jira/GitHub status webhooks: set external_status on the items
 // `where` matches (the route's tenant scoping) and emit
 // item.external_status_changed for each one whose status actually moved. When
 // it moved to a done state on a loop that's still open, the team hears it
 // (notifyEngDone): engineering finished, so someone should tell the customer.
+// `ticket` is the ticket as the tracker describes it now. Its uid fills in
+// rows linked before ids were stored; its key and URL replace the stored ones,
+// which a move or rename changes (an https URL only: the thread links to it).
 // ponytail: read-then-update, so two near-simultaneous deliveries for one
 // ticket can report a stale from_status. Fine for a notification.
-export async function syncExternalStatus(where: SQL | undefined, toStatus: string | null): Promise<void> {
+export async function syncExternalStatus(
+  where: SQL | undefined,
+  toStatus: string | null,
+  ticket?: { uid?: string | null; key: string; url?: string | null },
+): Promise<void> {
   const linked = await db
     .select({
       id: items.id,
@@ -364,9 +381,17 @@ export async function syncExternalStatus(where: SQL | undefined, toStatus: strin
     .where(where);
   if (linked.length === 0) return;
 
+  const url = ticket?.url && URL.canParse(ticket.url) && new URL(ticket.url).protocol === "https:" ? ticket.url : null;
   await db
     .update(items)
-    .set({ externalStatus: toStatus, externalSyncedAt: new Date(), updatedAt: new Date() })
+    .set({
+      externalStatus: toStatus,
+      externalSyncedAt: new Date(),
+      updatedAt: new Date(),
+      ...(ticket ? { externalTicketId: ticket.key } : {}),
+      ...(ticket?.uid ? { externalTicketUid: ticket.uid } : {}),
+      ...(url ? { externalTicketUrl: url } : {}),
+    })
     .where(where);
 
   const at = new Date().toISOString();
@@ -377,7 +402,7 @@ export async function syncExternalStatus(where: SQL | undefined, toStatus: strin
       type: "item.external_status_changed",
       workspace: r.slug,
       item: { short_id: r.shortId, title: r.title, type: r.type },
-      ticket: { provider: r.provider ?? "", id: r.ticketId ?? "", url: r.ticketUrl },
+      ticket: { provider: r.provider ?? "", id: ticket?.key ?? r.ticketId ?? "", url: url ?? r.ticketUrl },
       from_status: r.fromStatus,
       to_status: toStatus,
       at,

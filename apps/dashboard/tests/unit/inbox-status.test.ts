@@ -29,6 +29,17 @@ describe("inbox status writes", () => {
       .toEqual({ message: errorMessage("reason_required"), tone: "error" });
   });
 
+  it("names the merged duplicates a bulk move left to the item they were merged into", () => {
+    expect(statusToast({ ok: true, affected: 3, failed: 0, skipped: 1 }, "Shipped"))
+      .toEqual({ message: "3 items moved to Shipped. Skipped 1 merged duplicate. It follows the item it was merged into." });
+    expect(statusToast({ ok: true, affected: 2, failed: 1, firstError: "not_found", skipped: 2 }, "Shipped").message)
+      .toMatch(/Skipped 2 merged duplicates\. They follow the items they were merged into\.$/);
+    expect(statusToast({ ok: true, affected: 0, failed: 0, skipped: 2 }, "Shipped"))
+      .toEqual({ message: "Nothing moved. Merged duplicates follow the item they were merged into." });
+    expect(statusToast({ ok: true, affected: 0, failed: 0, skipped: 1 }, "Shipped", "FB-12"))
+      .toEqual({ message: "FB-12 is merged into another item, so it follows that item's status." });
+  });
+
   it("says plainly who gets emailed, without em or en dashes", () => {
     expect(emailNote(1, true)).toMatch(/^The submitter gets an email/);
     expect(emailNote(4, true)).toMatch(/^Submitters get an email/);

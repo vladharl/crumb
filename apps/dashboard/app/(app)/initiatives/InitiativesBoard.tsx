@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition, type CSSProperties } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card, Switch } from "@crumb/ui";
 import { InitiativeStatusPill } from "./InitiativeChip";
 import { reorderInitiatives, setInitiativePublic } from "./actions";
+import { MOVE_UNDONE, moveEmailsFollowers, movedMessage } from "./useColumnMove";
 import { formatArr } from "@/lib/priority";
 import { sendAfterDelay, STATUS_EMAIL_DELAY_MS } from "@/components/ReplyComposer";
 import { useToast } from "@/components/toast";
@@ -138,9 +140,8 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
       if (h) toast.dismiss(h.toastId);
       save(() => reorderInitiatives(column, orderedIds));
     }, STATUS_EMAIL_DELAY_MS);
-    const label = COLUMNS.find(c => c.key === column)?.label ?? column;
     const toastId = toast.show({
-      message: `Moved to ${label}. Emailing its followers in ${STATUS_EMAIL_DELAY_MS / 1000} seconds.`,
+      message: movedMessage(column),
       duration: STATUS_EMAIL_DELAY_MS,
       action: {
         label: "Undo",
@@ -148,7 +149,7 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
           const h = held.current;
           if (h?.toastId !== toastId || !dropHeld()) return;
           setItems(list => unheld(list, h));
-          toast.show({ message: "Undone. Its followers weren't emailed." });
+          toast.show({ message: MOVE_UNDONE });
         },
       },
     });
@@ -190,11 +191,11 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
     const orderedIds = [...colList.slice(0, index).map(i => i.id), dragged.id, ...colList.slice(index).map(i => i.id)];
     const noop = dragged.column === target && orderedIds.join() === inTarget.map(i => i.id).join();
     // Private and unscheduled cards (and moves within a column) email no one.
-    const emails = dragged.isPublic && dragged.followers > 0 && target !== null && target !== dragged.column;
+    const emails = target !== null && moveEmailsFollowers(dragged, target);
 
     setDragId(null);
     setDropTarget(null);
-    if (undone && !emails) toast.show({ message: "Undone. Its followers weren't emailed." });
+    if (undone && !emails) toast.show({ message: MOVE_UNDONE });
     if (noop) {
       if (undone) setItems(base);
       return;
@@ -218,7 +219,7 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
               {canManage ? (
                 <>
                   Start one with <strong style={{ fontWeight: 600 }}>New initiative</strong> to group related
-                  feedback. Drag it into Now, Next or Later, then switch on Public to put it on your roadmap.
+                  feedback. Move it into Now, Next or Later, then switch on Public to put it on your roadmap.
                 </>
               ) : "Admins and PMs create initiatives here to group related feedback and shape the roadmap."}
             </p>
@@ -226,7 +227,7 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
         </Card>
       )}
       {canManage && items.length > 0 && (
-        <span className="board-drag-hint text-xs muted">Drag cards to schedule and reorder them. Toggle <strong style={{ fontWeight: 600 }}>Public</strong> to show an initiative on the customer roadmap. Moving a public card to another column emails its followers, after a few seconds to undo.</span>
+        <span className="board-drag-hint text-xs muted">Drag cards to schedule and reorder them, or open one to set its column. Toggle <strong style={{ fontWeight: 600 }}>Public</strong> to show an initiative on the customer roadmap. Moving a public card to another column emails its followers, after a few seconds to undo.</span>
       )}
       <div className="board-cols">
         {COLUMNS.map(c => {
@@ -272,14 +273,27 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
                           const before = (e.clientY - rect.top) < rect.height / 2;
                           setDropTarget({ col: c.key, index: idx + (before ? 0 : 1) });
                         }) : undefined}
-                        onClick={() => router.push(`/initiatives/${it.id}`)}
-                        style={{ cursor: canManage ? "grab" : "pointer", opacity: dragId === it.id ? 0.4 : 1 }}
+                        style={{ cursor: canManage ? "grab" : undefined, opacity: dragId === it.id ? 0.4 : 1 }}
                       >
                         <Card
                           className="init-card"
                           style={it.color ? ({ "--init": it.color } as CSSProperties) : undefined}
                         >
-                          <div className="card-body col gap-2" style={{ padding: 12 }}>
+                          {/* A real link, so keyboard and touch open the card. The
+                              link itself isn't draggable, so a pointer drag still
+                              picks up the whole card. */}
+                          <Link
+                            href={`/initiatives/${it.id}`}
+                            draggable={false}
+                            className="col gap-2"
+                            style={{
+                              padding: canManage ? "12px 12px 10px" : 12,
+                              color: "inherit",
+                              textDecoration: "none",
+                              borderRadius: "inherit",
+                              cursor: canManage ? "grab" : undefined,
+                            }}
+                          >
                             <div className="row gap-2 center" style={{ minWidth: 0 }}>
                               <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: it.color ?? "var(--text)", flexShrink: 0 }} />
                               <span className="text-sm truncate" style={{ fontWeight: 500, lineHeight: 1.35, flex: 1 }}>{it.name}</span>
@@ -325,21 +339,23 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
                               <span className="text-xs muted truncate">{it.ownerName ?? "Unassigned"}</span>
                               <span className="text-2xs muted mono">{fmtDate(it.createdAt)}</span>
                             </div>
-                            {canManage && (
-                              <div
-                                className="row gap-2 center"
-                                style={{ marginTop: 2, paddingTop: 8, borderTop: "1px solid var(--line, var(--hair))" }}
-                                onClick={e => e.stopPropagation()}
-                                draggable={false}
-                              >
+                          </Link>
+                          {canManage && (
+                            <div
+                              className="row gap-2 center"
+                              style={{ margin: "0 12px", padding: "8px 0 12px", borderTop: "1px solid var(--line, var(--hair))" }}
+                              draggable={false}
+                            >
+                              {/* The label names the switch for screen readers. */}
+                              <label className="row gap-2 center" style={{ cursor: "pointer" }}>
                                 <Switch on={it.isPublic} onClick={() => togglePublic(it.id)} />
-                                <span className="text-xs muted">{it.isPublic ? "Public" : "Private"}</span>
-                                {it.isPublic && it.followers > 0 && (
-                                  <span className="text-xs muted" style={{ marginLeft: "auto" }}>{it.followers} follower{it.followers === 1 ? "" : "s"}</span>
-                                )}
-                              </div>
-                            )}
-                          </div>
+                                <span className="text-xs muted">Public</span>
+                              </label>
+                              {it.isPublic && it.followers > 0 && (
+                                <span className="text-xs muted" style={{ marginLeft: "auto" }}>{it.followers} follower{it.followers === 1 ? "" : "s"}</span>
+                              )}
+                            </div>
+                          )}
                         </Card>
                       </div>
                       {canManage && isColTarget && dropTarget?.index === idx + 1 && idx === colItems.length - 1 && dragId !== it.id && (

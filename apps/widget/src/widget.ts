@@ -353,6 +353,8 @@ export function friendlyError(code: string, status = 0): string {
     case "missing_title":  return t.errNoTitle;
     case "missing_body":   return t.errNoBody;
     case "empty_file":     return t.errEmptyFile;
+    // Marked as spam: final, so nothing that invites another try.
+    case "submitter_blocked": return t.errBlocked;
   }
   if (code === "rate_limited" || status === 429) return t.errTooMany;
   if (code === "file_too_large" || status === 413) return t.errTooBig;

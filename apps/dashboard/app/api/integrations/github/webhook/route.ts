@@ -5,7 +5,7 @@ import { issueTicketRef, verifyWebhook } from "@/lib/integrations/github";
 import { clearProviderInstall } from "@/lib/integrations/revoke";
 import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
-import { syncExternalStatus } from "@/lib/webhooks";
+import { byTicket, syncExternalStatus } from "@/lib/webhooks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,18 +17,29 @@ export const runtime = "nodejs";
 //
 // Header: `X-Hub-Signature-256: sha256=<hex>`. The `X-GitHub-Event` header
 // names the event type. We filter to `issues` events.
+//
+// An item matches on the issue's node id, which a repository rename or
+// transfer keeps, and takes the issue's current owner/repo#N and URL; an
+// issue transferred to another repository (`transferred`) moves the link to
+// the new issue. Items linked before node ids were stored match on their ref
+// once and get the id then.
+
+type Issue = {
+  number: number;
+  node_id?: string;
+  html_url: string;
+  state: string;
+  // Why it closed: "completed", "not_planned" or "duplicate" (null on older issues).
+  state_reason?: string | null;
+  labels?: Array<{ name: string }>;
+};
 
 type IssuesEvent = {
-  action: string; // "opened" | "closed" | "reopened" | "edited" | ...
-  issue: {
-    number: number;
-    html_url: string;
-    state: string;
-    // Why it closed: "completed", "not_planned" or "duplicate" (null on older issues).
-    state_reason?: string | null;
-    labels?: Array<{ name: string }>;
-  };
+  action: string; // "opened" | "closed" | "reopened" | "edited" | "transferred" | ...
+  issue: Issue;
   repository: { full_name: string };
+  // On `transferred`: the issue as it now is, in its new repository.
+  changes?: { new_issue?: Issue; new_repository?: { full_name: string } };
   installation?: { id: number }; // on every delivery to a GitHub App webhook
 };
 
@@ -79,12 +90,16 @@ export async function POST(req: Request) {
   const installationId = event.installation?.id;
   if (installationId == null) return NextResponse.json({ received: true });
   const ticketRef = issueTicketRef(event.repository.full_name, event.issue.number);
+  const { new_issue: movedTo, new_repository: movedRepo } = event.changes ?? {};
+  const now = event.action === "transferred" && movedTo && movedRepo
+    ? { issue: movedTo, ref: issueTicketRef(movedRepo.full_name, movedTo.number) }
+    : { issue: event.issue, ref: ticketRef };
   // "open" | "closed", or "closed (not planned)" / "closed (duplicate)": an
   // issue closed without doing the work must not read as engineering done.
-  const reason = event.issue.state_reason;
-  const newStatus = event.issue.state === "closed" && reason && reason !== "completed"
+  const reason = now.issue.state_reason;
+  const newStatus = now.issue.state === "closed" && reason && reason !== "completed"
     ? `closed (${reason.replace(/_/g, " ")})`
-    : event.issue.state;
+    : now.issue.state;
 
   try {
     await syncExternalStatus(and(
@@ -93,7 +108,7 @@ export async function POST(req: Request) {
         .from(workspaces)
         .where(eq(workspaces.githubAppInstallId, String(installationId)))),
       eq(items.externalProvider, "github"),
-      or(
+      byTicket(event.issue.node_id, or(
         eq(items.externalTicketId, ticketRef),
         // ponytail: rows linked before refs were repo-qualified hold a bare
         // "#N"; their stored issue URL pins the repo. Drop once none remain.
@@ -101,8 +116,8 @@ export async function POST(req: Request) {
           eq(items.externalTicketId, `#${event.issue.number}`),
           eq(items.externalTicketUrl, event.issue.html_url),
         ),
-      ),
-    ), newStatus);
+      )!),
+    ), newStatus, { uid: now.issue.node_id, key: now.ref, url: now.issue.html_url });
   } catch (err) {
     log.error("github webhook DB update failed", { scope: "crumb/github", ticketRef, err });
     return NextResponse.json({ error: "handler_failed" }, { status: 500 });

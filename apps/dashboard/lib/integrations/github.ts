@@ -227,15 +227,24 @@ async function ghFetch(installationId: string, path: string, init?: RequestInit)
 
 export type GithubRepo = { fullName: string };
 
+// Every repository the installation can reach, 100 (GitHub's maximum) a page.
+// ponytail: stops after 10 pages (1,000 repositories).
 export async function listInstallationRepos(installationId: string): Promise<GithubRepo[]> {
-  const resp = await ghFetch(installationId, "/installation/repositories?per_page=100");
-  if (!resp.ok) throw new Error(`github_list_repos_failed: ${resp.status}`);
-  const data = (await resp.json()) as { repositories: Array<{ full_name: string }> };
-  return data.repositories.map(r => ({ fullName: r.full_name }));
+  const repos: GithubRepo[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const resp = await ghFetch(installationId, `/installation/repositories?per_page=100&page=${page}`);
+    if (!resp.ok) throw new Error(`github_list_repos_failed: ${resp.status}`);
+    const data = (await resp.json()) as { total_count?: number; repositories: Array<{ full_name: string }> };
+    repos.push(...data.repositories.map(r => ({ fullName: r.full_name })));
+    if (data.repositories.length < 100 || repos.length >= (data.total_count ?? Infinity)) break;
+  }
+  return repos;
 }
 
 export type GithubIssueRef = {
   number: number;
+  // GraphQL node id: survives a repository rename or transfer, unlike owner/repo#N.
+  nodeId: string;
   url: string;
   title: string;
   state: string;
@@ -265,9 +274,10 @@ export async function createIssue(
     const text = await resp.text();
     throw new Error(`github_issue_create_failed: ${resp.status} ${text.slice(0, 200)}`);
   }
-  const data = (await resp.json()) as { number: number; html_url: string; title: string; state: string };
+  const data = (await resp.json()) as { number: number; node_id: string; html_url: string; title: string; state: string };
   return {
     number: data.number,
+    nodeId: data.node_id,
     url: data.html_url,
     title: data.title,
     state: data.state,

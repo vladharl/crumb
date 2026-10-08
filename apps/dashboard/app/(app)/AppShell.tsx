@@ -7,7 +7,7 @@ import { BrandMark, Ic } from "@crumb/ui";
 import { ConfirmProvider } from "@/components/confirm";
 import { ToastProvider } from "@/components/toast";
 import { TourProvider, TourLauncher, useTour } from "@/components/tour";
-import { CommandProvider, CommandButton, type CommandItem } from "@/components/CommandPalette";
+import { CommandProvider, CommandButton, type CommandGroup, type CommandItem } from "@/components/CommandPalette";
 import { HelpProvider, HelpButton, useHelp } from "@/components/HelpPanel";
 import { NotificationBell } from "@/components/NotificationBell";
 
@@ -41,6 +41,16 @@ const ASK_LINK: NavLink = {
   match: p => p === "/ask",
 };
 
+// ⌘K actions. `roles` hides what a role can't do: viewers can't compose or
+// create initiatives, and only admins invite. /inbox and /initiatives open
+// their form when they see the param.
+const ACTIONS: CommandItem[] = [
+  { label: "Compose feedback", href: "/inbox?compose=1", keywords: "new create log on behalf customer email call", roles: ["admin", "pm"] },
+  { label: "New initiative", href: "/initiatives?new=1", keywords: "create theme roadmap", roles: ["admin", "pm"] },
+  { label: "Invite a teammate", href: "/settings/team", keywords: "member add user team", roles: ["admin"] },
+  { label: "Install the widget", href: "/settings/install", keywords: "embed snippet script setup" },
+];
+
 // Settings sub-pages surfaced in the ⌘K palette (journey order, matching SettingsNav).
 const SETTINGS_ITEMS: CommandItem[] = [
   { label: "Settings → Overview", href: "/settings", keywords: "workspace setup checklist status" },
@@ -48,8 +58,10 @@ const SETTINGS_ITEMS: CommandItem[] = [
   { label: "Settings → Branding", href: "/settings/branding", keywords: "widget theme" },
   { label: "Settings → Integrations", href: "/settings/integrations", keywords: "slack github jira linear salesforce hubspot" },
   { label: "Settings → Webhooks", href: "/settings/webhooks", keywords: "api events" },
+  { label: "Settings → API keys", href: "/settings/api-keys", keywords: "mcp token claude cursor" },
   { label: "Settings → Team & roles", href: "/settings/team", keywords: "members invite roles" },
   { label: "Settings → Account mapping", href: "/settings/account-mapping", keywords: "crm" },
+  { label: "Settings → Audit log", href: "/settings/audit", keywords: "history activity" },
   { label: "Settings → Notifications", href: "/settings/notifications", keywords: "preferences digest email slack" },
 ];
 
@@ -99,16 +111,16 @@ export function AppShell({ user, showAsk = false, tourDone = true, supportEnable
   const active = tabs.find(n => (n.match ?? (p => p === n.href))(pathname));
   const label = active?.label ?? "";
 
-  const paletteItems: CommandItem[] = [
-    ...tabs.map(n => ({ label: n.label, href: n.href })),
-    ...SETTINGS_ITEMS,
+  const paletteGroups: CommandGroup[] = [
+    { label: "Actions", items: ACTIONS },
+    { label: "Go to", items: [...tabs.map(n => ({ label: n.label, href: n.href })), ...SETTINGS_ITEMS] },
   ];
 
   return (
     <ConfirmProvider>
     <ToastProvider>
     <TourProvider autoStart={!tourDone}>
-    <CommandProvider items={paletteItems}>
+    <CommandProvider groups={paletteGroups}>
     <HelpProvider supportEnabled={supportEnabled} userEmail={user.email}>
     <div className="app">
       <header className="topbar">

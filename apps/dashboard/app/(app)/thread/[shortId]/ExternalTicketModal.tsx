@@ -23,6 +23,8 @@ const RETRYABLE_TARGET_ERRORS = new Set(["targets_timeout", "failed", "provider_
 
 type Failure = { ok: false; error: string };
 
+type Draft = { title: string; body: string; labels: string; reason: string; confidence: number };
+
 // The call's own result, or a failure once `ms` pass (timeoutCode) or if it
 // throws ("failed"), so nothing in the modal waits forever.
 function settle<T>(call: Promise<T>, ms: number, timeoutCode: string): Promise<T | Failure> {
@@ -35,6 +37,9 @@ function settle<T>(call: Promise<T>, ms: number, timeoutCode: string): Promise<T
 }
 
 export type ExternalTicketModalProps = {
+  // Closed, it stays mounted and keeps its state, so reopening finds the
+  // vendor's edits and any AI draft. A created ticket unmounts it.
+  open: boolean;
   itemShortId: string;
   // Providers connected on this workspace. When more than one is connected the
   // modal shows a tracker picker; otherwise the single provider is used.
@@ -47,6 +52,7 @@ export type ExternalTicketModalProps = {
 };
 
 export function ExternalTicketModal({
+  open,
   itemShortId,
   connectedProviders,
   defaultProvider,
@@ -69,12 +75,54 @@ export function ExternalTicketModal({
   const [targetsAttempt, setTargetsAttempt] = useState(0);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [aiPending, setAiPending] = useState(false);
-  const [aiReason, setAiReason] = useState<string | null>(null);
-  const [aiConfidence, setAiConfidence] = useState<number | null>(null);
+  // The latest AI draft. `held` while it waits for the vendor to apply it.
+  const [draft, setDraft] = useState<(Draft & { held: boolean }) | null>(null);
+  // The form holds AI-written text, until a tracker switch resets it.
+  const [aiInForm, setAiInForm] = useState(false);
+  // Any edit since the form was last filled (the item, or an applied draft):
+  // a draft arriving then waits instead of replacing the vendor's writing.
+  const edited = useRef(false);
   // Bumped per draft request and on a tracker switch; only the latest request
   // may fill the form.
   const draftRun = useRef(0);
   const [pending, startTransition] = useTransition();
+  // Whatever opened the dialog (the tile's button), read on first render,
+  // before focus moves to the title; it gets focus back on every close.
+  const [opener] = useState(() => (typeof document === "undefined" ? null : document.activeElement as HTMLElement | null));
+  const titleRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (open) titleRef.current?.focus();
+  }, [open]);
+
+  // Esc, the X, Cancel and the scrim, except while the ticket is being created
+  // (closing then would hide how it went).
+  function close() {
+    if (pending) return;
+    setSubmitError(null);
+    onClose();
+    opener?.focus();
+  }
+
+  // On window, like the confirm dialog: a Dropdown stops its own Escape, so Esc
+  // there closes just the menu.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing || e.defaultPrevented) return;
+      e.preventDefault();
+      close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  function fill(d: Draft) {
+    setTitle(d.title);
+    setBody(d.body);
+    setLabels(d.labels);
+    setAiInForm(true);
+    edited.current = false;
+  }
 
   function suggest() {
     const run = ++draftRun.current;
@@ -83,15 +131,14 @@ export function ExternalTicketModal({
     settle(suggestExternalTicket(itemShortId, provider, target || null), DRAFT_TIMEOUT_MS, "draft_timeout").then(r => {
       if (run !== draftRun.current) return;
       setAiPending(false);
-      if (r.ok) {
-        setTitle(r.title);
-        setBody(r.body);
-        setLabels((r.labels ?? []).join(", "));
-        setAiReason(r.reason);
-        setAiConfidence(r.confidence);
-      } else {
+      if (!r.ok) {
         setSubmitError(humanError(r.error, provider));
+        return;
       }
+      const d = { title: r.title, body: r.body, labels: (r.labels ?? []).join(", "), reason: r.reason, confidence: r.confidence };
+      const held = edited.current;
+      setDraft({ ...d, held });
+      if (!held) fill(d);
     });
   }
 
@@ -104,7 +151,9 @@ export function ExternalTicketModal({
       if (cancelled) return;
       if (r.ok) {
         setTargets(r.targets);
-        setTarget(r.defaultTarget ?? r.targets[0]?.id ?? "");
+        // A default the tracker no longer lists (a deleted team, a repo the
+        // app lost) would sit unseen behind the placeholder: take the first.
+        setTarget(r.targets.find(t => t.id === r.defaultTarget)?.id ?? r.targets[0]?.id ?? "");
       } else {
         setTargetsError(r.error);
       }
@@ -138,13 +187,14 @@ export function ExternalTicketModal({
     });
   }
 
+  if (!open) return null;
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label={`Create ${providerLabel} ticket`}
       className="sheet-scrim"
-      onClick={onClose}
+      onClick={close}
     >
       <div
         className="sheet wide"
@@ -159,14 +209,15 @@ export function ExternalTicketModal({
                 sm
                 icon={<Ic.sparkle style={{ width: 11, height: 11 }} />}
                 onClick={suggest}
-                disabled={aiPending || pending}
+                disabled={aiPending || pending || targetsLoading}
               >
                 {aiPending ? "Drafting…" : "Suggest with AI"}
               </Btn>
             )}
             <button
               aria-label="Close"
-              onClick={onClose}
+              onClick={close}
+              disabled={pending}
               style={{ background: "none", border: 0, padding: 4, cursor: "pointer", color: "var(--mute)" }}
             >
               <Ic.x style={{ width: 14, height: 14 }} />
@@ -174,26 +225,58 @@ export function ExternalTicketModal({
           </div>
         </div>
 
-        {aiReason && (
-          <div
-            className="text-xs"
-            style={{
-              background: "var(--surface-2)",
-              border: "1px solid var(--line, var(--hair))",
-              borderRadius: "var(--r-sm)",
-              padding: "8px 10px",
-              marginBottom: 12,
-              color: "var(--mute)",
-              lineHeight: 1.55,
-            }}
-          >
-            <span className="row gap-2 center" style={{ marginBottom: 2 }}>
-              <Ic.sparkle style={{ width: 10, height: 10 }} />
-              <span className="fw-med">AI draft{aiConfidence !== null ? ` · ${Math.round(aiConfidence * 100)}% confidence` : ""}</span>
-            </span>
-            {aiReason}
-          </div>
-        )}
+        {/* A draft arrives after a wait: announce it, without moving focus. */}
+        <div aria-live="polite">
+          {draft && (
+            <div
+              className="text-xs"
+              style={{
+                background: "var(--surface-2)",
+                border: "1px solid var(--line, var(--hair))",
+                borderRadius: "var(--r-sm)",
+                padding: "8px 10px",
+                marginBottom: 12,
+                color: "var(--mute)",
+                lineHeight: 1.55,
+              }}
+            >
+              <span className="row gap-2 center" style={{ marginBottom: 2 }}>
+                <Ic.sparkle style={{ width: 10, height: 10 }} />
+                <span className="fw-med">AI draft · {Math.round(draft.confidence * 100)}% confidence</span>
+              </span>
+              {draft.reason}
+              {draft.held && (
+                <div className="col gap-2" style={{ marginTop: 8 }}>
+                  <span style={{ color: "var(--ink)" }}>
+                    You edited the ticket, so the draft didn&apos;t replace your text. Using it replaces the title, description and labels.
+                  </span>
+                  <div
+                    style={{
+                      background: "var(--surface)",
+                      border: "1px solid var(--line, var(--hair))",
+                      borderRadius: "var(--r-sm)",
+                      padding: "8px 10px",
+                      maxHeight: 160,
+                      overflow: "auto",
+                      whiteSpace: "pre-wrap",
+                      color: "var(--ink)",
+                    }}
+                  >
+                    <span className="fw-med">{draft.title}</span>
+                    {`\n\n${draft.body}`}
+                    {draft.labels && `\n\nLabels: ${draft.labels}`}
+                  </div>
+                  <div className="row gap-2">
+                    <Btn sm variant="primary" onClick={() => { fill(draft); setDraft({ ...draft, held: false }); }}>
+                      Use the draft
+                    </Btn>
+                    <Btn sm onClick={() => setDraft(null)}>Keep my text</Btn>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="col gap-3">
           {connectedProviders.length > 1 && (
@@ -209,15 +292,16 @@ export function ExternalTicketModal({
                   // ignore one still on its way. Its text goes too: a Linear or
                   // Jira draft ends with the customer's name and ARR, which must
                   // not ride along into a GitHub issue (repos can be public).
-                  if (aiReason !== null) {
+                  if (aiInForm) {
                     setTitle(initialTitle);
                     setBody(initialBody);
                     setLabels("");
+                    setAiInForm(false);
+                    edited.current = false;
                   }
                   draftRun.current++;
                   setAiPending(false);
-                  setAiReason(null);
-                  setAiConfidence(null);
+                  setDraft(null);
                 }}
                 disabled={pending}
                 buttonStyle={{ width: "100%" }}
@@ -229,9 +313,10 @@ export function ExternalTicketModal({
           <div className="col gap-1">
             <label className="eyebrow" htmlFor="ext-title">Title</label>
             <input
+              ref={titleRef}
               id="ext-title"
               value={title}
-              onChange={e => setTitle(e.target.value)}
+              onChange={e => { edited.current = true; setTitle(e.target.value); }}
               maxLength={240}
               style={inputStyle}
             />
@@ -242,11 +327,11 @@ export function ExternalTicketModal({
             <textarea
               id="ext-body"
               value={body}
-              onChange={e => setBody(e.target.value)}
+              onChange={e => { edited.current = true; setBody(e.target.value); }}
               rows={8}
               style={{ ...inputStyle, resize: "vertical", lineHeight: 1.55 }}
             />
-            {aiReason && provider !== "github" && (
+            {aiInForm && provider !== "github" && (
               <span className="text-xs muted">The draft ends with the customer&apos;s name and ARR. Remove that if people outside your team can read {providerLabel}.</span>
             )}
           </div>
@@ -256,7 +341,7 @@ export function ExternalTicketModal({
             <input
               id="ext-labels"
               value={labels}
-              onChange={e => setLabels(e.target.value)}
+              onChange={e => { edited.current = true; setLabels(e.target.value); }}
               placeholder="Comma separated"
               style={inputStyle}
             />
@@ -296,7 +381,7 @@ export function ExternalTicketModal({
           )}
 
           <div className="row gap-2" style={{ justifyContent: "flex-end" }}>
-            <Btn onClick={onClose} disabled={pending}>Cancel</Btn>
+            <Btn onClick={close} disabled={pending}>Cancel</Btn>
             <Btn
               variant="primary"
               icon={<Ic.send style={{ width: 12, height: 12 }} />}
