@@ -37,9 +37,12 @@ export async function GET(req: Request) {
 
   // The first real widget load marks the widget installed. One UPDATE, only
   // while the stamp is unset (the IS NULL guard makes racing first pings a
-  // no-op); the Install page's Try-it preview signs in as the test account
-  // and doesn't count. Best-effort: a failed stamp retries on the next load.
-  if (!workspace.widgetFirstPingAt && account.name !== TEST_CUSTOMER_ACCOUNT) {
+  // no-op); the Install page's Try-it preview doesn't count. It signs in as
+  // the test account, with a reserved .invalid address (mintTestToken) that
+  // still tells it apart once account mapping renames that account.
+  // Best-effort: a failed stamp retries on the next load.
+  const preview = account.name === TEST_CUSTOMER_ACCOUNT || /\.invalid$/i.test(user.email);
+  if (!workspace.widgetFirstPingAt && !preview) {
     await db
       .update(workspaces)
       .set({ widgetFirstPingAt: new Date() })

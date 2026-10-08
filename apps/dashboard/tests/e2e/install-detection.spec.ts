@@ -14,7 +14,7 @@ const TEST_CUSTOMER_ACCOUNT = "Test customer (you)"; // settings/install/test-cu
 const installed = () => psql(`SELECT widget_first_ping_at IS NOT NULL FROM workspaces WHERE slug = '${SLUG}'`);
 
 test.afterAll(() => {
-  // setup.ts marks southbeam installed; leave it so for later specs, even if
+  // The seed marks southbeam installed; leave it so for later specs, even if
   // this one failed midway. The preview ping's test account goes too.
   psql(
     `UPDATE workspaces SET widget_first_ping_at = coalesce(widget_first_ping_at, now()) WHERE slug = '${SLUG}';

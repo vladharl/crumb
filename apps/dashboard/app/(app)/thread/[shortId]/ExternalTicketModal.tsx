@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Dropdown, Ic } from "@crumb/ui";
 import { Dialog } from "@/components/Dialog";
+import { DRAFT_TIMEOUT_MS, settle } from "@/components/ReplyComposer";
 import { errorMessage } from "@/lib/action-error";
 import { createExternalTicket, listProviderTargets, suggestExternalTicket } from "./actions";
 
@@ -15,27 +16,14 @@ const PROVIDER_LABEL: Record<Provider, string> = {
   github: "GitHub",
 };
 
-// How long the modal waits before it stops spinning and says so. A tracker
-// lists its teams in a second or two; the model can need a minute or more
-// when it's waking up (the server gives it two).
+// How long the modal waits on a tracker's targets before it stops spinning and
+// says so: they list in a second or two. (An AI draft gets DRAFT_TIMEOUT_MS.)
 const TARGETS_TIMEOUT_MS = 20_000;
-const DRAFT_TIMEOUT_MS = 90_000;
 const RETRYABLE_TARGET_ERRORS = new Set(["targets_timeout", "failed", "provider_list_failed"]);
 
 type Failure = { ok: false; error: string };
 
 type Draft = { title: string; body: string; labels: string; reason: string; confidence: number };
-
-// The call's own result, or a failure once `ms` pass (timeoutCode) or if it
-// throws ("failed"), so nothing in the modal waits forever.
-function settle<T>(call: Promise<T>, ms: number, timeoutCode: string): Promise<T | Failure> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<Failure>(resolve => {
-    timer = setTimeout(() => resolve({ ok: false, error: timeoutCode }), ms);
-  });
-  return Promise.race([call.catch((): Failure => ({ ok: false, error: "failed" })), timeout])
-    .finally(() => clearTimeout(timer));
-}
 
 export type ExternalTicketModalProps = {
   // Closed, it stays mounted and keeps its state, so reopening finds the
@@ -49,6 +37,11 @@ export type ExternalTicketModalProps = {
   initialTitle: string;
   initialBody: string;
   aiAvailable: boolean;
+  // On a Cloud plan without AI: the upgrade notice (UpgradeNotice, rendered
+  // on the server), which a locked "Suggest with AI" opens.
+  aiUpgrade?: ReactNode;
+  // A ticket was created and linked (just before onClose).
+  onCreated?: () => void;
   onClose: () => void;
 };
 
@@ -60,6 +53,8 @@ export function ExternalTicketModal({
   initialTitle,
   initialBody,
   aiAvailable,
+  aiUpgrade,
+  onCreated,
   onClose,
 }: ExternalTicketModalProps) {
   const router = useRouter();
@@ -87,6 +82,7 @@ export function ExternalTicketModal({
   // may fill the form.
   const draftRun = useRef(0);
   const [pending, startTransition] = useTransition();
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   // Esc, the X, Cancel and the scrim, except while the ticket is being created
   // (closing then would hide how it went). Dialog puts focus back on whatever
@@ -160,6 +156,7 @@ export function ExternalTicketModal({
         labels: labels.split(",").map(l => l.trim()).filter(Boolean),
       }).catch((): Failure => ({ ok: false, error: "failed" }));
       if (r.ok) {
+        onCreated?.();
         onClose();
         router.refresh();
       } else {
@@ -174,7 +171,7 @@ export function ExternalTicketModal({
       <div className="row between center" style={{ marginBottom: 12 }}>
         <h3 className="serif" style={{ margin: 0, fontSize: 18 }}>Create {providerLabel} ticket</h3>
         <div className="row gap-2 center">
-          {aiAvailable && (
+          {aiAvailable ? (
             <Btn
               sm
               icon={<Ic.sparkle style={{ width: 11, height: 11 }} />}
@@ -183,7 +180,17 @@ export function ExternalTicketModal({
             >
               {aiPending ? "Drafting…" : "Suggest with AI"}
             </Btn>
-          )}
+          ) : aiUpgrade ? (
+            // Shown locked, not hidden, where the plan leaves AI out.
+            <Btn
+              sm
+              icon={<Ic.lock style={{ width: 11, height: 11 }} />}
+              aria-expanded={upgradeOpen}
+              onClick={() => setUpgradeOpen(o => !o)}
+            >
+              Suggest with AI
+            </Btn>
+          ) : null}
           <button
             aria-label="Close"
             onClick={close}
@@ -194,6 +201,7 @@ export function ExternalTicketModal({
           </button>
         </div>
       </div>
+      {!aiAvailable && upgradeOpen && <div style={{ marginBottom: 12 }}>{aiUpgrade}</div>}
 
       {/* A draft arrives after a wait: announce it, without moving focus. */}
       <div aria-live="polite">
@@ -385,7 +393,7 @@ function humanError(code: string, provider: Provider): string {
     case "not_entitled":           return "Your plan doesn't include AI drafts.";
     case "draft_failed":           return "The AI didn't return a usable draft. Try again, or write the ticket yourself.";
     case "draft_timeout":          return "The AI took too long to answer. Try again, or write the ticket yourself.";
-    case "ai_cap_reached":         return "You've reached this month's AI usage limit. It resets on the 1st.";
+    // ai_cap_reached reads as everywhere else (errorMessage).
     case "linear_revoked":
     case "jira_revoked":
     case "github_revoked":         return "That integration was disconnected. Reconnect it in Settings → Integrations.";

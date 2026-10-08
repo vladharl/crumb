@@ -239,7 +239,9 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
     return { ok: false, error: "provider_create_failed" };
   }
 
-  await db
+  // Only while still unlinked: two creates racing past the check above (two
+  // teammates, two tabs) both made a ticket, and the first link stands.
+  const linked = await db
     .update(items)
     .set({
       externalProvider:  input.provider,
@@ -252,7 +254,14 @@ export async function createExternalTicket(input: CreateExternalTicketInput): Pr
       externalSyncedAt:  null,
       updatedAt:         new Date(),
     })
-    .where(eq(items.id, row.id));
+    .where(and(eq(items.id, row.id), isNull(items.externalTicketId)))
+    .returning({ id: items.id });
+  if (linked.length === 0) {
+    log.warn(`${input.provider} ticket created for an item linked meanwhile; it stays in the tracker unlinked`, {
+      scope: `crumb/${input.provider}`, item: row.shortId, ticket: ticket.url,
+    });
+    return { ok: false, error: "already_linked" };
+  }
 
   void emitEvent(workspace.id, {
     type: "ticket.linked",

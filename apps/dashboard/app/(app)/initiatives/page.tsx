@@ -3,7 +3,7 @@ import { PageHead } from "@crumb/ui";
 import { getActiveSession } from "@/lib/server";
 import { NewInitiativeForm } from "./NewInitiativeForm";
 import { InitiativesBoardTile } from "./InitiativesBoardTile";
-import { InitiativesTableSkeleton } from "./InitiativesTableSkeleton";
+import { InitiativesBoardSkeleton } from "./InitiativesBoard";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Initiatives" };
@@ -23,7 +23,7 @@ export default async function InitiativesListPage() {
         lede="Group feedback into themed buckets, then move them across Now, Next and Later, and into Shipped, to shape the roadmap. Public ones show in the widget once they're scheduled or shipped."
         actions={canManage ? <NewInitiativeForm /> : null}
       />
-      <Suspense fallback={<InitiativesTableSkeleton />}>
+      <Suspense fallback={<InitiativesBoardSkeleton />}>
         <InitiativesBoardTile />
       </Suspense>
     </>

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, gt, gte, isNull, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "./client";
-import { pendingSignups, type PendingSignup } from "./schema";
+import { pendingSignups } from "./schema";
 
 // Default validity for a self-serve signup verification link. Short, like a
 // magic link — the visitor is expected to click it right after signing up.
@@ -31,26 +31,6 @@ export async function createPendingSignup(input: PendingSignupInput): Promise<st
     expiresAt: new Date(Date.now() + (input.ttlMs ?? DEFAULT_TTL_MS)),
   });
   return token;
-}
-
-// Resolve a token to its row iff it exists, is unconsumed, and unexpired.
-export async function findValidPendingSignup(token: string): Promise<PendingSignup | null> {
-  if (!token) return null;
-  const [row] = await db
-    .select()
-    .from(pendingSignups)
-    .where(and(
-      eq(pendingSignups.token, token),
-      isNull(pendingSignups.consumedAt),
-      gt(pendingSignups.expiresAt, new Date()),
-    ))
-    .limit(1);
-  return row ?? null;
-}
-
-// Burn a token so its link can't be reused.
-export async function consumePendingSignup(id: string): Promise<void> {
-  await db.update(pendingSignups).set({ consumedAt: new Date() }).where(eq(pendingSignups.id, id));
 }
 
 // Count signup attempts (consumed or not) since `since`, keyed by EITHER email

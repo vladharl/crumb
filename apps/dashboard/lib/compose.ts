@@ -111,7 +111,9 @@ export async function composeItem(input: {
       title,
       body,
       source: input.source,
-      sourceUrl: input.sourceUrl,
+      // Copied from a provider's API (a Gong call, a capture's raw meta), and
+      // shown as a link: only an http(s) one is kept.
+      sourceUrl: input.sourceUrl && /^https?:\/\//i.test(input.sourceUrl) ? input.sourceUrl : null,
       announce: input.announce,
       triage: input.triage,
       actorWorkspaceUserId: input.actorWorkspaceUserId,

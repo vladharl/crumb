@@ -28,11 +28,11 @@ async function loadRequesters(workspaceId: string, accountId: string) {
     .limit(5);
 }
 
-async function loadStatusMix(accountId: string) {
+async function loadStatusMix(workspaceId: string, accountId: string) {
   const rows = await db
     .select({ status: items.status, count: sql<number>`COUNT(*)::int` })
     .from(items)
-    .where(and(eq(items.accountId, accountId), notMergedSql(items.mergedIntoId)))
+    .where(and(eq(items.workspaceId, workspaceId), eq(items.accountId, accountId), notMergedSql(items.mergedIntoId)))
     .groupBy(items.status);
   return statusMix(rows);
 }
@@ -41,7 +41,7 @@ export async function AccountSidebarTile({ accountId }: { accountId: string }) {
   const { workspace, user } = await getActiveSession();
   const [requesters, stats] = await Promise.all([
     loadRequesters(workspace.id, accountId),
-    loadStatusMix(accountId),
+    loadStatusMix(workspace.id, accountId),
   ]);
 
   return (

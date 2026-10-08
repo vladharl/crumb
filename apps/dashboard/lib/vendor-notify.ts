@@ -9,6 +9,7 @@ import { vendorFooter, type DigestLine, type DigestSection } from "./email/templ
 import { escapeSlackText, resolveSlackUserId, sendDirectMessage } from "./slack/notify";
 import { openNullable } from "./crypto-at-rest";
 import { clearProviderInstall, isSlackRevokedError } from "./integrations/revoke";
+import { integrationsAllowed } from "./entitlements";
 import { originFromHeaders } from "./origin";
 import { checkRateLimitAsync } from "./rate-limit";
 import { lastTurnSideSql, loopOpenSql, notMergedSql } from "./loop-sql";
@@ -70,14 +71,21 @@ export async function nudge(opts: {
 }): Promise<void> {
   try {
     const [ws] = await db
-      .select({ name: workspaces.name, slackBotToken: workspaces.slackBotToken })
+      .select({
+        name: workspaces.name,
+        slackBotToken: workspaces.slackBotToken,
+        planId: workspaces.planId,
+        subscriptionStatus: workspaces.subscriptionStatus,
+      })
       .from(workspaces)
       .where(eq(workspaces.id, opts.workspaceId))
       .limit(1);
     if (!ws) return;
     // A token that won't decrypt (a rotated key) means no Slack, not no nudge.
+    // Neither does a plan without integrations (a Cloud downgrade keeps the
+    // install, and /crumb refuses): those alerts go by email.
     let botToken: string | null = null;
-    try { botToken = openNullable(ws.slackBotToken); } catch { botToken = null; }
+    try { botToken = integrationsAllowed(ws) ? openNullable(ws.slackBotToken) : null; } catch { botToken = null; }
 
     for (const pool of opts.pools) {
       const members = await db

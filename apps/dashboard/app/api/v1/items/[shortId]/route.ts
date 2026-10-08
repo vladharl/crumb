@@ -8,6 +8,7 @@ import { createReplySchema, parseJsonBody } from "@/lib/validation";
 import { emitEvent } from "@/lib/webhooks";
 import { log } from "@/lib/log";
 import { signedAttachmentPath } from "@/lib/attachments/signed-url";
+import { customerStatusSql, mergedSql } from "@/lib/customer-status";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,15 +32,17 @@ export async function GET(req: Request, { params }: { params: { shortId: string 
   });
   if (!r.ok) return fail(r.status, r.error);
 
-  const [item] = await db
-    .select()
+  // A request merged into another reads like that one (lib/customer-status).
+  const [row] = await db
+    .select({ item: items, shown: customerStatusSql(), merged: mergedSql() })
     .from(items)
     .where(and(
       eq(items.workspaceId, r.ctx.workspace.id),
       eq(items.shortId, params.shortId),
     ))
     .limit(1);
-  if (!item) return fail(404, "item_not_found");
+  if (!row) return fail(404, "item_not_found");
+  const { item, shown, merged } = row;
   if (item.submitterId !== r.ctx.user.id) return fail(403, "not_your_item");
 
   // pull non-internal messages, joined to author tables
@@ -104,7 +107,8 @@ export async function GET(req: Request, { params }: { params: { shortId: string 
     id: e.id,
     from_status: e.fromStatus,
     to_status: e.toStatus,
-    reason: e.reason,
+    // The merge note names the other request ("Merged into FB-12").
+    reason: merged && e.toStatus === "duplicate" ? null : e.reason,
     at: e.at,
     by_name: e.byName,
   }));
@@ -121,12 +125,14 @@ export async function GET(req: Request, { params }: { params: { shortId: string 
     ...mappedEvents,
   ];
 
-  // The current status's reason (why it was declined / set aside / merged) and
-  // when, lifted out of the timeline so the widget can show them without the
-  // expanded rail. Only when the latest event IS the current status: a status
-  // written without an event (capture-time merges) must not borrow an older one.
+  // The current status's reason (why it was declined / set aside / marked a
+  // duplicate) and when, lifted out of the timeline so the widget can show them
+  // without the expanded rail. Only when the latest event IS the current
+  // status: a status written without an event (capture-time merges) must not
+  // borrow an older one. Merged: the status is the other request's, so its own
+  // merge is neither the why nor the when.
   const latest = timeline[timeline.length - 1]!;
-  const current = latest.to_status === item.status ? latest : null;
+  const current = !merged && latest.to_status === item.status ? latest : null;
 
   // Attachment links are signed + short-lived: the widget opens them in a new
   // tab, which can't send the JWT, and the customer's email stays out of URLs.
@@ -137,7 +143,8 @@ export async function GET(req: Request, { params }: { params: { shortId: string 
       short_id: item.shortId,
       title: item.title,
       type: item.type,
-      status: item.status,
+      status: shown,
+      merged,
       created_at: item.createdAt,
       updated_at: item.updatedAt,
       status_reason: current?.reason ?? null,

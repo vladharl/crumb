@@ -23,7 +23,7 @@ test("settings overview shows the setup checklist with derived states", async ({
     await expect(page.getByText(label, { exact: true })).toBeVisible();
   }
 
-  // Seed facts: the widget has pinged (setup.ts stamps it) and 4 teammates are
+  // Seed facts: the widget has pinged (the seed stamps it) and 4 teammates are
   // seeded → both done. The e2e env has no email provider and no integrations
   // → at least those two todo.
   const checklist = page.locator(".card", { hasText: "Setup" }).first();
@@ -40,7 +40,9 @@ test("settings overview shows the setup checklist with derived states", async ({
     await expect(page.locator(".eyebrow", { hasText: group }).first()).toBeVisible();
   }
 
-  // Checklist rows link onward.
+  // Checklist rows link onward: Invite opens the team page's invite form,
+  // then drops the ?invite=1 that asked for it.
   await checklist.locator("a", { hasText: "Invite your team" }).click();
+  await expect(page.getByPlaceholder("teammate@yourcompany.com")).toBeVisible();
   await expect(page).toHaveURL(/\/settings\/team$/);
 });

@@ -70,7 +70,7 @@ export function ThreadSuggestionCard({
             aria-hidden
             style={{ width: 10, height: 10, borderRadius: "50%", background: dot, flexShrink: 0 }}
           />
-          <span className="serif text-md truncate">{suggestion.initiativeName}</span>
+          <span className="fw-med text-md truncate">{suggestion.initiativeName}</span>
           <span className="text-xs muted mono" style={{ marginLeft: "auto" }}>{pct}%</span>
         </Link>
 

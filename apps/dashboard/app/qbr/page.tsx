@@ -7,6 +7,7 @@ import { accountRiskSignals, atRiskAccounts, atRiskArrCents } from "@/lib/insigh
 import { loopOpenSql } from "@/lib/loop-sql";
 import { formatArr } from "@/lib/priority";
 import { formatDate } from "@/lib/timefmt";
+import { qbrActivity } from "./activity";
 import { PrintButton } from "./PrintButton";
 
 export const dynamic = "force-dynamic";
@@ -32,18 +33,12 @@ export default async function QbrPage() {
   const ws = workspace.id;
   const aiEntitled = hasFeature(workspace, "ai");
 
-  const [portfolio, activity, closeRows, themeRows, topRows, signals] = await Promise.all([
+  const [portfolio, act, closeRows, themeRows, topRows, signals] = await Promise.all([
     db.execute(sql`
       select coalesce(sum(arr_cents),0)::bigint as total_arr, count(*)::int as accounts
       from accounts where workspace_id = ${ws}::uuid
     `),
-    db.execute(sql`
-      select
-        count(*) filter (where created_at >= now() - interval '90 days')::int as new_90,
-        count(*) filter (where status = 'shipped' and updated_at >= now() - interval '90 days')::int as shipped_90,
-        count(*) filter (where ${loopOpenSql(sql`status`)})::int as open_now
-      from items where workspace_id = ${ws}::uuid and merged_into_id is null
-    `),
+    qbrActivity(ws),
     db.execute(sql`
       select coalesce(avg(extract(epoch from (se.at - i.created_at))),0)::float as avg_seconds, count(*)::int as closed
       from items i join (
@@ -71,7 +66,6 @@ export default async function QbrPage() {
   ]);
 
   const pf = (portfolio as unknown as Array<{ total_arr: number | string; accounts: number }>)[0] ?? { total_arr: 0, accounts: 0 };
-  const act = (activity as unknown as Array<{ new_90: number; shipped_90: number; open_now: number }>)[0] ?? { new_90: 0, shipped_90: 0, open_now: 0 };
   const close = (closeRows as unknown as Array<{ avg_seconds: number; closed: number }>)[0] ?? { avg_seconds: 0, closed: 0 };
   const themes = themeRows as unknown as Array<{ name: string; n: number }>;
   const top = topRows as unknown as Array<{ id: string; name: string; arr_cents: number | string; total: number | string; open: number | string; shipped: number | string }>;

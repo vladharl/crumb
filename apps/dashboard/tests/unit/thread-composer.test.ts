@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { NotifyPlan } from "@/lib/notify/customer-plan";
 
-// The thread's composer keys, AI draft insert, reply-and-close copy and merge
-// confirm. Pure helpers only; the server actions never load.
+// The thread's composer keys, AI draft insert and timeout, reply-and-close
+// copy, merge confirm and who the Trail credits. Pure helpers only; the server
+// actions never load.
 vi.mock("@/app/(app)/thread/[shortId]/actions", () => ({}));
+vi.mock("@/app/(app)/initiatives/actions", () => ({}));
+vi.mock("@/app/(app)/items/delete-actions", () => ({}));
 
-import { closeConfirmBody, isSendShortcut, replySentMessage, withAiDraft } from "@/components/ReplyComposer";
+import { closeConfirmBody, isSendShortcut, replySentMessage, settle, withAiDraft } from "@/components/ReplyComposer";
 import { mergeConfirmBody, unmergedMessage } from "@/app/(app)/thread/[shortId]/MergePanel";
+import { trailActor } from "@/app/(app)/thread/[shortId]/ThreadView";
 
 const emails: NotifyPlan = { willEmail: true };
 const source: NotifyPlan = { willEmail: false, reason: "source" };
@@ -85,5 +89,33 @@ describe("merge confirm spells out the direction", () => {
       closeConfirmBody("declined", "Maya", { replies: emails, status: emails }, null, 2), replySentMessage(true, "Maya", "shipped", 1),
     ];
     for (const s of copy) expect(s).not.toMatch(/[—–]/);
+  });
+});
+
+describe("an AI draft never waits forever", () => {
+  it("gives the call's result, a timeout failure once the wait is up, or failed on a throw", async () => {
+    expect(await settle(Promise.resolve({ ok: true, draft: "Hi" }), 1000, "draft_timeout")).toEqual({ ok: true, draft: "Hi" });
+    expect(await settle(Promise.reject(new Error("down")), 1000, "draft_timeout")).toEqual({ ok: false, error: "failed" });
+    vi.useFakeTimers();
+    try {
+      const slow = settle(new Promise(() => {}), 90_000, "draft_timeout");
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(await slow).toEqual({ ok: false, error: "draft_timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the Trail credits the customer for their own moves", () => {
+  const opened = { byName: null, fromStatus: null, toStatus: "open" };
+
+  it("names the submitter for a widget or legacy submission and their own close, System otherwise", () => {
+    expect(trailActor(opened, "Maya", "widget")).toBe("Maya");
+    expect(trailActor(opened, "Maya", null)).toBe("Maya");
+    expect(trailActor({ byName: null, fromStatus: "planned", toStatus: "resolved" }, "Maya", "zendesk")).toBe("Maya");
+    expect(trailActor(opened, "Maya", "zendesk")).toBe("System"); // Autopilot pulled it in
+    expect(trailActor({ byName: null, fromStatus: "progress", toStatus: "shipped" }, "Maya", "widget")).toBe("System");
+    expect(trailActor({ ...opened, byName: "Lina Rivers" }, "Maya", "widget")).toBe("Lina Rivers");
   });
 });

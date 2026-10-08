@@ -85,16 +85,6 @@ export async function getReplyContext(
     .limit(1);
   if (!head) return { ok: false, error: "not_found" };
 
-  // Author maps for resolving each reply's display name (vendor or customer).
-  const [wsAuthor, acctAuthor] = await Promise.all([
-    db.select({ id: workspaceUsers.id, name: workspaceUsers.name, initials: workspaceUsers.initials })
-      .from(workspaceUsers).where(eq(workspaceUsers.workspaceId, workspace.id)),
-    db.select({ id: accountUsers.id, name: accountUsers.name, initials: accountUsers.initials })
-      .from(accountUsers).where(eq(accountUsers.workspaceId, workspace.id)),
-  ]);
-  const wsById = Object.fromEntries(wsAuthor.map(u => [u.id, u]));
-  const acctById = Object.fromEntries(acctAuthor.map(u => [u.id, u]));
-
   // Last N of each side, newest-first then flipped to chronological so the
   // drawer reads top-to-bottom like the thread without shipping all history.
   const lastReplies = (internal: boolean) =>
@@ -103,21 +93,36 @@ export async function getReplyContext(
       .orderBy(desc(replies.createdAt))
       .limit(PER_TAB)
       .then(rows => rows.reverse());
-  const [customerRows, internalRows, reach] = await Promise.all([
+  // Teammates name the vendor replies and fill the composer's @-mentions.
+  const [wsAuthor, customerRows, internalRows, reach] = await Promise.all([
+    db.select({ id: workspaceUsers.id, name: workspaceUsers.name, initials: workspaceUsers.initials })
+      .from(workspaceUsers).where(eq(workspaceUsers.workspaceId, workspace.id)),
     lastReplies(false), lastReplies(true), mergedReach(workspace.id, head.id),
   ]);
 
-  const replyIds = [...customerRows, ...internalRows].map(r => r.id);
-  const attRows = replyIds.length === 0 ? [] : await db
-    .select({
-      id: attachments.id,
-      replyId: attachments.replyId,
-      filename: attachments.filename,
-      contentType: attachments.contentType,
-      sizeBytes: attachments.sizeBytes,
-    })
-    .from(attachments)
-    .where(and(inArray(attachments.replyId, replyIds), isNotNull(attachments.replyId)));
+  // Customers: only the ones these replies cite, as the thread does, not
+  // every account user in the workspace. Attachments load alongside.
+  const shown = [...customerRows, ...internalRows];
+  const replyIds = shown.map(r => r.id);
+  const citedIds = [...new Set(shown.flatMap(r => (r.accountUserId ? [r.accountUserId] : [])))];
+  const [acctAuthor, attRows] = await Promise.all([
+    citedIds.length === 0 ? [] : db
+      .select({ id: accountUsers.id, name: accountUsers.name, initials: accountUsers.initials })
+      .from(accountUsers)
+      .where(and(eq(accountUsers.workspaceId, workspace.id), inArray(accountUsers.id, citedIds))),
+    replyIds.length === 0 ? [] : db
+      .select({
+        id: attachments.id,
+        replyId: attachments.replyId,
+        filename: attachments.filename,
+        contentType: attachments.contentType,
+        sizeBytes: attachments.sizeBytes,
+      })
+      .from(attachments)
+      .where(and(inArray(attachments.replyId, replyIds), isNotNull(attachments.replyId))),
+  ]);
+  const wsById = Object.fromEntries(wsAuthor.map(u => [u.id, u]));
+  const acctById = Object.fromEntries(acctAuthor.map(u => [u.id, u]));
   const attByReply = new Map<string, typeof attRows>();
   for (const a of attRows) {
     if (!a.replyId) continue;

@@ -63,8 +63,9 @@ export async function AccountHeroTile({ accountId }: { accountId: string }) {
           </div>
           <div className="row gap-6" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
             {[
-              [String(stats.open),     "Open"],
-              [String(stats.progress), "In progress"],
+              // statusMix buckets: two statuses each, named as the account sidebar names them.
+              [String(stats.open),     "Open / In review"],
+              [String(stats.progress), "Planned / In progress"],
               [String(stats.shipped),  STATUS_LABELS.shipped],
               [String(stats.declined), STATUS_LABELS.declined],
               [String(stats.deferred), STATUS_LABELS.deferred],

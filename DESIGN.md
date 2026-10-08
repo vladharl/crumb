@@ -4,7 +4,7 @@ description: The feedback loop for product teams — warm, attentive, quietly co
 colors:
   ember: "#E27D3A"
   ember-soft: "#FCE9D6"
-  ember-deep: "#B45F23"
+  ember-deep: "#9C4C17"
   brown: "#4A2E1F"
   brown-2: "#6A4528"
   cream: "#FBF7F0"
@@ -14,8 +14,10 @@ colors:
   warm-gray: "#8A8278"
   green: "#6B8E5A"
   green-soft: "#E8EFE0"
+  green-deep: "#506A43"
   amber: "#D4A24C"
   amber-soft: "#F8EFD5"
+  amber-deep: "#7F5C1F"
   rust: "#B3573A"
   rust-soft: "#F3DBCE"
   rust-deep: "#8A3A3A"
@@ -80,14 +82,6 @@ components:
   button-primary-hover:
     backgroundColor: "{colors.brown-2}"
     textColor: "{colors.cream}"
-  button-accent:
-    backgroundColor: "{colors.ember}"
-    textColor: "#FFFFFF"
-    rounded: "{rounded.sm}"
-    padding: "8px 14px"
-  button-accent-hover:
-    backgroundColor: "{colors.ember-deep}"
-    textColor: "#FFFFFF"
   button-ghost:
     backgroundColor: "transparent"
     textColor: "{colors.brown}"
@@ -134,30 +128,34 @@ It explicitly rejects the generic-SaaS default (cold blue/gray, gradient hero-me
 A deliberately two-tone palette — cream and toasted brown — with ember as the single trail color and a small, warm semantic set for status. Everything tilts warm; nothing is allowed to go cold.
 
 ### Primary
-- **Ember** (`#E27D3A`): The trail. The one true accent. Reserved for the active path — primary/positive actions, the current selection, in-progress status, focus rings, the brand mark and loaders. Its scarcity is the point.
+- **Ember** (`#E27D3A`): The trail. The one true accent. Reserved for the active path: primary/positive actions, the current selection, in-progress status, focus rings, the brand mark and loaders. Its scarcity is the point. A fill, dot and bar color only: on cream it's 2.7:1, too light for text.
 - **Ember Soft** (`#FCE9D6`): Tinted wash behind a selected nav item, selected list row, and the focus-ring glow. The quiet half of the accent.
-- **Ember Deep** (`#B45F23`): The accessible ember — used for ember-on-cream *text* (links, "create" affordances, footer links) where the bright ember would be too light, and for the accent button's hover.
+- **Ember Deep** (`#9C4C17`): Ember's text color, 5.7:1 on cream: links, "create" affordances, mentions, accent pills. Also the fill behind small white text (the notification badge, where white on ember is 2.9:1) and the keyboard focus ring (`--focus-ring`). The old `#B45F23` (4.3:1) passes AA for large text only, so don't bring it back.
 
 ### Secondary
 - **Toasted Brown** (`#4A2E1F`): Primary ink. All headings and body text, the ink button fill, and — via opacity steps — every border and muted tone in the app. This is the workhorse color.
 - **Brown 2** (`#6A4528`): Slightly lifted brown for secondary text (nav items, amber-status text) and the ink button's hover.
-- **Brown opacities** (`rgba(74,46,31,·)` at .06/.10/.15/.30/.50/.65): the structural backbone — `.10` and `.15` are the hairline borders, `.06` is the hover wash, `.65` is muted body text. The palette stays two-tone because the "grays" are just transparent brown.
+- **Brown opacities** (`rgba(74,46,31,·)` at .06/.10/.15/.30/.50/.65): the structural backbone. `.10` and `.15` are the hairline borders, `.06` is the hover wash, `.30` to `.65` fill the brown bars and chart marks (ARR, usage, Insights). The palette stays two-tone because the "grays" are just transparent brown.
+- **Muted brown** (`--mute`, `rgba(74,46,31,.74)`): secondary copy and placeholders. At 74% it still clears 4.5:1 on cream, so ledes, previews and "Showing X of Y" stay readable.
 
 ### Tertiary (status semantics)
-- **Green** (`#6B8E5A`) / **Green Soft** (`#E8EFE0`): Shipped. The loop closed well.
-- **Amber** (`#D4A24C`) / **Amber Soft** (`#F8EFD5`): Set aside / deferred.
+- **Green** (`#6B8E5A`) / **Green Soft** (`#E8EFE0`) / **Green Deep** (`#506A43`): Shipped. The loop closed well. Green Deep is green text, 5.6:1 on cream.
+- **Amber** (`#D4A24C`) / **Amber Soft** (`#F8EFD5`) / **Amber Deep** (`#7F5C1F`): Set aside / deferred. Amber Deep is amber text (risk labels, a wait of 3 days or more), 5.7:1 on cream.
 - **Rust** (`#B3573A`) / **Rust Soft** (`#F3DBCE`): Won't ship. Also the parent of all error states.
-- **Rust Deep** (`#8A3A3A`): Inline error text and the danger button — error derives from rust so the palette never reaches for a cold, generic red.
+- **Rust Deep** (`#8A3A3A`): Rust and error text (7.2:1 on cream) and the danger button. Error derives from rust so the palette never reaches for a cold, generic red.
 
 ### Neutral
 - **Cream** (`#FBF7F0`): The body and top-bar background — the paper itself.
 - **Cream Soft** (`#FDFAF4`): The slightly brighter surface for cards, inputs, popovers, the ⌘K palette — what sits *on* the paper.
 - **Cream 2** (`#F4EEE2`): The recessed tone — avatars, skeleton base, deeper layering.
-- **Oat Deep** (`#1A1815`): Near-black brown, used only for the inverted code block and the mobile scrim.
-- **Warm Gray** (`#8A8278`): The single true gray — tertiary text and placeholders only, never load-bearing.
+- **Oat Deep** (`#1A1815`): Near-black brown for the inverted surfaces, the code block and toasts. At 45% it's the scrim.
+- **Scrim** (`--scrim`, `rgba(26,24,21,.45)`): oat-deep at 45%, the one backdrop behind every modal, sheet, the ⌘K palette, the help panel and the mobile nav. Never black.
+- **Warm Gray** (`#8A8278`, `--mute-2`): The single true gray, decorative and tertiary only: nav section labels, key hints, chevrons, close icons, neutral dots. Never placeholders, and never text someone must read to act.
 
 ### Named Rules
 **The One-Trail Rule.** Ember is the trail, not a theme color. It marks the active path and nothing else — primary action, current selection, in-progress, focus. Keep it under ~10% of any screen; if two embers compete, one is decoration and must go.
+
+**The Deep-Text Rule.** Each hue's base (ember, green, amber, rust) is for fills, dots and bars only. Text in a hue uses its -deep step (`--ember-deep`, `--green-deep`, `--amber-deep`, `--rust-deep`), each at least 4.5:1 on cream, cream-2, the hover and selected washes and its own -soft wash. On cream the bases fall short: ember 2.7:1, green 3.5:1, amber 2.2:1.
 
 **The Two-Tone Rule.** The palette is cream + toasted brown. "Grays" are transparent brown, not neutral grays. Status colors (green/amber/rust) are warm and muted. Errors derive from rust, never a stock red. Never introduce a cold blue, a true gray, or a second saturated hue.
 
@@ -180,7 +178,7 @@ A deliberately two-tone palette — cream and toasted brown — with ember as th
 ### Named Rules
 **The Display-For-Moments Rule.** General Sans is for headings, the wordmark, and numbers that deserve weight. Inter carries every label, input, table cell, and paragraph of working text. A display font inside a data row or a control label is always wrong.
 
-**The Brown-Ink Rule.** Body text is full `--text` (toasted brown) at ≥4.5:1. Muted brown (`--mute`) is for secondary/supporting copy; warm-gray (`--mute-2`) is for placeholders and tertiary hints only. Never demote load-bearing body copy to a muted tone for "elegance."
+**The Brown-Ink Rule.** Body text is full `--text` (toasted brown) at ≥4.5:1. Muted brown (`--mute`, brown at 74%, still ≥4.5:1) is for secondary copy and placeholders; warm-gray (`--mute-2`) is decorative only, never a placeholder or anything someone must read to act. Never demote load-bearing body copy to a muted tone for "elegance."
 
 ## 4. Elevation
 
@@ -201,7 +199,7 @@ Lead with the feel, then the spec. Every interactive component carries default /
 - **Shape:** Soft 4px corners (`--r-sm`); compact by default (8px 14px), with `.sm` (5px 10px) and `.lg` (11px 20px) sizes and a 30px square `.icon-only`.
 - **Outline (default `.btn`):** Transparent fill, 1px brown border, brown text; on hover it *inverts* to brown fill + cream text. The everyday button.
 - **Primary (`.btn.primary`):** Toasted-brown ink fill, cream text; hover lifts to brown-2.
-- **Accent (`.btn.accent`):** Ember fill, white text; hover deepens to ember-deep. Reserved for the single primary/forward action — submit, send, the loop-closing move.
+- **No ember button:** white on ember is 2.9:1, under AA, so there is no ember-filled button. The forward action (submit, send, the loop-closing move) is the brown primary.
 - **Ghost (`.btn.ghost`):** No border, muted text, hover wash (`--hover`) — for low-emphasis and icon actions.
 - **Danger (`.btn.danger`):** Rust-deep fill, cream text — destructive only.
 
@@ -219,9 +217,9 @@ Lead with the feel, then the spec. Every interactive component carries default /
 
 ### Inputs / Fields
 - **Style:** Cream-soft fill, hairline border, 4px corners, 9px/12px padding, 13px Inter.
-- **Focus:** Border shifts to ember and a 3px ember-soft glow appears (`box-shadow: 0 0 0 3px var(--accent-soft)`) — the same focus signature on inputs, dropdown triggers, and the switch.
+- **Focus:** One ring for every control, from the global `:focus-visible` rule: a 2px `--focus-ring` outline (ember-deep, 4.6:1 or more on every light surface, where bright ember's 2.7:1 misses the 3:1 a focus indicator needs) inside a 3px ember-soft glow. No component turns it off. A box that wraps a bare input (the inbox and help search) wears it for the input, and segmented controls and the bell list draw it inside.
 - **Field:** Stacked `field-label` (uppercase 10px) + control + optional `field-help`. Errors derive from rust (`--err-text` / `--err-bg` / `--err-border`).
-- **Controls share the focus vocabulary:** the `switch` (30×16 pill, ember when on), the `seg` segmented control (ink-filled selected tab), and the searchable `Dropdown` (cream-soft trigger, soft-shadow menu, ember tick on the selected option).
+- **Controls share the focus vocabulary:** the `switch` (30×16 pill, ember-deep when on, so the track and its white knob clear 3:1; its focus ring sits 2px out so it doesn't merge with that track), the `seg` segmented control (ink-filled selected tab), and the searchable `Dropdown` (cream-soft trigger, soft-shadow menu, ember tick on the selected option).
 
 ### Navigation
 - **Top bar:** 52px sticky, cream, hairline base. Wordmark in General Sans 600 + the trail-of-dots `BrandMark`, an italic workspace name, inline tabs, a ⌘K trigger, notification bell, and avatar menu. Selected tab gets an ember-soft wash.
@@ -241,9 +239,13 @@ Lead with the feel, then the spec. Every interactive component carries default /
 - **Do** build structure from hairline borders (brown 10–15%) and tonal steps (cream → cream-soft → cream-2) before reaching for anything heavier.
 - **Do** keep surfaces flat on the paper; use the `soft` shadow only on things that float (menus, popovers, ⌘K, modals) — The Flat-On-Paper Rule.
 - **Do** keep status pills transparent and tone them with dot + border + text, so the fill never fights the paper texture.
-- **Do** set body in full toasted-brown at ≥4.5:1; reserve muted brown and warm-gray for secondary and placeholder text.
+- **Do** set body in full toasted-brown at ≥4.5:1; reserve muted brown (`--mute`) for secondary and placeholder text, and warm-gray for decoration.
+- **Do** set text in a hue with its -deep step; the base hues are fills, dots and bars only (The Deep-Text Rule).
 - **Do** pair status color with a label and give the trail an `aria-label` — color is never the only signal.
 - **Do** give every animation a `prefers-reduced-motion` fallback (the shimmer and trail already degrade to static).
+- **Do** write dates with `lib/timefmt`: "7 Oct" this year, "7 Oct 2025" otherwise, "May 2024" for a month. Never "May 24" or "6/12/24".
+- **Do** keep one vocabulary: "request" and "feedback", "Set aside" for a parked initiative or a deferred request, "Unassigned", "ARR at stake", and "ARR not set" when an account has no ARR (`formatArr`'s zero state).
+- **Do** turn error codes into sentences (`lib/action-error.ts`).
 
 ### Don't:
 - **Don't** ship the generic-SaaS look: cold blue/gray neutrals, gradient hero-metric cards, or identical icon + heading + text card grids.
@@ -254,3 +256,5 @@ Lead with the feel, then the spec. Every interactive component carries default /
 - **Don't** reach for a stock red on errors; derive them from rust (`--rust-deep`) so the palette stays warm.
 - **Don't** put the General Sans display face into data rows, control labels, or table cells (The Display-For-Moments Rule).
 - **Don't** use a `border-left`/`border-right` color stripe on cards or rows; the active marker is a short ember bar with a tinted wash, applied deliberately on nav and selected list rows only.
+- **Don't** put an em-dash in anything people read: the UI, emails, Slack and Teams text, help, toasts or AI output. Rephrase with a period, comma, colon or parentheses, and never swap in an en-dash or a hyphen. Code comments and the lone "—" that marks an empty table value are fine.
+- **Don't** show raw error codes or env var names to people who can't act on them. Env var names appear only to self-host admins, who can set them.

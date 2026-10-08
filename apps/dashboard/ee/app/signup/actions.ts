@@ -7,7 +7,7 @@ import { originFromHeaders } from "@/lib/origin";
 import { ensureUniqueSlug } from "@/lib/provision";
 import { verifyTurnstile } from "@/lib/turnstile";
 import { sendSignupVerify } from "@/lib/email";
-import { callerIpFromHeaders, checkRateLimitAsync } from "@/lib/rate-limit";
+import { callerIpFromHeaders, checkRateLimitAsync, clientIpFromHeaders } from "@/lib/rate-limit";
 import { log } from "@/lib/log";
 import { billingParams, findOpenPendingSignup } from "./pending";
 
@@ -55,7 +55,8 @@ export async function startSignup(formData: FormData): Promise<SignupResult> {
   const caller = callerIpFromHeaders(h);
   const ip = caller === "anon" ? null : caller;
 
-  if (!(await verifyTurnstile(turnstile, ip))) {
+  // Turnstile checks the visitor's own address, not the cap's /64 key.
+  if (!(await verifyTurnstile(turnstile, clientIpFromHeaders(h)))) {
     return { ok: false, error: "Couldn't verify you're human. Please try again." };
   }
 

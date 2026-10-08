@@ -193,7 +193,8 @@ export async function AccountsTableTile() {
                           title={`Sentiment ${risk!.avgSentiment?.toFixed(2) ?? "—"}${risk!.sentimentTrend != null ? ` · trend ${risk!.sentimentTrend > 0 ? "+" : ""}${risk!.sentimentTrend.toFixed(2)}` : ""}`}
                           style={{ color: risk!.riskLevel === "high" ? "var(--rust-deep)" : "var(--amber-deep)", flexShrink: 0 }}
                         >
-                          ↓ at-risk
+                          {/* The level is in the words, not only the colour. */}
+                          <span aria-hidden>↓</span> {risk!.riskLevel === "high" ? "high risk" : "at risk"}
                         </span>
                       )}
                     </span>

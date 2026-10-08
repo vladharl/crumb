@@ -205,8 +205,9 @@ async function repeatsFanOut(row: ItemRow, status: string, message: string | nul
 // `emailed` is true only when a real provider accepted the customer email (the
 // same fact the loop ledger records); `mergedEmailed` counts the customers
 // whose requests were merged into this one who got theirs. The customer is
-// emailed only for outcomes (statusEmailsCustomer); every change still writes
-// status_events and fires webhooks + chat cards. `opts` is internal:
+// emailed, and their account channels carded, only for outcomes
+// (statusEmailsCustomer); every change still writes status_events and fires
+// webhooks and the team's chat card. `opts` is internal:
 // reply-and-close can suppress this core's email or put a message in it in
 // place of the reason, and the changelog passes `alreadyTold`, the (lowercased)
 // addresses its announcement reached, so none of them gets a second email.
@@ -254,7 +255,8 @@ export async function updateItemStatus(
     at: new Date().toISOString(),
   });
 
-  // Chat cards: vendor Teams firehose + the customer's account channel.
+  // Chat cards: the vendor's Teams firehose hears every move; the customer's
+  // own account channels hear the same statuses their email does, never triage.
   void notifyWorkspaceChannel(workspace.id, {
     kind: "status_change",
     shortId: input.itemShortId,
@@ -264,15 +266,17 @@ export async function updateItemStatus(
     reason,
     url: origin ? `${origin}/thread/${input.itemShortId}` : null,
   });
-  void notifyAccountChannels(row.accountId, {
-    kind: "status_change",
-    shortId: input.itemShortId,
-    title: row.title,
-    fromStatus,
-    toStatus: input.status,
-    reason,
-    url: workspace.productUrl ?? null,
-  }, "status");
+  if (statusEmailsCustomer(input.status)) {
+    void notifyAccountChannels(row.accountId, {
+      kind: "status_change",
+      shortId: input.itemShortId,
+      title: row.title,
+      fromStatus,
+      toStatus: input.status,
+      reason,
+      url: workspace.productUrl ?? null,
+    }, "status");
+  }
 
   // Email the customer; never let a flaky provider undo a status write. Who
   // may be emailed (widget-origin, has an address, not muted) is the shared
@@ -532,12 +536,15 @@ export async function assignItemTo(
 
   const where = and(eq(items.workspaceId, workspace.id), eq(items.shortId, input.itemShortId));
   const [before] = await db.select({ assigneeId: items.assigneeId }).from(items).where(where).limit(1);
+  if (!before) return { ok: false, error: "not_found" };
+  // Nothing changed: no write, no item.assigned, no alert, whoever called.
+  if (before.assigneeId === input.assigneeId) return { ok: true };
   const [row] = await db
     .update(items)
     .set({ assigneeId: input.assigneeId, updatedAt: new Date() })
     .where(where)
     .returning({ id: items.id, title: items.title, type: items.type });
-  if (!before || !row) return { ok: false, error: "not_found" };
+  if (!row) return { ok: false, error: "not_found" };
 
   void emitEvent(workspace.id, {
     type: "item.assigned",
@@ -547,8 +554,8 @@ export async function assignItemTo(
     at: new Date().toISOString(),
   });
 
-  // Tell the new assignee, unless nothing changed or they took it themselves.
-  if (opts.notify !== false && input.assigneeId && input.assigneeId !== before.assigneeId && input.assigneeId !== actor.actorWorkspaceUserId) {
+  // Tell the new assignee, unless they took it themselves.
+  if (opts.notify !== false && input.assigneeId && input.assigneeId !== actor.actorWorkspaceUserId) {
     void notifyAssigned({
       workspaceId: workspace.id,
       itemId: row.id,
@@ -567,12 +574,13 @@ export async function assignItemTo(
 // status changes through updateItemStatus. Same plan and ledger as any status
 // email. True only when a real provider accepted it. Only an open canonical
 // will move again, so only its notice promises news; a closed one says how it
-// ended.
+// ended. Never "an earlier request": a vendor can merge an older one into a
+// newer one.
 export function mergeNoticeText(canonicalStatus: string | null): string {
-  const earlier = "We've combined this with an earlier request for the same thing.";
-  if (canonicalStatus === "shipped") return `${earlier} It's already live.`;
-  if (canonicalStatus === "declined") return `${earlier} We've decided not to take it on.`;
-  if (CLOSED_STATUSES.has(canonicalStatus ?? "")) return earlier;
+  const combined = "We've combined this with another request for the same thing.";
+  if (canonicalStatus === "shipped") return `${combined} It's already live.`;
+  if (canonicalStatus === "declined") return `${combined} We've decided not to take it on.`;
+  if (CLOSED_STATUSES.has(canonicalStatus ?? "")) return combined;
   return "We've combined this with a request we're already tracking. You'll hear from us here when it moves.";
 }
 

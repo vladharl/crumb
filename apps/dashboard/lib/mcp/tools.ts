@@ -10,6 +10,8 @@ import {
 } from "@/lib/items/mutations";
 import { composeItem, COMPOSE_ALLOWED_TYPES } from "@/lib/compose";
 import { MCP_SOURCE } from "@/lib/feedback/source";
+import { likeContains } from "@/lib/like";
+import { shippedAtSql } from "@/lib/roadmap";
 
 // MCP tool registry. Each tool is a JSON-RPC-callable function exposed to a
 // connected AI client (Claude/Cursor) over the /api/mcp endpoint. Read tools
@@ -52,11 +54,6 @@ function fail(msg: string): never {
 function unwrap<T extends { ok: true } | { ok: false; error: string }>(r: T): Extract<T, { ok: true }> {
   if (!r.ok) fail(r.error);
   return r as Extract<T, { ok: true }>;
-}
-
-// ILIKE reads % and _ as wildcards and \ as its escape: match them literally.
-export function likeContains(q: string): string {
-  return `%${q.replace(/[\\%_]/g, "\\$&")}%`;
 }
 
 // Keyset pages for the capped list tools. `next_cursor` names the last row
@@ -259,7 +256,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "list_roadmap",
-    description: "List the workspace's roadmap initiatives grouped by column (now / next / later) plus any unscheduled ones. Returns name, status, description, and visibility.",
+    description: "List the workspace's roadmap initiatives as the board shows them: the now / next / later columns in board order, shipped ones (newest first, whichever column they were in), and unscheduled ones. Returns name, status, description, visibility, and shipped_at for shipped ones.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     async handler(_args, ctx) {
       const rows = await db
@@ -270,12 +267,19 @@ export const TOOLS: ToolDef[] = [
           status: initiatives.status,
           column: initiatives.roadmapColumn,
           is_public: initiatives.isPublic,
+          shipped_at: shippedAtSql(),
         })
         .from(initiatives)
         .where(eq(initiatives.workspaceId, ctx.workspaceId))
-        .orderBy(asc(initiatives.roadmapOrder));
-      const group = (col: string) => rows.filter(r => r.column === col);
-      return { now: group("now"), next: group("next"), later: group("later"), unscheduled: rows.filter(r => !r.column) };
+        .orderBy(asc(initiatives.roadmapOrder), asc(initiatives.shortId));
+      // Shipped is a status, not a column (lib/roadmap): a shipped initiative
+      // is in Shipped whatever its column, as on the board.
+      const live = rows.filter(r => r.status !== "shipped");
+      const group = (col: string) => live.filter(r => r.column === col);
+      const shipped = rows
+        .filter(r => r.status === "shipped")
+        .sort((a, b) => (b.shipped_at?.getTime() ?? 0) - (a.shipped_at?.getTime() ?? 0));
+      return { now: group("now"), next: group("next"), later: group("later"), shipped, unscheduled: live.filter(r => !r.column) };
     },
   },
   {
@@ -320,7 +324,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "update_item_status",
     description:
-      "Change a feedback item's status. Allowed: open, review, planned, progress, shipped, declined, deferred, duplicate. A reason is required for declined/deferred/duplicate. Fires webhooks just like the dashboard. Only planned, progress, shipped, declined (won't ship) and deferred (set aside) email the submitter, and only when they can be emailed: they submitted through the widget, have an address, haven't opted out, and the workspace has email delivery set up. `emailed` in the result says whether that email actually went out.",
+      "Change a feedback item's status. Allowed: open, review, planned, progress, shipped, declined, deferred, duplicate. A reason is required for declined/deferred/duplicate. Fires webhooks just like the dashboard. Only planned, progress, shipped, declined (won't ship) and deferred (set aside) email the submitter, and only when they can be emailed: they submitted through the widget, have an address, haven't opted out, and the workspace has email delivery set up. Customers whose requests were merged into this item get that status email too, on the same terms but without the reason. `emailed` in the result says whether the submitter's email actually went out, and `merged_emailed` how many of those other customers were emailed.",
     inputSchema: {
       type: "object",
       properties: {
@@ -340,7 +344,7 @@ export const TOOLS: ToolDef[] = [
         reason: str(args.reason) ?? undefined,
         origin: ctx.origin,
       }));
-      return { ok: true, short_id: shortId, status, emailed: r.emailed };
+      return { ok: true, short_id: shortId, status, emailed: r.emailed, merged_emailed: r.mergedEmailed };
     },
   },
   {

@@ -139,8 +139,8 @@ async function listUsers(slug?: string): Promise<void> {
   if (!wss.length) { console.log(slug ? `(no workspace "${slug}")` : "(no workspaces yet)"); return; }
   for (const ws of wss) {
     const users = await db.select().from(workspaceUsers).where(eq(workspaceUsers.workspaceId, ws.id));
-    console.log(`\n${ws.name} (${ws.slug}) — ${users.length} user(s):`);
-    for (const u of users) console.log(`  • ${u.email}  —  ${u.name}  [${u.role}]`);
+    console.log(`\n${ws.name} (${ws.slug}), ${users.length} user(s):`);
+    for (const u of users) console.log(`  • ${u.email}  ${u.name}  [${u.role}]`);
   }
   console.log("");
 }

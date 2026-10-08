@@ -1,5 +1,5 @@
 import { PageHead, SkeletonPill } from "@crumb/ui";
-import { InitiativesTableSkeleton } from "./InitiativesTableSkeleton";
+import { InitiativesBoardSkeleton } from "./InitiativesBoard";
 
 export default function Loading() {
   return (
@@ -11,7 +11,7 @@ export default function Loading() {
         lede="Group feedback into themed buckets, then move them across Now, Next and Later, and into Shipped, to shape the roadmap. Public ones show in the widget once they're scheduled or shipped."
         actions={<SkeletonPill width={110} />}
       />
-      <InitiativesTableSkeleton />
+      <InitiativesBoardSkeleton />
     </>
   );
 }

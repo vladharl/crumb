@@ -7,13 +7,29 @@ import { useConfirm } from "@/components/confirm";
 import { useToast } from "@/components/toast";
 import { errorMessage } from "@/lib/action-error";
 import { createItemFromCapture, dismissCapture, restoreCapture } from "../captures/actions";
-import type { CaptureRow, AccountOption } from "../captures/CapturesList";
+
+export type AccountOption = { id: string; name: string };
+export type CaptureRow = {
+  id: string;
+  source: string;
+  fromEmail: string | null;
+  fromName: string | null;
+  subject: string | null;
+  body: string;
+  suggestedAccountId: string | null;
+  suggestedAccountName: string | null;
+  suggestedConfidence: number | null;
+  createdAtIso: string;
+};
 
 const TYPES = [
   { value: "question", label: "Question" },
   { value: "bug", label: "Bug" },
   { value: "idea", label: "Idea" },
 ];
+
+// The address check composeItem makes (lib/compose.ts).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Pending captures (forwarded email / Slack / extension) surfaced at the top of
@@ -50,6 +66,12 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
   // that just duplicated the preview shown below and read like a bug. With no
   // subject the field starts empty and the placeholder asks for a short title.
   const [title, setTitle] = useState(capture.subject?.trim() ?? "");
+  // No usable sender address (a Gong call, a Freshdesk ticket, a forward that
+  // carried only a name): ask for one. Left blank, createItemFromCapture files
+  // it under a placeholder address that is never emailed. Whatever unusable
+  // value came in still shows in the header above.
+  const askEmail = !EMAIL_RE.test(capture.fromEmail?.trim() ?? "");
+  const [email, setEmail] = useState(askEmail ? "" : capture.fromEmail ?? "");
 
   const noAccount = !accountName.trim();
 
@@ -66,7 +88,7 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
       const r = await createItemFromCapture({
         captureId: capture.id,
         accountName,
-        submitterEmail: capture.fromEmail ?? "",
+        submitterEmail: email,
         submitterName: capture.fromName ?? undefined,
         type,
         title,
@@ -151,6 +173,19 @@ function CaptureRowInline({ capture, accounts, canWrite }: { capture: CaptureRow
                 </span>
               )}
             </div>
+            {askEmail && (
+              <input
+                className="input"
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="Customer email (optional)"
+                aria-label="Customer email"
+                autoComplete="off"
+                disabled={pending}
+                style={{ flex: "0 1 220px", minWidth: 160 }}
+              />
+            )}
             <Dropdown
               ariaLabel="Type"
               size="sm"

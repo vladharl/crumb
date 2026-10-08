@@ -3,8 +3,8 @@ import { IS_CLOUD_EDITION } from "./fixtures";
 
 // Self-serve signup surface (Cloud-only; stripped on community builds).
 // SAFE OPS ONLY — like the rest of the hosted suite, these never create a
-// workspace: the page GET is read-only, and the verify check uses a bogus token
-// that fails validation BEFORE any insert (findValidPendingSignup → redirect).
+// workspace: the page GET is read-only, and the verify check is a GET, which
+// only forwards to /signup?token=… (only the Create button's POST provisions).
 //
 // On community the /signup route is stripped at build time (404). On cloud it
 // exists: the page either renders (tier=cloud) or redirects to /onboard

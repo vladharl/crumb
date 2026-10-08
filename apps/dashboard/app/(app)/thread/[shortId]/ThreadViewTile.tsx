@@ -9,11 +9,12 @@ import { replyConfigured } from "@/lib/ai/reply";
 import { replaySummaryConfigured } from "@/lib/ai/replay-summary";
 import { getReplayForItem } from "@/lib/replay/read";
 import { parseUserAgent } from "@/lib/replay/ua";
-import { hasFeature, usageAnalyticsAllowed } from "@/lib/entitlements";
+import { hasFeature, integrationsAllowed, usageAnalyticsAllowed } from "@/lib/entitlements";
 import { eventsBefore } from "@/lib/usage/signals";
 import { emailConfigured } from "@/lib/email";
 import { customerNotifyPlan } from "@/lib/notify/customer-plan";
 import { mergedReach } from "@/lib/items/mutations";
+import { UpgradeNotice } from "@/components/UpgradeNotice";
 import { ThreadView, type ThreadData } from "./ThreadView";
 
 // Combined ARR + follower count over a merge group {canonical} ∪ {its
@@ -461,6 +462,9 @@ async function loadThread(workspace: WorkspaceForThread, shortId: string, canMan
       linearInstalledAt: workspace.linearInstalledAt ? workspace.linearInstalledAt.toISOString() : null,
       jiraInstalledAt:   workspace.jiraInstalledAt   ? workspace.jiraInstalledAt.toISOString()   : null,
       githubInstalledAt: workspace.githubInstalledAt ? workspace.githubInstalledAt.toISOString() : null,
+      // A downgrade keeps trackers connected; the tile then says the plan is
+      // why it can't create tickets.
+      integrationsAllowed: integrationsAllowed(workspace),
     },
     aiTicketAvailable: ticketSuggestionConfigured() && hasFeature(workspace, "ai"),
     aiReplyAvailable: replyConfigured() && hasFeature(workspace, "ai"),
@@ -504,5 +508,19 @@ export async function ThreadViewTile({ shortId }: { shortId: string }) {
   }
   if (!data) notFound();
   const canWrite = user.role === "admin" || user.role === "pm";
-  return <ThreadView data={data} canWrite={canWrite} isAdmin={user.role === "admin"} />;
+  const isAdmin = user.role === "admin";
+  // AI drafting set up (Cloud) but not in this plan: the drafts show locked
+  // with the upgrade notice. Self-host has no plan to sell, so nothing shows.
+  // Reply and ticket drafts each gate on their own setup.
+  const aiOff = !hasFeature(workspace, "ai");
+  const upgrade = <UpgradeNotice feature="ai" isAdmin={isAdmin} />;
+  return (
+    <ThreadView
+      data={data}
+      canWrite={canWrite}
+      isAdmin={isAdmin}
+      aiUpgrade={replyConfigured() && aiOff ? upgrade : null}
+      ticketAiUpgrade={ticketSuggestionConfigured() && aiOff ? upgrade : null}
+    />
+  );
 }

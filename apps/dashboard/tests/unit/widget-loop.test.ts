@@ -75,6 +75,26 @@ describe("status reason", () => {
     expect(w.statusReason(item({ status: "resolved", status_reason: "All set, thanks" }))).toBe("");
     expect(w.statusReason(item({ status: "shipped", status_reason: null }))).toBe("");
   });
+
+  it("says only that a merged request was combined, never the reasons it now follows", () => {
+    expect(w.statusReason(item({ status: "shipped", merged: true, status_reason: "Shipped for Globex" }))).toBe("Combined with a matching request.");
+  });
+});
+
+describe("file links", () => {
+  it("count as expired a little before their signature does, so the new tab never 403s", () => {
+    const now = Date.UTC(2026, 9, 8, 12);
+    const link = (exp: number) => `https://crumb.test/api/v1/uploads/a1?exp=${exp}&sig=abc`;
+    const sec = now / 1000;
+    expect(w.linkExpired(link(sec + 3600), now)).toBe(false);
+    expect(w.linkExpired(link(sec + 31), now)).toBe(false);
+    expect(w.linkExpired(link(sec + 30), now)).toBe(true);
+    expect(w.linkExpired(link(sec - 1), now)).toBe(true);
+    // Not a signed link: not ours to judge.
+    for (const href of ["https://crumb.test/api/v1/uploads/a1", "https://crumb.test/x?exp=soon", "not a url"]) {
+      expect(w.linkExpired(href, now), href).toBe(false);
+    }
+  });
 });
 
 describe("page URLs (submissions, crumb.track and the recorder)", () => {

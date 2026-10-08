@@ -1,6 +1,5 @@
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
-import { statusLabel } from "@crumb/ui";
 import type { EmailProvider, OutgoingEmail, SendResult } from "./email/provider";
 import { stdoutProvider } from "./email/stdout";
 import { makeResendProvider } from "./email/resend";
@@ -10,7 +9,7 @@ import {
   renderSignupVerifyHtml, renderSignupVerifyText,
   renderInviteHtml, renderInviteText,
   renderReplyNotificationHtml, renderReplyNotificationText,
-  renderStatusChangeHtml, renderStatusChangeText,
+  renderStatusChangeHtml, renderStatusChangeText, statusHeadline,
   renderCustomerReplyNotificationHtml, renderCustomerReplyNotificationText,
   renderMentionHtml, renderMentionText,
   renderDunningHtml, renderDunningText,
@@ -196,7 +195,10 @@ function customerFrom(workspaceName: string, from: string): string {
   return `"${name}" <${senderAddress(from)}>`;
 }
 
-// One-click unsubscribe (RFC 8058) on the footer's own per-customer link.
+// One-click unsubscribe (RFC 8058) on the footer's per-customer link, minus its
+// scope: the mail app's Unsubscribe tells the customer this sender stops, so it
+// mutes every kind (the route's default), while the footer link mutes just the
+// one this email is.
 // Threading: every email about one item (or initiative) points at one root id
 // derived from the workspace and the item, while its own Message-ID stays
 // unique (Gmail drops a repeated Message-ID as a duplicate).
@@ -219,10 +221,17 @@ function customerHeaders(
     References: root,
   };
   if (unsubscribeUrl) {
-    headers["List-Unsubscribe"] = `<${unsubscribeUrl}>`;
+    headers["List-Unsubscribe"] = `<${unscoped(unsubscribeUrl)}>`;
     headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
   }
   return headers;
+}
+
+function unscoped(url: string): string {
+  const u = URL.canParse(url) ? new URL(url) : null;
+  if (!u?.searchParams.has("scope")) return url;
+  u.searchParams.delete("scope");
+  return u.toString();
 }
 
 export type MagicLink = {
@@ -372,7 +381,7 @@ export async function sendStatusChangeNotification(m: StatusChangeNotification):
     to: m.to,
     from: customerFrom(m.workspaceName, m.inboundReplyAddress ? from : noreplyFrom(from)),
     ...(m.inboundReplyAddress ? { replyTo: m.inboundReplyAddress } : {}),
-    subject: `${statusLabel(m.toStatus)}: ${m.itemTitle}`,
+    subject: statusHeadline(m.toStatus, m.itemTitle),
     html: renderStatusChangeHtml(vars),
     text: renderStatusChangeText(vars),
     headers: customerHeaders(from, m.workspaceName, `item:${m.itemShortId}`, m.unsubscribeUrl),

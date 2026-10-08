@@ -2,6 +2,7 @@ import "server-only";
 import { createSign, createHmac, timingSafeEqual } from "node:crypto";
 import { signState } from "./state";
 import { log } from "@/lib/log";
+import { isCloud } from "@/lib/tier";
 
 // GitHub App (not OAuth App). Docs:
 //   https://docs.github.com/en/apps/creating-github-apps
@@ -58,7 +59,7 @@ export function buildAuthUrl(workspaceId: string): string {
 // GitHub's user authorization for the App, back to the callback with a code
 // for verifyInstallOwnership. GitHub returns only code + state, so the
 // installation id rides in the signed state. Null without the App's OAuth
-// credentials, where ownership falls back to install recency.
+// credentials, where ownership falls back to install recency (self-host only).
 export function userAuthorizeUrl(workspaceId: string, installationId: string, redirectUri: string): string | null {
   const clientId = process.env.GITHUB_APP_CLIENT_ID?.trim();
   if (!clientId || !process.env.GITHUB_APP_CLIENT_SECRET?.trim()) return null;
@@ -152,9 +153,11 @@ export async function fetchInstallationMeta(installationId: string): Promise<Ins
 // user authorization (OAuth) during installation" on, or by the user
 // authorization the callback sends a codeless reconnect through); we trade it
 // for a user-to-server token and require the installation in that user's GET
-// /user/installations, as GitHub's setup-URL docs advise. Without them, only
-// an install or update GitHub recorded in the last 10 minutes passes, which
-// narrows a replay to that window but cannot rule it out.
+// /user/installations, as GitHub's setup-URL docs advise. Without them, Cloud
+// binds nothing: one App serves every tenant and anyone can sign up, so another
+// tenant could claim a fresh install there. Self-host passes only an install or
+// update GitHub recorded in the last 10 minutes, which narrows a replay to that
+// window but cannot rule it out.
 const INSTALL_FRESH_MS = 10 * 60 * 1000;
 let warnedWeakOwnership = false;
 
@@ -200,6 +203,10 @@ export async function verifyInstallOwnership(
     }
   }
 
+  if (isCloud()) {
+    log.error("GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET are required on Cloud: GitHub installs can't be bound without them. Set them and enable \"Request user authorization (OAuth) during installation\" on the App.", { scope: "crumb/github" });
+    return false;
+  }
   if (!warnedWeakOwnership) {
     warnedWeakOwnership = true;
     log.warn("GITHUB_APP_CLIENT_ID/GITHUB_APP_CLIENT_SECRET not set: GitHub install ownership is only checked by install recency (10 min). Set them and enable \"Request user authorization (OAuth) during installation\" on the App.", { scope: "crumb/github" });

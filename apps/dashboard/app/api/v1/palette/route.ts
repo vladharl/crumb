@@ -4,7 +4,7 @@ import { db, accounts, initiatives, items } from "@crumb/db";
 import { statusLabel } from "@crumb/ui";
 import { getSession } from "@/lib/auth";
 import { splitTerms } from "@/lib/fuzzy";
-import { likeContains } from "@/lib/mcp/tools";
+import { likeContains } from "@/lib/like";
 import { formatArr } from "@/lib/priority";
 import type { PaletteResponse } from "@/components/CommandPalette";
 

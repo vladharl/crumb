@@ -23,7 +23,7 @@ describe("setupSteps", () => {
     expect(setupSteps(fresh).map(s => [s.title, s.href, s.done])).toEqual([
       ["Install the widget", "/settings/install", false],
       ["Set your Product URL", "/settings/branding", false],
-      ["Invite your team", "/settings/team", false],
+      ["Invite your team", "/settings/team?invite=1", false],
       ["Wire email delivery", "/settings#email-delivery", false],
       ["Connect a tool", "/settings/integrations", false],
       ["Publish your roadmap", "/initiatives", false],

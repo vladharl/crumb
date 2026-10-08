@@ -20,6 +20,7 @@ import { embedText, embeddingsConfigured, EMBEDDINGS_MODEL, EMBEDDINGS_DIM } fro
 import { findDuplicatesForVector } from "@/lib/ai/dedup";
 import type { AiBudgetResult } from "@/lib/ai/run";
 import { hasFeature } from "@/lib/entitlements";
+import { isBlockedSender } from "@/lib/items/delete";
 import { aiCap, currentPeriod } from "@/lib/usage";
 import { log } from "@/lib/log";
 import type { FeedbackRecord } from "@/lib/integrations/feedback/types";
@@ -237,6 +238,13 @@ export async function ingestRecord(
   if (!record.externalId) return out;
 
   if (await recordAlreadyIngested(ws, source, record.externalId)) {
+    out.skipped++;
+    return out;
+  }
+  // From someone whose feedback was marked as spam: nothing is kept, not even
+  // an "Also raised via" note, and no AI is spent. No marker either, so a
+  // record that resurfaces after they're unblocked comes in.
+  if (await isBlockedSender(ws.id, record.authorEmail)) {
     out.skipped++;
     return out;
   }

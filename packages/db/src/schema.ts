@@ -737,9 +737,11 @@ export type ChangelogEntry = typeof changelogEntries.$inferSelect;
 export type NewChangelogEntry = typeof changelogEntries.$inferInsert;
 
 // ─── replay sessions (rrweb session record) ──────────────────
-// One row per distinct customer session inside the widget. Created the
-// first time the recorder flushes a chunk; linked to a feedback item
-// only if the customer submits one before the session ends.
+// One row per distinct customer session inside the widget. Created by the
+// recorder's first chunk, or by a submit carrying the session token that
+// lands before that chunk (then already linked; linkReplaySession in
+// lib/replay/ingest.ts). Linked to a feedback item only if the customer
+// submits one before the session ends.
 //
 // Hard caps prevent storage blow-up: max 10 MB / 5000 events / 30 min.
 // Enforced both client-side (recorder stops itself) and server-side (the

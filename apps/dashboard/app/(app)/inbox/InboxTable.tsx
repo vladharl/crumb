@@ -21,7 +21,7 @@ import { cancelWaitingMove } from "@/components/ReplyComposer";
 import { bulkAssign, bulkUpdateStatus, acceptTriageAssignee, dismissTriage } from "./actions";
 import { bulkSetInitiative, clusterItems, acceptSuggestion, dismissSuggestion } from "../initiatives/actions";
 import { InitiativeChip } from "../initiatives/InitiativeChip";
-import { RowActionMenu, ReasonForm, emailNote, statusToast } from "./RowActionMenu";
+import { RowActionMenu, ReasonForm, emailNote, emailReach, mayEmail, statusToast } from "./RowActionMenu";
 import { RowReplyDrawer } from "./RowReplyDrawer";
 import { ShortcutsDialog } from "./ShortcutsDialog";
 import { deleteInboxView, saveInboxView, type SavedView } from "./views-actions";
@@ -74,6 +74,8 @@ export type InboxRow = {
   arrAtStakeCents: number;
   reachAccounts: number;
   submitterName: string;
+  // Sent from the Install page's Try-it preview (the inbox's first-run check).
+  previewSubmitter: boolean;
   assigneeInitials: string | null;
   replyCount: number;
   // Loop turn inputs: who moved last (lib/loop-sql lastTurnSideSql: a reply, a
@@ -274,6 +276,10 @@ export function InboxTable({
   const searchParams = useSearchParams();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // The selected rows a status write moves: merged duplicates follow the
+  // request they were merged into (bulkUpdateStatus skips them), so the bulk
+  // status confirm counts and asks about these only.
+  const movingRows = useMemo(() => rows.filter(r => selected.has(r.id) && r.mergedIntoId === null), [rows, selected]);
   // The reason-required status the bulk bar is asking a reason for. It goes
   // with the selection: emptying the selection drops it.
   const [bulkReason, setBulkReason] = useState<string | null>(null);
@@ -805,16 +811,17 @@ export function InboxTable({
 
   // Status writes go through the real pipeline (status_events, webhooks, and
   // an email to the customer for outcomes), so a reason comes first where the
-  // pipeline needs one, and a bulk move that emails confirms first, plainly.
+  // pipeline needs one, and a bulk move that can email confirms first, plainly.
   function chooseStatus(status: string) {
     if (!status || selected.size === 0) return;
     if (REASON_REQUIRED.has(status)) { setBulkReason(status); return; }
     setBulkReason(null);
-    if (!statusEmailsCustomer(status)) { applyStatus(status); return; }
+    const reach = emailReach(movingRows);
+    if (!mayEmail(status, reach)) { applyStatus(status); return; }
     const label = statusLabel(status);
     void confirm({
-      title: `Move ${plural(selected.size, "request")} to ${label}?`,
-      body: emailNote(selected.size, emailConfigured),
+      title: `Move ${plural(movingRows.length, "request")} to ${label}?`,
+      body: emailNote(movingRows.length, emailConfigured, reach),
       confirmLabel: `Move to ${label}`,
     }).then(ok => { if (ok) applyStatus(status); });
   }
@@ -1288,8 +1295,9 @@ export function InboxTable({
             <div style={{ flexBasis: "100%" }}>
               <ReasonForm
                 status={bulkReason}
-                count={selected.size}
+                count={movingRows.length}
                 emailConfigured={emailConfigured}
+                reach={emailReach(movingRows)}
                 pending={pending}
                 onCancel={() => setBulkReason(null)}
                 onSubmit={reason => applyStatus(bulkReason, reason)}
@@ -1557,6 +1565,8 @@ export function InboxTable({
                         canManageInitiatives={canManageInitiatives}
                         emailConfigured={emailConfigured}
                         merged={it.mergedIntoId !== null}
+                        source={it.source}
+                        mergedCount={it.mergedCount}
                         onStatusOptimistic={s => setOptimisticStatus([it.id], s)}  // s===null reverts
                         onDelete={isAdmin ? mode => deleteItems([{ shortId: it.shortId, title: it.title }], mode) : undefined}
                       />
@@ -1868,10 +1878,12 @@ const CONNECTOR_SOURCES = new Set(Object.keys(SOURCE_LABEL));
 
 // Provenance badge: where a pulled item came from. Quiet by design — it's a
 // signal, not a headline. Links back to the source call/ticket when we have a
-// permalink; the click is isolated from the row's title navigation.
+// permalink; the click is isolated from the row's title navigation. Only an
+// http(s) one: the URL comes from the provider, and React still renders a
+// javascript: href (the thread checks it the same way).
 function SourceBadge({ source, url }: { source: string; url: string | null }) {
   const label = SOURCE_LABEL[source] ?? source;
-  if (url) {
+  if (url && /^https?:\/\//i.test(url)) {
     return (
       <a
         href={url}

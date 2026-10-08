@@ -51,6 +51,16 @@ describe("customer emails", () => {
     expect(last().subject).toBe("Moved to Now: Dark mode");
   });
 
+  it("tell a merged request it was combined, once, never that it's a duplicate", async () => {
+    const notice = "We've combined this with a request we're already tracking. You'll hear from us here when it moves.";
+    await status("duplicate", { fromStatus: null, reason: notice });
+    const m = last();
+    expect(m.subject).toBe("Combined: Export to CSV");
+    expect(m.text.split("\n\n").slice(0, 2)).toEqual(["Combined: Export to CSV", notice]);
+    expect(m.html.match(/combined this/g)).toHaveLength(1);
+    expect(m.subject + m.html + m.text).not.toMatch(/duplicate/i);
+  });
+
   it("come from the vendor via Crumb, from noreply@ unless they can reply, with a text mark", async () => {
     await status("planned", { accent: "#3366FF" });
     expect(last().from).toBe('"Acme via Crumb" <noreply@mail.example.com>');
@@ -113,16 +123,20 @@ describe("customer emails", () => {
   });
 
   it("carry one-click unsubscribe and per-item threading headers", async () => {
+    // The mail app's Unsubscribe says this sender stops, so it mutes every
+    // kind (no scope: the route's default); the footer link keeps its scope.
+    const all = "https://feedback.acme.test/api/v1/unsubscribe?u=1&t=abc";
     await status("shipped", { unsubscribeUrl: unsub });
     const a = last().headers!;
-    expect(a["List-Unsubscribe"]).toBe(`<${unsub}>`);
+    expect(a["List-Unsubscribe"]).toBe(`<${all}>`);
     expect(a["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+    expect(last().text).toContain(`Unsubscribe: ${unsub}`);
 
     // https only, even with inbound mail wired: nothing applies a mailto unsubscribe.
     process.env.CRUMB_INBOUND_DOMAIN = "reply.acme.test";
-    await sendReplyNotification({ ...item, replyBody: "Hi", unsubscribeUrl: unsub });
+    await sendReplyNotification({ ...item, replyBody: "Hi", unsubscribeUrl: unsub.replace("status", "replies") });
     const b = last().headers!;
-    expect(b["List-Unsubscribe"]).toBe(`<${unsub}>`);
+    expect(b["List-Unsubscribe"]).toBe(`<${all}>`);
 
     // Same item, same thread root; every email keeps its own Message-ID.
     expect(b["In-Reply-To"]).toBe(a["In-Reply-To"]);

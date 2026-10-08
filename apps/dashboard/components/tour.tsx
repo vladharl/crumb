@@ -125,7 +125,9 @@ export function TourProvider({ autoStart, children }: { autoStart: boolean; chil
 
   // Open, the tour is modal (useModal in each overlay): the app behind goes
   // inert, the callout's Next button takes focus and Tab stays in the callout,
-  // and on close focus returns to whatever had it (the sidebar launcher).
+  // and on close focus returns to whatever had it when the overlay opened: the
+  // mobile sheet's launcher, or the account menu's trigger (the menu moves
+  // focus there first, since its own item unmounts).
   const start = useCallback(() => {
     setStep(0);
     setActive(true);

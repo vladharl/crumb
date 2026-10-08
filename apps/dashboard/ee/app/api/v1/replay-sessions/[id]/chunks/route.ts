@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cors, fail, preflight } from "@/lib/public-api";
-import { callerIpFromRequest, checkRateLimitAsync, tooManyRequests } from "@/lib/rate-limit";
+import { callerIpFromRequest, checkRateLimitAsync, clientIpFromHeaders, tooManyRequests } from "@/lib/rate-limit";
 import { isCloud } from "@/lib/tier";
 import { recordChunk } from "@/lib/replay/ingest";
 
@@ -87,7 +87,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const wsRl = await checkRateLimitAsync(`replay:ws:${payload.workspace_slug}`, { capacity: 600, refillPerSec: 20 });
   if (!wsRl.ok) return tooManyRequests(wsRl.retryAfterSeconds);
 
-  const callerIpRaw = callerIpFromRequest(req);
   const geo = geoFromHeaders(req);
   const r = await recordChunk({
     sessionToken,
@@ -102,7 +101,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     viewportH: payload.viewport_h ?? null,
     screenW: payload.screen_w ?? null,
     screenH: payload.screen_h ?? null,
-    callerIp: callerIpRaw && callerIpRaw !== "anon" ? callerIpRaw : null,
+    // The caller's own address, shown as the replay's location fallback; the
+    // limits above key on its /64 instead (callerIpFromRequest).
+    callerIp: clientIpFromHeaders(req.headers),
     geoCountry: geo.country,
     geoCity: geo.city,
   });

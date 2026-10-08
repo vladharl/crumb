@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, eq, ne } from "drizzle-orm";
 import { db, workspaces } from "@crumb/db";
 import {
-  fetchInstallationMeta, listInstallationRepos, userAuthorizeUrl, verifyInstallOwnership, GITHUB_REDIRECT_URL,
+  fetchInstallationMeta, mintInstallationToken, userAuthorizeUrl, verifyInstallOwnership, GITHUB_REDIRECT_URL,
 } from "@/lib/integrations/github";
 import { redirectToSettings, verifyCallback } from "@/lib/integrations/callback";
 import { callbackUrlFromRequest } from "@/lib/integrations/callback-url";
@@ -82,10 +82,22 @@ export async function GET(req: Request) {
 
   // Convenience: if the install grants access to exactly one repo, pre-select
   // it as the default so the admin can create issues immediately. Best-effort.
+  // A page of two answers that in one request; listInstallationRepos would
+  // page through every repository a large install reaches.
+  // ponytail: ghFetch's headers repeated here; use listInstallationRepos once
+  // it takes a page limit.
   let defaultRepo: string | null = null;
   try {
-    const repos = await listInstallationRepos(installationId);
-    if (repos.length === 1) defaultRepo = repos[0].fullName;
+    const resp = await fetch("https://api.github.com/installation/repositories?per_page=2", {
+      headers: {
+        authorization: `Bearer ${await mintInstallationToken(installationId)}`,
+        accept: "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+      },
+    });
+    if (!resp.ok) throw new Error(`github_list_repos_failed: ${resp.status}`);
+    const { repositories } = (await resp.json()) as { repositories: Array<{ full_name: string }> };
+    if (repositories.length === 1) defaultRepo = repositories[0].full_name;
   } catch (err) {
     log.warn("github repo pre-select failed (non-fatal)", { scope: "crumb/github", err });
   }

@@ -93,13 +93,18 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const type = row.contentType.toLowerCase();
   const pdf = type === "application/pdf";
   const inline = pdf || /^image\/(png|jpe?g|gif|webp|avif|bmp)$/.test(type);
+  // Header values must be Latin-1, and names often aren't (macOS screenshots
+  // put U+202F before AM/PM): the quoted name is an ASCII stand-in, and
+  // filename* (RFC 6266) carries the real one, which browsers prefer.
+  const ascii = row.filename.replace(/["\\]/g, "").replace(/[^\x20-\x7e]/g, "_");
+  const utf8 = encodeURIComponent(row.filename).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
   return new Response(new Uint8Array(bytes), {
     status: 200,
     headers: {
       ...CORS_HEADERS,
       "Content-Type": row.contentType,
       "Content-Length": String(row.sizeBytes),
-      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${row.filename.replace(/"/g, "")}"`,
+      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${ascii}"; filename*=UTF-8''${utf8}`,
       ...(pdf ? {} : { "Content-Security-Policy": "sandbox" }),
       "Cache-Control": "private, max-age=300",
     },

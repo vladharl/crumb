@@ -45,7 +45,7 @@ export const REASON_REQUIRED: ReadonlySet<string> = new Set<VendorStatus>(["decl
 export const REASON_PLACEHOLDER: Readonly<Record<string, string>> = {
   declined:  "e.g. We're not building this in v2. The maintenance cost is too high for the use case.",
   deferred:  "e.g. Revisiting in Q3 once the new export pipeline ships.",
-  duplicate: "e.g. Tracked under FB-242. Replies there will reach you.",
+  duplicate: "e.g. Same request as FB-242, which we're already tracking.",
 };
 
 // Closed: the item reached an outcome (shipped/declined/duplicate) or the

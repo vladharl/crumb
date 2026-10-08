@@ -16,11 +16,10 @@ import { hasSampleData } from "@/lib/samples";
 import { SetupChecklist } from "@/components/SetupChecklist";
 import { TEST_CUSTOMER_ACCOUNT } from "@/app/(app)/settings/install/test-customer";
 import { InboxTable, type InboxRow, type Assignee, type InitiativeOption } from "./InboxTable";
-import { CaptureTriage } from "./CaptureTriage";
+import { CaptureTriage, type CaptureRow, type AccountOption } from "./CaptureTriage";
 import type { SavedView } from "./views-actions";
-import type { CaptureRow, AccountOption } from "../captures/CapturesList";
 
-async function loadItems(workspaceId: string): Promise<InboxRow[]> {
+export async function loadItems(workspaceId: string): Promise<InboxRow[]> {
   // Fully-qualified raw refs, NOT ${items.id}/${repliesTbl.*}: inside a raw
   // subquery template drizzle renders interpolated columns unqualified, so
   // ${items.id} -> "id" resolves to replies.id (the inner table's own id)
@@ -146,6 +145,11 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
       arrAtStake,
       reachAccounts,
       submitterName: accountUsers.name,
+      // The Install page's Try-it preview, by the address mintTestToken signs
+      // (preview+<teammate id>@<slug>.invalid): it still tells the preview
+      // apart once account mapping renames the test account. Not every
+      // .invalid address: Slack and email captures without one use them too.
+      previewSubmitter: sql<boolean>`(account_users.email ILIKE 'preview+%.invalid')`,
       assigneeInitials: workspaceUsers.initials,
       replyCount,
       lastReplySide,
@@ -209,6 +213,7 @@ async function loadItems(workspaceId: string): Promise<InboxRow[]> {
     arrAtStakeCents: Number(r.arrAtStake),
     reachAccounts: r.reachAccounts,
     submitterName: r.submitterName,
+    previewSubmitter: r.previewSubmitter,
     assigneeInitials: r.assigneeInitials,
     replyCount: r.replyCount,
     lastReplySide: r.lastReplySide,
@@ -331,7 +336,7 @@ export async function InboxTableTile() {
   // First run: the samples a new Cloud workspace starts with are still there,
   // or nothing but the Install page's Try-it messages has landed. The setup
   // checklist leads until then.
-  const firstRun = samples || rows.every(r => r.accountName === TEST_CUSTOMER_ACCOUNT);
+  const firstRun = samples || rows.every(r => r.accountName === TEST_CUSTOMER_ACCOUNT || r.previewSubmitter);
   const isAdmin = me.role === "admin";
   const canManageInitiatives = me.role === "admin" || me.role === "pm";
   // Viewers are read-only — gates the bulk status/assign bar. (Same expr as

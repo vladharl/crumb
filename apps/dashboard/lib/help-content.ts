@@ -69,7 +69,7 @@ export const HELP_GROUPS: HelpGroup[] = [
       },
       {
         q: "Can Slack size a request for me?",
-        a: "On Crumb Cloud's Team and Growth plans, yes. @mention Crumb on a message in a Slack channel it's been added to, and it replies in the thread with the request restated, the account's ARR, similar open requests and the revenue behind them, and a rough T-shirt size read from your connected repo. It only reads (nothing gets filed), answers only your teammates, and says so when it can't size a request.",
+        a: "On Crumb Cloud's Team and Growth plans, yes. @mention Crumb on a message in a Slack channel it's been added to, and it answers you privately with the request restated, the account's ARR, similar open requests and the revenue behind them, and a rough T-shirt size read from your connected repo. It only reads (nothing gets filed), answers only your teammates, and says so when it can't size a request.",
         keywords: "slack mention sizing scope arr revenue estimate t-shirt bot app_mention",
         link: { href: "/settings/integrations", label: "Connect Slack" },
       },

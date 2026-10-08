@@ -132,14 +132,15 @@ export type CrumbEvent =
     })
   // `changes` names the fields this edit touched (snake_case: name,
   // description, internal_notes, status, color, owner, tracked_events,
-  // roadmap_column); `initiative` is the state after it.
+  // roadmap_column, is_public); `initiative` is the state after it.
   | (CrumbEventBase & {
       type: "initiative.updated";
       initiative: { short_id: string; name: string; status: string; roadmap_column: string | null };
       changes: string[];
     })
-  // A new inbound capture (email, Slack, extension, connector) landed for
-  // triage. status is usually "pending"; autopilot can land one already decided.
+  // A new inbound capture (email, Slack, extension, connector) is waiting for
+  // triage. Only pending captures send it (lib/captures), so status is always
+  // "pending"; one Autopilot lands already accepted or dismissed doesn't.
   | (CrumbEventBase & {
       type: "capture.created";
       capture: { id: string; source: string; subject: string | null; status: string };
@@ -386,7 +387,10 @@ export async function syncExternalStatus(
     .update(items)
     .set({
       externalStatus: toStatus,
-      externalSyncedAt: new Date(),
+      // When the tracker's status last moved, not when it last wrote: Linear
+      // and GitHub send every label or description edit too, and "Eng done,
+      // not told" (engDoneUntold) reads this as when it went done.
+      externalSyncedAt: sql`CASE WHEN ${items.externalStatus} IS DISTINCT FROM ${toStatus}::text THEN now() ELSE ${items.externalSyncedAt} END`,
       updatedAt: new Date(),
       ...(ticket ? { externalTicketId: ticket.key } : {}),
       ...(ticket?.uid ? { externalTicketUid: ticket.uid } : {}),

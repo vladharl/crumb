@@ -50,6 +50,9 @@ export const en = {
     duplicate: "Duplicate",
     resolved: "Resolved",
   },
+  // A request merged into another (its status is that one's). Not "earlier":
+  // a vendor can merge an older request into a newer one.
+  combined: "Combined with a matching request",
 
   // compose
   type: "Type",
@@ -118,7 +121,7 @@ export const en = {
   members: "Members",
   memberCount: (n: number, account: string) => `${n} on ${account}`,
   noTeammates: "No teammates yet.",
-  membersHelp: "Teammates appear here automatically when they open the widget. Change a role or remove someone above.",
+  membersHelp: "Teammates appear here once they open Feedback. Change a role or remove someone above.",
   changeRole: "Change role",
   roleAdmin: "Admin",
   roleMember: "Member",
@@ -139,6 +142,7 @@ export const en = {
   replySent: "Reply sent.",
   requestClosed: "Request closed.",
   attached: (file: string) => `${file} attached.`,
+  linkRefreshed: "That link had expired. Open the file again.",
   removed: (name: string) => `${name} removed.`,
 
   // errors: customer copy, never a code

@@ -78,6 +78,11 @@ export default async function OnboardPage({ searchParams }: { searchParams: { to
                 <div className="code" style={{ whiteSpace: "pre-wrap" }}>docker compose exec dashboard node packages/db/dist/cli.mjs setup-link</div>
               </div>
 
+              <div className="col gap-2">
+                <p className="note text-sm">Running from a source checkout? Make one from the repo instead:</p>
+                <div className="code" style={{ whiteSpace: "pre-wrap" }}>pnpm --filter @crumb/db cli setup-link</div>
+              </div>
+
               <p className="note text-xs muted">Each link works once and expires after 60 minutes.</p>
             </>
           )}

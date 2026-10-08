@@ -79,14 +79,26 @@ describe.skipIf(!reachable && !process.env.CI)("widget attachment links", () => 
 
     // The link is customer-facing and the uploader picks the Content-Type: an
     // SVG or HTML file must download sandboxed, never render on this origin.
-    expect(res.headers.get("content-disposition")).toBe('inline; filename="a.png"');
+    expect(res.headers.get("content-disposition")).toBe(`inline; filename="a.png"; filename*=UTF-8''a.png`);
     const [svg] = await db.insert(attachments)
       .values({ replyId: reply.id, filename: "x.svg", contentType: "image/svg+xml", sizeBytes: 10, storageKey: `test/${tag}/x` })
       .returning({ id: attachments.id });
     const svgPath = signedAttachmentPath(svg.id, ws.secret);
     const svgRes = await open(svg.id, svgPath.slice(svgPath.indexOf("?")));
     expect(svgRes.status).toBe(200);
-    expect(svgRes.headers.get("content-disposition")).toBe('attachment; filename="x.svg"');
+    expect(svgRes.headers.get("content-disposition")).toBe(`attachment; filename="x.svg"; filename*=UTF-8''x.svg`);
     expect(svgRes.headers.get("content-security-policy")).toBe("sandbox");
+
+    // Header values must be Latin-1, so a macOS screenshot name (U+202F before
+    // PM) or a CJK one made every Open link 500. The real name rides in filename*.
+    const [shot] = await db.insert(attachments)
+      .values({ replyId: reply.id, filename: `Pat's "shot" 2026-10-08 at 9.41.00 PM 截图.png`, contentType: "image/png", sizeBytes: 10, storageKey: `test/${tag}/s` })
+      .returning({ id: attachments.id });
+    const shotPath = signedAttachmentPath(shot.id, ws.secret);
+    const shotRes = await open(shot.id, shotPath.slice(shotPath.indexOf("?")));
+    expect(shotRes.status).toBe(200);
+    expect(shotRes.headers.get("content-disposition")).toBe(
+      `inline; filename="Pat's shot 2026-10-08 at 9.41.00_PM __.png"; filename*=UTF-8''Pat%27s%20%22shot%22%202026-10-08%20at%209.41.00%E2%80%AFPM%20%E6%88%AA%E5%9B%BE.png`,
+    );
   });
 });

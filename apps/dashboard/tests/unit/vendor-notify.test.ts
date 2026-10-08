@@ -239,6 +239,56 @@ describe.skipIf(!reachable && !process.env.CI)("vendor notifications", () => {
     expect(recipients()).toEqual([]);
   });
 
+  it("stamps when the tracker moved the status, not on every issue edit", async () => {
+    // "Eng done, not told" reads this as when the ticket went done, so a later
+    // label or description edit mustn't flag a customer who was already told.
+    const stamp = async () => (await db.select({ at: items.externalSyncedAt }).from(items).where(eq(items.id, fb[7])))[0].at;
+    const moved = await stamp(); // In Review, from the test above
+    expect(moved).not.toBeNull();
+    await syncExternalStatus(eq(items.id, fb[7]), "In Review");
+    expect(await stamp()).toEqual(moved);
+    await syncExternalStatus(eq(items.id, fb[7]), "In QA");
+    expect((await stamp())!.getTime()).toBeGreaterThan(moved!.getTime());
+  });
+
+  it("on Cloud, DMs need a plan with integrations; without one the alert goes by email", async () => {
+    // A downgrade keeps the Slack install (and /crumb refuses), so the plan
+    // decides, not the token.
+    const [w] = await db.insert(workspaces)
+      .values({ slug: `slack-plan-${randomUUID().slice(0, 8)}`, name: "Slack plan test", slackBotToken: "xoxb-test" })
+      .returning({ id: workspaces.id });
+    const slack = vi.fn(async (_url: string) => Response.json({ ok: true }));
+    vi.stubGlobal("fetch", slack);
+    vi.stubEnv("CRUMB_TIER", "cloud");
+    try {
+      const [al] = await db.insert(workspaceUsers)
+        .values({ workspaceId: w.id, email: "al@plan.test", name: "Al", initials: "A", role: "admin", slackUserId: "UAL" })
+        .returning({ id: workspaceUsers.id });
+      await db.insert(notificationPreferences).values({ workspaceUserId: al.id, delivery: "slack" });
+      const [acct] = await db.insert(accounts).values({ workspaceId: w.id, name: "Acme" }).returning({ id: accounts.id });
+      const [cy] = await db.insert(accountUsers)
+        .values({ workspaceId: w.id, accountId: acct.id, email: "cy@acme.test", name: "Cy", initials: "C" })
+        .returning({ id: accountUsers.id });
+      const [item] = await db.insert(items)
+        .values({ workspaceId: w.id, accountId: acct.id, submitterId: cy.id, seq: 1, shortId: "FB-1", title: "Export", type: "bug" })
+        .returning({ id: items.id });
+
+      await notifyNewSubmission({ workspaceId: w.id, itemId: item.id }); // Free
+      expect(slack).not.toHaveBeenCalled();
+      expect(recipients()).toEqual(["al@plan.test"]);
+
+      await db.update(workspaces).set({ planId: "team", subscriptionStatus: "active" }).where(eq(workspaces.id, w.id));
+      await notifyNewSubmission({ workspaceId: w.id, itemId: item.id });
+      expect(slack.mock.calls.map(([url]) => url)).toEqual(["https://slack.com/api/chat.postMessage"]);
+      expect(recipients()).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.stubEnv("CRUMB_TIER", "self_host");
+      await db.delete(items).where(eq(items.workspaceId, w.id));
+      await db.delete(workspaces).where(eq(workspaces.id, w.id));
+    }
+  });
+
   it("the digest goes once per period, with the watermark set only after a send", async () => {
     const scope = eq(workspaceUsers.workspaceId, ws);
     const now = Date.now();

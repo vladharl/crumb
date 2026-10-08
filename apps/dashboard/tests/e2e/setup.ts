@@ -51,10 +51,6 @@ export default async function globalSetup(): Promise<void> {
   // itself is covered by its own relaunch affordance, not blocked by this.)
   psql(`UPDATE workspace_users SET guide_completed_at = now() WHERE workspace_id='${wsId}'`);
 
-  // The seed reinserts the workspace with no widget ping, but its items came in
-  // through the widget. Stamp it, so "Install the widget" reads as Done.
-  psql(`UPDATE workspaces SET widget_first_ping_at = now() WHERE id='${wsId}'`);
-
   // Mint a 24h session token. The dashboard verifies sha256(cookieValue)
   // against sessions.token_hash, so we hash + insert here.
   const token = randomBytes(32).toString("base64url");

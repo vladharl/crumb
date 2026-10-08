@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { db, workspaces } from "@crumb/db";
 import { getSession, safeNextPath } from "@/lib/auth";
 import { emailConfigured } from "@/lib/email";
 import { isCloud } from "@/lib/tier";
@@ -25,6 +26,9 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
   if (session) redirect(next ?? "/inbox");
 
   const cloud = isCloud();
+  // Self-host: the setup link is for an instance with no workspace yet. Once
+  // there is one, /onboard sends people straight back here.
+  const fresh = !cloud && (await db.select({ id: workspaces.id }).from(workspaces).limit(1)).length === 0;
   const errorCode = searchParams.e;
   const error = errorCode ? (ERROR_COPY[errorCode] ?? null) : null;
 
@@ -71,9 +75,13 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
             <p className="text-sm muted" style={{ margin: 0, lineHeight: 1.55 }}>
               New to Crumb? <a href="/signup" style={{ color: "var(--ink)" }}>Start free</a>.
             </p>
+          ) : fresh ? (
+            <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55 }}>
+              Setting up a new server? Create the first admin with a <a href="/onboard" style={{ color: "var(--ink)" }}>setup link</a>.
+            </p>
           ) : (
             <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55 }}>
-              No account yet? Ask an admin to invite you. Setting up a new server? Create the first admin with a <a href="/onboard" style={{ color: "var(--ink)" }}>setup link</a>.
+              No account yet? Ask an admin to invite you.
             </p>
           )}
 

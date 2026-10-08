@@ -413,7 +413,7 @@ function patchNetwork(apiBase: string): () => void {
 }
 
 // rrweb config:
-//   - maskAllInputs + email/password explicitly blocked: privacy default.
+//   - maskAllInputs, email and password named too: every input is masked.
 //   - blockClass on shadow host + any `.crumb-block` opt-out: stops the
 //     recorder from recording its own widget UI (recursive replay).
 //   - maskTextClass `.crumb-mask`: vendor-side opt-out for text content.

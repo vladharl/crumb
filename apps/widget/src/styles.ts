@@ -19,10 +19,11 @@ export const css =
 // Tokens sit on :host so the whole widget tunes from one place. Status colors
 // mirror the dashboard, so a loop reads the same color to both sides. Text
 // tokens clear 4.5:1 on every panel surface (unit-tested): ink-3 is for dots
-// only; accent-ink is ember-deep darkened until it passes (DESIGN.md's
-// #B45F23 reads 4.3:1 on cream); errors take rust-deep, since plain rust
-// misses on its own wash. Radii keep DESIGN.md's names and 4 to 10px scale:
-// md for controls, lg for cards, rows and messages, xl for the floating panel.
+// and switch tracks only (3:1 is their bar); accent-ink is ember-deep
+// darkened until it passes (DESIGN.md's #B45F23 reads 4.3:1 on cream); errors
+// take rust-deep, since plain rust misses on its own wash. Radii keep
+// DESIGN.md's names and 4 to 10px scale: md for controls, lg for cards, rows
+// and messages, xl for the floating panel.
 // The launcher's two colors are the workspace's (set by JS from /me); the
 // near-black is only for unbranded installs. Inside the panel the accent
 // fills the primary button and draws the focus ring (--c-brand, set by JS
@@ -292,7 +293,8 @@ export const css =
 ` +
 // Buttons. Flat on paper, so no hover lift or shadow: primary goes from ink
 // to brown-2, and a vendor accent (.branded) darkens a step instead, which
-// keeps white text on it above 4.5:1.
+// keeps white text on it above 4.5:1. Busy ones are aria-disabled, which keeps
+// focus on them; their handlers ignore the click.
 `
 button.primary {
   appearance: none;
@@ -308,9 +310,9 @@ button.primary {
   display: inline-flex; align-items: center; gap: 6px;
   transition: background-color 120ms var(--ease), opacity 120ms var(--ease);
 }
-button.primary:hover:not(:disabled) { background-color: var(--c-ink-2); }
-.branded button.primary:hover:not(:disabled) { background: linear-gradient(rgba(74, 46, 31, 0.18), rgba(74, 46, 31, 0.18)) var(--c-brand); }
-button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+button.primary:hover:not(:disabled):not([aria-disabled="true"]) { background-color: var(--c-ink-2); }
+.branded button.primary:hover:not(:disabled):not([aria-disabled="true"]) { background: linear-gradient(rgba(74, 46, 31, 0.18), rgba(74, 46, 31, 0.18)) var(--c-brand); }
+button.primary:disabled, button.primary[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
 button.primary svg { width: 13px; height: 13px; }
 
 button.outline {
@@ -336,10 +338,11 @@ button.ghost {
   transition: background 120ms var(--ease);
 }
 button.ghost:hover { background: var(--c-surface-2); }
-button.ghost:disabled { opacity: 0.5; cursor: default; }
+button.ghost:disabled, button.ghost[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 button.ghost svg { width: 14px; height: 14px; }
 ` +
-// Fields: the focus signature is a brand (else ember) border and soft glow.
+// Fields: the focus signature is a brand (else ember-ink) border and soft glow;
+// the border alone clears 3:1, since it stands in for the focus ring.
 // Placeholders are brown at 74%, 5.3:1 on cream (unit-tested at 4.5).
 `
 input.field, textarea.field {
@@ -359,7 +362,7 @@ input.field, textarea.field {
 input.field::placeholder, textarea.field::placeholder { color: rgba(74, 46, 31, 0.74); }
 input.field:focus, textarea.field:focus {
   outline: none;
-  border-color: var(--c-brand, var(--c-accent));
+  border-color: var(--c-brand, var(--c-accent-ink));
   box-shadow: 0 0 0 3px var(--c-brand-soft, var(--c-accent-soft));
 }
 textarea.field { min-height: 84px; }
@@ -664,7 +667,7 @@ textarea.field.reply-box { flex: 1; min-height: 0; max-height: 160px; resize: no
 .sw {
   flex-shrink: 0;
   width: 38px; height: 22px; border-radius: 999px;
-  background: var(--c-line-2); border: 0; cursor: pointer; padding: 0;
+  background: var(--c-ink-3); border: 0; cursor: pointer; padding: 0;
   position: relative; transition: background 160ms var(--ease);
 }
 .sw::after {
@@ -674,7 +677,7 @@ textarea.field.reply-box { flex: 1; min-height: 0; max-height: 160px; resize: no
 }
 /* A clear layer stretches the 22px-high track to a 24px target, per WCAG 2.5.8. */
 .sw::before { content: ""; position: absolute; inset: -1px 0; }
-.sw.on { background: var(--c-accent); }
+.sw.on { background: var(--c-brand, var(--c-accent-ink)); }
 .sw.on::after { transform: translateX(16px); }
 .sw:disabled { cursor: default; }
 ` +

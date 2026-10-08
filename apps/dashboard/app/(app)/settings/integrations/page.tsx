@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { headers } from "next/headers";
 import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { db, accounts } from "@crumb/db";
@@ -108,7 +109,16 @@ function bannerFor(map: Record<string, BannerCopy>, code: string | undefined, na
 
 // A provider this server has no app credentials for: muted, so it never reads
 // as Connected. The card body says what that means for whoever's looking.
-const NOT_SET_UP = <Pill variant="muted">Not set up</Pill>;
+// Neither does an install the plan no longer covers (a Cloud downgrade keeps
+// it, so an upgrade picks up where it left off): Paused, with a PausedNote.
+function connectionPill(installed: boolean, canInstall: boolean, paused: boolean) {
+  if (installed) return paused ? <Pill variant="muted">Paused</Pill> : <Pill ring ringFill>Connected</Pill>;
+  return canInstall ? <Pill>Not connected</Pill> : <Pill variant="muted">Not set up</Pill>;
+}
+
+function PausedNote({ children }: { children: ReactNode }) {
+  return <p className="text-xs muted note">Paused: your plan no longer includes integrations, so {children}.</p>;
+}
 
 // Why a card that isn't connected has no Connect button, in plain words. Not
 // set up: the server has no app for the provider, and only admins on
@@ -237,11 +247,7 @@ export default async function IntegrationsPage({
         <CardHead
           title="Linear"
           after={
-            linearInstalled
-              ? <Pill ring ringFill>Connected</Pill>
-              : !linearCanInstall
-                ? NOT_SET_UP
-                : <Pill>Not connected</Pill>
+            connectionPill(linearInstalled, linearCanInstall, !integrationsEntitled)
           }
         />
         <div className="card-body col gap-3">
@@ -255,6 +261,7 @@ export default async function IntegrationsPage({
                   <> since {formatDate(ws.linearInstalledAt)}</>
                 )}.
               </p>
+              {!integrationsEntitled && <PausedNote>threads can&apos;t create Linear issues</PausedNote>}
               <p className="text-xs muted note">
                 The status customers see stays the one you set in Crumb. The issue&apos;s status in Linear shows beside it in the thread, for reference.
               </p>
@@ -307,11 +314,7 @@ export default async function IntegrationsPage({
         <CardHead
           title="Jira"
           after={
-            jiraInstalled
-              ? <Pill ring ringFill>Connected</Pill>
-              : !jiraCanInstall
-                ? NOT_SET_UP
-                : <Pill>Not connected</Pill>
+            connectionPill(jiraInstalled, jiraCanInstall, !integrationsEntitled)
           }
         />
         <div className="card-body col gap-3">
@@ -323,6 +326,7 @@ export default async function IntegrationsPage({
               <p className="text-sm note">
                 Choose the Jira site this workspace creates tickets in. Until then, tickets can&apos;t go to Jira.
               </p>
+              {!integrationsEntitled && <PausedNote>a site can&apos;t be chosen and threads can&apos;t create Jira issues</PausedNote>}
               {isAdmin
                 ? (
                   <div className="row gap-2 center" style={{ flexWrap: "wrap" }}>
@@ -343,10 +347,12 @@ export default async function IntegrationsPage({
                   <> · default project <span className="mono">{ws.jiraDefaultProjectKey}</span></>
                 )}.
               </p>
+              {!integrationsEntitled && <PausedNote>threads can&apos;t create Jira issues</PausedNote>}
               <p className="text-xs muted note">
                 The status customers see stays the one you set in Crumb. The issue&apos;s status in Jira shows beside it in the thread, for reference.
               </p>
-              {cloud && !jiraStatusSync && (
+              {/* Its remedy (reconnect) and its "still works" need the plan. */}
+              {cloud && !jiraStatusSync && integrationsEntitled && (
                 <p className="text-xs note" style={{ color: "var(--err-text)" }}>
                   Status sync isn&apos;t set up, so linked tickets won&apos;t update here. Reconnect Jira to try again; creating tickets still works.
                 </p>
@@ -399,11 +405,7 @@ export default async function IntegrationsPage({
         <CardHead
           title="GitHub"
           after={
-            githubInstalled
-              ? <Pill ring ringFill>Connected</Pill>
-              : !githubCanInstall
-                ? NOT_SET_UP
-                : <Pill>Not connected</Pill>
+            connectionPill(githubInstalled, githubCanInstall, !integrationsEntitled)
           }
         />
         <div className="card-body col gap-3">
@@ -420,6 +422,7 @@ export default async function IntegrationsPage({
                   <> · default repo <span className="mono">{ws.githubDefaultRepo}</span></>
                 )}.
               </p>
+              {!integrationsEntitled && <PausedNote>threads can&apos;t create GitHub issues</PausedNote>}
               <p className="text-xs muted note">
                 {ws.githubDefaultRepo
                   ? "New issues start in this repo. On Cloud plans with AI, ticket drafts for Linear and Jira and Slack request sizing also read its README and file layout."
@@ -456,11 +459,7 @@ export default async function IntegrationsPage({
         <CardHead
           title="HubSpot"
           after={
-            hubspotInstalled
-              ? <Pill ring ringFill>Connected</Pill>
-              : !hubspotCanInstall
-                ? NOT_SET_UP
-                : <Pill>Not connected</Pill>
+            connectionPill(hubspotInstalled, hubspotCanInstall, !integrationsEntitled)
           }
         />
         <div className="card-body col gap-3">
@@ -508,11 +507,7 @@ export default async function IntegrationsPage({
         <CardHead
           title="Salesforce"
           after={
-            salesforceInstalled
-              ? <Pill ring ringFill>Connected</Pill>
-              : !salesforceCanInstall
-                ? NOT_SET_UP
-                : <Pill>Not connected</Pill>
+            connectionPill(salesforceInstalled, salesforceCanInstall, !integrationsEntitled)
           }
         />
         <div className="card-body col gap-3">
@@ -560,11 +555,7 @@ export default async function IntegrationsPage({
         <CardHead
           title="Slack"
           after={
-            slackInstalled
-              ? <Pill ring ringFill>Connected</Pill>
-              : !slackCanInstall
-                ? NOT_SET_UP
-                : <Pill>Not connected</Pill>
+            connectionPill(slackInstalled, slackCanInstall, !integrationsEntitled)
           }
         />
         <div className="card-body col gap-3">
@@ -578,9 +569,13 @@ export default async function IntegrationsPage({
                   <> since {formatDate(ws.slackInstalledAt)}</>
                 )}.
               </p>
-              <p className="text-xs muted note">
-                Teammates who choose <em>Slack</em> in <a href="/settings/notifications" style={{ color: "var(--ink)" }}>their notification settings</a> get their alerts (customer replies, mentions, assignments, new feedback) as DMs instead of email. Crumb finds each teammate in Slack by their email address, and emails them when it can&apos;t. Anyone in your Slack can type <span className="mono">/crumb</span> to capture feedback for a customer.
-              </p>
+              {integrationsEntitled ? (
+                <p className="text-xs muted note">
+                  Teammates who choose <em>Slack</em> in <a href="/settings/notifications" style={{ color: "var(--ink)" }}>their notification settings</a> get their alerts (customer replies, mentions, assignments, new feedback) as DMs instead of email. Crumb finds each teammate in Slack by their email address, and emails them when it can&apos;t. Teammates whose Slack email matches their Crumb account can type <span className="mono">/crumb</span> to capture feedback for a customer.
+                </p>
+              ) : (
+                <PausedNote><span className="mono">/crumb</span> doesn&apos;t work and alerts go by email instead of Slack DMs</PausedNote>
+              )}
               {isAdmin
                 ? <DisconnectSlackButton teamName={ws.slackTeamName} />
                 : <p className="text-xs muted" style={{ margin: 0 }}>Only workspace admins can disconnect.</p>}
@@ -645,7 +640,7 @@ export default async function IntegrationsPage({
           </p>
           <p className="text-xs muted" style={{ margin: 0, lineHeight: 1.55, maxWidth: "62ch" }}>
             <strong style={{ fontWeight: 500 }}>When:</strong> while this is on, the widget keeps the last 2 minutes of each identified visitor's session in their browser's memory, from page load. Nothing is sent or stored until they tick "Record my session"; then those minutes go along, so the replay shows what happened before they opened the form. Unticking stops it and drops what was in memory.{" "}
-            <strong style={{ fontWeight: 500 }}>What's recorded:</strong> the page as the customer sees it, their clicks and scrolling, and each network request's method, URL, status and timing, with secret-looking query values (tokens, passwords, keys) redacted. Request and response bodies are left out unless your embed sets <span className="mono">data-record-network-bodies="true"</span>; then they're kept, with secret-looking form, query and JSON values redacted. Text typed into form fields is masked and password and email fields are never recorded; rich-text editors and hidden inputs record as-is unless you mark them (below). Sessions cap at 10 MB / 5,000 events / 30 minutes and {replayRetentionDays > 0 ? `are deleted after ${replayRetentionDays} days by the cleanup job` : "are kept indefinitely"}.
+            <strong style={{ fontWeight: 500 }}>What's recorded:</strong> the page as the customer sees it, their clicks and scrolling, and each network request's method, URL, status and timing, with secret-looking query values (tokens, passwords, keys) redacted. Request and response bodies are left out unless your embed sets <span className="mono">data-record-network-bodies="true"</span>; then they're kept, with secret-looking form, query and JSON values redacted. Text typed into form fields, password and email fields included, is masked; rich-text editors and hidden inputs record as-is unless you mark them (below). Sessions cap at 10 MB / 5,000 events / 30 minutes and {replayRetentionDays > 0 ? `are deleted after ${replayRetentionDays} days by the cleanup job` : "are kept indefinitely"}.
           </p>
           {sessionRecordEntitled ? (
             <div className="row gap-3 center">

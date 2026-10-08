@@ -16,7 +16,7 @@ function row(over: Partial<InboxRow>): InboxRow {
   return {
     id: "i1", shortId: "FB-1", title: "t", preview: null, searchText: "", type: "idea", status: "open",
     source: null, sourceUrl: null, tags: [], assigneeId: null, createdAtIso: "2026-10-01T00:00:00.000Z",
-    accountId: "acct-1", accountName: "Acme", arrAtStakeCents: 0, reachAccounts: 1, submitterName: "Maya",
+    accountId: "acct-1", accountName: "Acme", arrAtStakeCents: 0, reachAccounts: 1, submitterName: "Maya", previewSubmitter: false,
     assigneeInitials: null, replyCount: 0, lastReplySide: null, lastExternalReplyAtIso: null, vendorReplied: false,
     externalProvider: null, externalStatus: null, externalSyncedAtIso: null, lastNotifiedAtIso: null,
     initiativeId: null, initiativeName: null, initiativeColor: null, suggestion: null,

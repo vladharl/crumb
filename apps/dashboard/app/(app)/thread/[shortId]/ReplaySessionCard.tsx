@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Btn, Card, CardHead, Ic, Pill } from "@crumb/ui";
+import { errorMessage } from "@/lib/action-error";
 import { ReplaySessionPlayer } from "./ReplaySessionPlayer";
 
 export type ReplayCardData = {
@@ -71,7 +72,7 @@ export function ReplaySessionCard({ replay }: { replay: ReplayCardData }) {
         const res = await fetch(`/api/v1/replay-sessions/${replay.id}/summary`, { method: "POST" });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          setSummaryError(data?.error === "ai_cap_reached" ? "Monthly AI limit reached." : data?.error === "no_events" ? "Not enough recorded activity to summarize." : "Couldn't summarize this session.");
+          setSummaryError(data?.error === "ai_cap_reached" ? errorMessage("ai_cap_reached") : data?.error === "no_events" ? "Not enough recorded activity to summarize." : "Couldn't summarize this session.");
           return;
         }
         router.refresh();

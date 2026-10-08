@@ -3,8 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Pill } from "@crumb/ui";
+import { runAction } from "@/components/ReplyComposer";
 import { useToast } from "@/components/toast";
-import { errorMessage } from "@/lib/action-error";
 import { formatArr } from "@/lib/priority";
 import { setAccountArr } from "../actions";
 
@@ -38,12 +38,11 @@ export function AccountArrEdit({ accountId, arrCents, canEdit }: {
     const prev = cents;
     setCents(next); // optimistic
     startTransition(async () => {
-      const r = await setAccountArr(accountId, next);
-      if (r.ok) { setCents(r.arrCents); router.refresh(); }
-      else {
-        setCents(prev); // revert
-        toast.show({ message: errorMessage(r.error), tone: "error" });
-      }
+      // A refusal or a throw (a dropped connection, a stale action after a
+      // redeploy) toasts and reverts.
+      const r = await runAction(toast, () => setAccountArr(accountId, next));
+      if (r) { setCents(r.arrCents); router.refresh(); }
+      else setCents(prev);
     });
   }
 

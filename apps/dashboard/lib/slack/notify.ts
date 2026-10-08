@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db, workspaceUsers } from "@crumb/db";
 
 // Slack Web API "users.lookupByEmail" — returns a user_id we can DM via
@@ -100,6 +100,37 @@ export async function getSlackUserEmail(botToken: string, slackUserId: string): 
   } catch {
     return null;
   }
+}
+
+// The Crumb teammate behind a Slack user, or null: the sizing bot and /crumb
+// show requester ARR, other accounts' requests and the customer list. They
+// must belong to the installing Slack team (a Slack Connect channel holds other
+// organizations' users) and match a teammate of this workspace by their Slack
+// email (which a guest's won't). Their Slack id is cached on the match, as a DM
+// lookup would, so the next DM skips users.lookupByEmail.
+export async function slackTeammate(opts: {
+  workspaceId: string;
+  installTeamId: string;
+  botToken: string;
+  slackUserId: string | undefined;
+  userTeamId: string | undefined;
+}): Promise<{ id: string; email: string } | null> {
+  if (!opts.slackUserId || opts.userTeamId !== opts.installTeamId) return null;
+  const email = await getSlackUserEmail(opts.botToken, opts.slackUserId);
+  if (!email) return null;
+  const [member] = await db
+    .select({ id: workspaceUsers.id, slackUserId: workspaceUsers.slackUserId })
+    .from(workspaceUsers)
+    .where(and(eq(workspaceUsers.workspaceId, opts.workspaceId), sql`lower(${workspaceUsers.email}) = ${email.toLowerCase()}`))
+    .limit(1);
+  if (!member) return null;
+  if (member.slackUserId !== opts.slackUserId) {
+    await db
+      .update(workspaceUsers)
+      .set({ slackUserId: opts.slackUserId, slackLookupFailedAt: null })
+      .where(eq(workspaceUsers.id, member.id));
+  }
+  return { id: member.id, email };
 }
 
 // ─── message composers (one per notification kind) ──────────

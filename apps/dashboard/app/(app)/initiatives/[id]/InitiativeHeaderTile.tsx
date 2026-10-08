@@ -80,7 +80,7 @@ export async function InitiativeHeaderTile({ id }: { id: string }) {
       <PageHead
         crumb={<Link href="/initiatives" style={{ color: "inherit" }}>Initiatives</Link>}
         title={initiative.name}
-        lede={initiative.description ?? "Vendor-internal bucket. Group inbound feedback that belongs together so you can triage themes, not just rows."}
+        lede={initiative.description ?? "Group inbound feedback that belongs together so you can triage themes, not just rows."}
         actions={
           <EditPanel
             initiative={{
@@ -127,8 +127,9 @@ export async function InitiativeHeaderTile({ id }: { id: string }) {
           </div>
           <div className="row gap-6" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
             {[
-              [String(stats.open),     "Open"],
-              [String(stats.progress), "In progress"],
+              // statusMix buckets: two statuses each, named as the account sidebar names them.
+              [String(stats.open),     "Open / In review"],
+              [String(stats.progress), "Planned / In progress"],
               [String(stats.shipped),  STATUS_LABELS.shipped],
               // Closed without shipping: declined, duplicate, or closed by the customer.
               [String(stats.declined + stats.otherClosed), "Closed"],
