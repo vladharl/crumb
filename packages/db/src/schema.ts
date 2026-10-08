@@ -9,6 +9,7 @@ import {
   boolean,
   unique,
   index,
+  uniqueIndex,
   doublePrecision,
   bigint,
   jsonb,
@@ -213,7 +214,12 @@ export const notificationPreferences = pgTable("notification_preferences", {
   mentionRealtime:           boolean("mention_realtime").notNull().default(true),
   statusChangeRealtime:      boolean("status_change_realtime").notNull().default(false),
   clusterSuggestionsRealtime: boolean("cluster_suggestions_realtime").notNull().default(false),
+  // Assignment alerts: tell this user right away when an item is assigned to them.
+  assignedRealtime:          boolean("assigned_realtime").notNull().default(true),
   delivery:                  varchar("delivery", { length: 16 }).notNull().default("email"), // email | slack | none
+  // Digest watermark: when this user's last digest went out, so a user gets at
+  // most one digest per period even if the sweep runs twice. NULL = never sent.
+  lastDigestAt: timestamp("last_digest_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -375,9 +381,15 @@ export const replies = pgTable("replies", {
   accountUserId: uuid("account_user_id").references(() => accountUsers.id, { onDelete: "set null" }),
   body: text("body").notNull(),
   internal: boolean("internal").notNull().default(false),
+  // Inbound reply dedupe: the email's Message-ID for replies that arrived by
+  // email, so a provider retry of the same message lands once per item. NULL
+  // for replies written any other way.
+  inboundMessageId: text("inbound_message_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   byItem: index("replies_item_idx").on(t.itemId, t.createdAt),
+  // NULLs are distinct in Postgres, so replies without a Message-ID never collide.
+  uniqInboundMessage: uniqueIndex("replies_item_inbound_message_uniq").on(t.itemId, t.inboundMessageId),
 }));
 
 // @-mentions on an internal note: one row per (reply, mentioned teammate).
