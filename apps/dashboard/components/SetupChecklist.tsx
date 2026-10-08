@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Btn, Card, CardHead, Ic, Pill } from "@crumb/ui";
 import { db, initiatives, workspaceUsers, type Workspace } from "@crumb/db";
 import { activeEmailProvider, emailConfigured } from "@/lib/email";
 import { isCloud } from "@/lib/tier";
 import { hasSampleData } from "@/lib/samples";
+import { onPublicRoadmapSql } from "@/lib/roadmap";
 import { clearSampleData } from "@/app/(app)/settings/sample-actions";
 
 /**
@@ -103,11 +104,10 @@ export async function SetupChecklist({ workspace, isAdmin, hasSamples }: {
   const ws = workspace.id;
   const [[team], [roadmap], samples] = await Promise.all([
     db.select({ n: sql<number>`count(*)::int` }).from(workspaceUsers).where(eq(workspaceUsers.workspaceId, ws)),
-    // Only a public initiative that's on the board reaches the customer roadmap.
+    // Only a public initiative customers can see (scheduled or shipped) counts.
     db.select({ n: sql<number>`count(*)::int` }).from(initiatives).where(and(
       eq(initiatives.workspaceId, ws),
-      eq(initiatives.isPublic, true),
-      inArray(initiatives.roadmapColumn, ["now", "next", "later"]),
+      onPublicRoadmapSql(),
     )),
     hasSamples ?? hasSampleData(ws),
   ]);

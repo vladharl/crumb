@@ -310,7 +310,7 @@ When a customer drops feedback through the widget, Crumb Cloud can attach a vide
 Enable per-workspace at **Settings → Integrations → Session record**. When on, the widget injects a second small bundle (`/widget-record.js`) after `/me` resolves; the launcher itself stays lean. Captured chunks flush every ~5s via `fetch`, with a `sendBeacon` final-flush on `pagehide`.
 
 What a replay contains, exactly:
-- Nothing until the customer ticks **Record my session** in the widget (remembered for that tab; unticking stops it).
+- Nothing leaves the browser until the customer ticks **Record my session** in the widget. From page load the recorder keeps only the last ~2 minutes in memory (never stored or sent); ticking sends those minutes and records on, so the replay shows the moment before they opened the form. The choice is remembered for that tab and that customer; unticking stops recording and drops what's in memory, and keeps it off until they tick again.
 - The page's DOM as rendered (snapshot and changes), mouse movement, clicks, scrolling, the page URL (secret-looking query and fragment values redacted, as for requests below), browser user agent, and viewport and screen size.
 - For each `fetch` / XHR request the page makes: method, URL, status and timing. Query-string values whose names look secret (`password`, `token`, `secret`, `auth`, `…key`, `session`, `signature`, `code` and similar) are replaced with `[redacted]`, and `user:pass@` credentials are dropped. Headers and cookies are never recorded, and Crumb's own API calls aren't captured.
 - **No request or response bodies.** A host can opt in per embed with `data-record-network-bodies="true"` on the widget `<script>` tag. Bodies are then kept (truncated to 2 KB), with secret-looking keys still redacted in form-encoded, query-string and JSON bodies, and the widget's consent text says so.
@@ -323,7 +323,7 @@ Cost guard-rails (capped per session):
 - 5,000 events
 - 30 minutes
 
-The recorder stops itself client-side at each cap; the server returns 413 if exceeded. Sessions are linked to a feedback item only after the customer submits with ≥1 chunk flushed. Empty sessions stay orphan and can be swept later. **Replays are deleted after 30 days by default**, enforced by the cleanup sweep below. Set `CRUMB_REPLAY_RETENTION_DAYS` (with `_FREE` / `_TEAM` / `_GROWTH` overrides, which win) to change the window; `0` keeps replays forever.
+The recorder stops itself client-side at each cap; the server returns 413 if exceeded. A session is linked to the feedback item when the customer submits with consent on, even if its first chunk lands a moment later. Sessions that were never linked, and linked ones that never received a chunk, are swept. **Replays are deleted after 30 days by default**, enforced by the cleanup sweep below. Set `CRUMB_REPLAY_RETENTION_DAYS` (with `_FREE` / `_TEAM` / `_GROWTH` overrides, which win) to change the window; `0` keeps replays forever.
 
 **CSP gotcha:** if the customer's site uses `script-src 'self'`, the recorder script tag won't load. Allow your Crumb origin in `script-src` to enable session record on that site.
 

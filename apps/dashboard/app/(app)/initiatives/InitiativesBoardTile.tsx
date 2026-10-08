@@ -2,6 +2,7 @@ import { db, initiatives, workspaceUsers } from "@crumb/db";
 import { asc, eq, sql } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
 import { loopOpenSql } from "@/lib/loop-sql";
+import { followerCountSql, shippedAtSql } from "@/lib/roadmap";
 import { InitiativesBoard, type BoardItem } from "./InitiativesBoard";
 
 export async function InitiativesBoardTile() {
@@ -19,13 +20,12 @@ export async function InitiativesBoardTile() {
       isPublic: initiatives.isPublic,
       createdAt: initiatives.createdAt,
       ownerName: workspaceUsers.name,
-      // Correlate with a fully-qualified raw ref, NOT ${initiatives.id}:
-      // inside a raw subquery template drizzle renders an interpolated column
-      // unqualified ("id"), which resolves to roadmap_follows.id (it has an id
-      // col) instead of the outer initiatives.id — silently making this 0.
-      followers: sql<number>`(
-        SELECT COUNT(*)::int FROM roadmap_follows WHERE roadmap_follows.initiative_id = initiatives.id
-      )`,
+      // Correlated on fully-qualified raw refs, NOT ${initiatives.id}: inside
+      // a raw subquery template drizzle renders an interpolated column
+      // unqualified ("id"), which resolves to the subquery's own id column
+      // instead of the outer initiatives.id, silently making these 0.
+      followers: followerCountSql(),
+      shippedAt: shippedAtSql(),
       // Revenue at stake: ARR over the DISTINCT accounts with OPEN feedback in
       // this initiative — the same unit the inbox ranks on, rolled up. Open
       // loops only (not closed, Set aside included: lib/loop-sql); merged dupes
@@ -65,6 +65,7 @@ export async function InitiativesBoardTile() {
     accountCount: r.accountCount,
     ownerName: r.ownerName ?? null,
     createdAt: r.createdAt.toISOString(),
+    shippedAt: r.shippedAt?.toISOString() ?? null,
   }));
 
   const canManage = user.role === "admin" || user.role === "pm";

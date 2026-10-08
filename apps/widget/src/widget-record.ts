@@ -1,19 +1,24 @@
 // rrweb recorder shim — bundled separately from widget.js so the launcher
 // renders before rrweb's full-DOM snapshot kicks in. Built via the
 // `build:record` esbuild entry; exposed on `window.__crumbRecord__` and
-// driven by the main widget after `/me` confirms `session_record_enabled`.
+// driven by the main widget once `/me` confirms `session_record_enabled`.
+//
+// Two modes. buffer(): before the customer consents, the last two minutes
+// stay in this tab's memory; nothing is sent or stored. start(): consent
+// sends those minutes as the session's first chunk, then records on and
+// uploads as it goes. stop(): consent withdrawn, everything unsent dropped.
 
 import { record, EventType, type eventWithTime } from "rrweb";
 import { isSecretKey, redactPairs, redactUrl } from "./redact";
 
-type StartOpts = {
+type BufferOpts = {
   apiBase: string;
   workspaceSlug: string;
-  sessionToken: string;
   /** Host opted in with data-record-network-bodies="true" on the widget
    *  script tag. Off by default: requests record without bodies. */
   captureBodies?: boolean;
 };
+type StartOpts = BufferOpts & { sessionToken: string };
 
 // Hard caps. Match the server in `lib/replay/ingest.ts` — when the server
 // returns 413, the recorder also self-trips here so we stop pushing chunks
@@ -25,13 +30,37 @@ const MAX_DURATION_MS = 30 * 60 * 1000;  // 30 minutes
 const FLUSH_EVENT_THRESHOLD = 50;
 const FLUSH_MS = 5_000;
 
+// The pre-consent window: the last two minutes, bounded by events and bytes.
+// While buffering, rrweb takes a fresh full snapshot after a minute or 500
+// changes, so old stretches can go whole: a stretch replays only from its own
+// snapshot.
+const WINDOW_MS = 2 * 60_000;
+const WINDOW_EVENTS = 1000;
+const WINDOW_BYTES = 2 * 1024 * 1024;
+// An idle tab takes no snapshots, so its last one can be long past; consent
+// sends stretches that began at most this far back (the server caps a
+// session at 30 minutes, start to end).
+const WINDOW_LOOKBACK_MS = 5 * 60_000;
+
+// Browsers refuse a keepalive request over 64 KiB (and a chunk with a full
+// snapshot is usually bigger), so only small chunks ask for it.
+const KEEPALIVE_MAX_BYTES = 60_000;
+
 // Network capture: cap per-body size + total count so the network stream can't
 // blow past the per-session byte/event caps on its own.
 const MAX_NET_BODY = 2048;
 const MAX_NET_EVENTS = 200;
 
+// One stretch of the window: a full snapshot and what followed it. `full`: it
+// hit the caps on its own, so it keeps its start and drops the rest.
+export type Stretch = { at: number; events: eventWithTime[]; bytes: number; full?: boolean };
+
 type State = {
-  opts: StartOpts;
+  opts: BufferOpts;
+  // The tab's session once the customer consented. Null while buffering:
+  // nothing leaves the page.
+  token: string | null;
+  window: Stretch[];
   stopRecorder: (() => void) | null;
   buffer: eventWithTime[];
   bufferBytes: number;
@@ -40,26 +69,50 @@ type State = {
   totalEvents: number;
   totalBytes: number;
   flushTimer: ReturnType<typeof setTimeout> | null;
-  bufferStartedAt: string | null;
   stopped: boolean;
   netCount: number;
   restoreNetwork: (() => void) | null;
 };
 
 let state: State | null = null;
+// Chunk uploads still on the wire, so flush() can wait for them.
+const sending = new Set<Promise<void>>();
 
-function nowIso(): string {
-  return new Date().toISOString();
+// Cheap byte count: rrweb events are JSON-shaped, and characters ≈ bytes for
+// the ASCII-heavy payloads we ship.
+const size = (e: eventWithTime): number => JSON.stringify(e).length + 1;
+const iso = (ms: number): string => new Date(ms).toISOString();
+
+// Add one event to the pre-consent window, dropping the oldest stretches once
+// newer ones cover the last two minutes, or to stay within the caps.
+export function keepRecent(w: Stretch[], e: eventWithTime, isCheckout?: boolean): void {
+  // A checkout opens with a Meta event (then its full snapshot).
+  if (!w.length || (isCheckout && e.type === EventType.Meta)) w.push({ at: e.timestamp, events: [], bytes: 0 });
+  const n = size(e);
+  const over = (): boolean => {
+    let events = 1, bytes = n;
+    for (const s of w) { events += s.events.length; bytes += s.bytes; }
+    return events > WINDOW_EVENTS || bytes > WINDOW_BYTES;
+  };
+  while (w.length > 1 && (w[1]!.at <= e.timestamp - WINDOW_MS || over())) w.shift();
+  const last = w[w.length - 1]!;
+  if (last.full || over()) { last.full = true; return; }
+  last.events.push(e);
+  last.bytes += n;
 }
 
-function approximateSize(events: eventWithTime[]): number {
-  // Cheap byte count without re-serializing on every emit. rrweb events
-  // are JSON-shaped — characters ≈ bytes for the ASCII-heavy payloads
-  // we actually ship (the few unicode strings inside are dwarfed by the
-  // DOM-mutation timestamps + ids).
-  let n = 2; // []
-  for (const e of events) n += JSON.stringify(e).length + 1;
-  return n;
+// Reloads continue the tab's session (the widget keeps its token in
+// sessionStorage), so its chunk numbers carry on too: the server refuses a
+// number it already has.
+const SEQ_KEY = "crumb_replay_seq";
+function savedSequence(token: string): number {
+  try {
+    const [t, n] = (sessionStorage.getItem(SEQ_KEY) ?? "").split(":");
+    return t === token ? Number(n) || 0 : 0;
+  } catch { return 0; }
+}
+function saveSequence(token: string, next: number): void {
+  try { sessionStorage.setItem(SEQ_KEY, `${token}:${next}`); } catch { /* storage blocked: a reload may repeat numbers */ }
 }
 
 function scheduleFlush() {
@@ -67,36 +120,38 @@ function scheduleFlush() {
   state.flushTimer = setTimeout(() => { void flush(); }, FLUSH_MS);
 }
 
-function clearFlushTimer() {
-  if (state?.flushTimer) {
-    clearTimeout(state.flushTimer);
-    state.flushTimer = null;
-  }
+// Stop recording. The state stays (stopped) so its session can still be
+// linked; stop() is the one that forgets it.
+function halt(s: State) {
+  s.stopped = true;
+  if (s.flushTimer) { clearTimeout(s.flushTimer); s.flushTimer = null; }
+  try { s.stopRecorder?.(); } catch { /* ignore */ }
+  try { s.restoreNetwork?.(); } catch { /* ignore */ }
+  s.stopRecorder = null;
+  s.restoreNetwork = null;
 }
 
-async function flush(final = false): Promise<void> {
-  if (!state || state.stopped) return;
-  clearFlushTimer();
-  if (state.buffer.length === 0) return;
+function flush(final = false): Promise<void> {
+  const s = state;
+  // Nothing leaves the page before consent.
+  if (!s?.token || s.stopped || s.buffer.length === 0) return Promise.resolve();
+  if (s.flushTimer) { clearTimeout(s.flushTimer); s.flushTimer = null; }
 
-  const events = state.buffer;
-  const bufferBytes = state.bufferBytes;
-  const startedAt = state.bufferStartedAt ?? nowIso();
-  const endedAt = nowIso();
-  const sequence = state.sequence;
-
-  state.buffer = [];
-  state.bufferBytes = 0;
-  state.bufferStartedAt = null;
-  state.sequence += 1;
-  state.totalEvents += events.length;
-  state.totalBytes += bufferBytes;
+  const events = s.buffer;
+  const sequence = s.sequence;
+  s.totalEvents += events.length;
+  s.totalBytes += s.bufferBytes;
+  s.buffer = [];
+  s.bufferBytes = 0;
+  s.sequence += 1;
+  saveSequence(s.token, s.sequence);
 
   const body = JSON.stringify({
-    workspace_slug: state.opts.workspaceSlug,
+    workspace_slug: s.opts.workspaceSlug,
     sequence,
-    started_at: startedAt,
-    ended_at: endedAt,
+    // The events' own times: the pre-consent window starts minutes back.
+    started_at: iso(events[0]!.timestamp),
+    ended_at: iso(events[events.length - 1]!.timestamp),
     // The page URL can carry a reset ?token= or an OAuth #access_token, and it
     // lands in the manifest and the AI summary: same redaction as requests.
     page_url: redactUrl(location.href),
@@ -108,7 +163,7 @@ async function flush(final = false): Promise<void> {
     events,
   });
 
-  const url = `${state.opts.apiBase}/api/v1/replay-sessions/${encodeURIComponent(state.opts.sessionToken)}/chunks`;
+  const url = `${s.opts.apiBase}/api/v1/replay-sessions/${encodeURIComponent(s.token)}/chunks`;
 
   if (final && typeof navigator.sendBeacon === "function") {
     // sendBeacon is the only transport that reliably survives `pagehide`.
@@ -118,47 +173,55 @@ async function flush(final = false): Promise<void> {
       const blob = new Blob([body], { type: "application/json" });
       navigator.sendBeacon(url, blob);
     } catch { /* host page may CSP-block beacon; nothing we can do here */ }
-    return;
+    return Promise.resolve();
   }
 
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-      // keepalive ensures the request can complete even if the tab is closing
-      // in the gap between visibilitychange and pagehide.
-      keepalive: true,
-    });
-    if (res.status === 413 || res.status === 410 || res.status === 403) {
-      // Server says we're capped, Cloud-disabled, or this workspace has the
-      // feature off — stop trying so we don't burn quota or rate-limit slots.
-      stop();
+  const sent = (async () => {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        // keepalive lets a small chunk finish even if the tab is closing in
+        // the gap between visibilitychange and pagehide.
+        keepalive: new Blob([body]).size <= KEEPALIVE_MAX_BYTES,
+      });
+      if (res.status === 413 || res.status === 410 || res.status === 403) {
+        // Server says we're capped, Cloud-disabled, or this workspace has the
+        // feature off — stop trying so we don't burn quota or rate-limit slots.
+        // (Unless this tab has since moved on to a fresh session.)
+        if (state === s) halt(s);
+      }
+    } catch {
+      // Network blips: drop this chunk on the floor rather than retrying. v1
+      // tolerates some loss; aggressive retry would amplify outages and burn
+      // the per-IP rate-limit budget on the way back up.
     }
-  } catch {
-    // Network blips: drop this chunk on the floor rather than retrying. v1
-    // tolerates some loss; aggressive retry would amplify outages and burn
-    // the per-IP rate-limit budget on the way back up.
-  }
+  })();
+  sending.add(sent);
+  void sent.then(() => { sending.delete(sent); });
+  return sent;
 }
 
-function emit(e: eventWithTime) {
+function emit(e: eventWithTime, isCheckout?: boolean) {
   if (!state || state.stopped) return;
   // rrweb's Meta event records the page URL too (see page_url in flush).
   if (e.type === EventType.Meta) e.data.href = redactUrl(e.data.href);
-  if (state.buffer.length === 0) state.bufferStartedAt = nowIso();
+  if (!state.token) { keepRecent(state.window, e, isCheckout); return; }
   state.buffer.push(e);
   // Approximate the new bytes without re-summing the whole buffer each time.
-  state.bufferBytes += JSON.stringify(e).length + 1;
+  state.bufferBytes += size(e);
 
-  // Self-trip on caps (size, count, duration). Final flush + stop the
+  // Self-trip on caps (size, count, duration): send what we have and stop the
   // recorder so we don't keep buffering events we'll never ship.
   const elapsed = Date.now() - state.startedAtMs;
   const overSize = state.totalBytes + state.bufferBytes >= MAX_SIZE_BYTES;
   const overEvents = state.totalEvents + state.buffer.length >= MAX_EVENT_COUNT;
   const overDuration = elapsed >= MAX_DURATION_MS;
   if (overSize || overEvents || overDuration) {
-    void flush().then(() => stop());
+    const s = state;
+    void flush();
+    halt(s);
     return;
   }
 
@@ -262,8 +325,11 @@ const bodiesOn = (): boolean => state?.opts.captureBodies === true;
 
 function recordNet(r: RawNet): void {
   if (!state || state.stopped) return;
-  if (state.netCount >= MAX_NET_EVENTS) return;
-  state.netCount += 1;
+  // The count caps a session; the window's own caps bound it before consent.
+  if (state.token) {
+    if (state.netCount >= MAX_NET_EVENTS) return;
+    state.netCount += 1;
+  }
   try { record.addCustomEvent("network", toNetEvent(r, bodiesOn())); } catch { /* recorder gone */ }
 }
 
@@ -346,78 +412,125 @@ function patchNetwork(apiBase: string): () => void {
   };
 }
 
-function start(opts: StartOpts) {
-  if (state) return; // already started in this tab
-  state = {
-    opts,
-    stopRecorder: null,
-    buffer: [],
-    bufferBytes: 0,
-    sequence: 0,
-    startedAtMs: Date.now(),
-    totalEvents: 0,
-    totalBytes: 0,
-    flushTimer: null,
-    bufferStartedAt: null,
-    stopped: false,
-    netCount: 0,
-    restoreNetwork: null,
-  };
-
-  // rrweb config:
-  //   - maskAllInputs + email/password explicitly blocked: privacy default.
-  //   - blockClass on shadow host + any `.crumb-block` opt-out: stops the
-  //     recorder from recording its own widget UI (recursive replay).
-  //   - maskTextClass `.crumb-mask`: vendor-side opt-out for text content.
-  //   - sampling: trim mousemove + scroll to a tolerable cadence.
-  const stopRecorder = record({
+// rrweb config:
+//   - maskAllInputs + email/password explicitly blocked: privacy default.
+//   - blockClass on shadow host + any `.crumb-block` opt-out: stops the
+//     recorder from recording its own widget UI (recursive replay).
+//   - maskTextClass `.crumb-mask`: vendor-side opt-out for text content.
+//   - sampling: trim mousemove + scroll to a tolerable cadence.
+//   - checkouts only while buffering: uploaded, they'd fill the session's caps.
+function startRrweb(buffering: boolean): (() => void) | null {
+  return record({
     emit,
+    checkoutEveryNms: buffering ? WINDOW_MS / 2 : undefined,
+    checkoutEveryNth: buffering ? WINDOW_EVENTS / 2 : undefined,
     maskAllInputs: true,
     maskInputOptions: { password: true, email: true },
     blockClass: "crumb-block",
     blockSelector: "#crumb-widget",
     maskTextClass: "crumb-mask",
     sampling: { mousemove: 50, scroll: 100, input: "last" },
-  });
-  state.stopRecorder = stopRecorder ?? null;
+  }) ?? null;
+}
+
+let listening = false;
+
+function begin(opts: BufferOpts, token: string | null) {
+  state = {
+    opts,
+    token,
+    window: [],
+    stopRecorder: null,
+    buffer: [],
+    bufferBytes: 0,
+    sequence: token ? savedSequence(token) : 0,
+    startedAtMs: Date.now(),
+    totalEvents: 0,
+    totalBytes: 0,
+    flushTimer: null,
+    stopped: false,
+    netCount: 0,
+    restoreNetwork: null,
+  };
+  state.stopRecorder = startRrweb(!token);
 
   // Capture network calls (excluding our own chunk POSTs to apiBase).
   try { state.restoreNetwork = patchNetwork(opts.apiBase); } catch { state.restoreNetwork = null; }
 
-  // Flush opportunities: tab hidden, page hide, before unload. `pagehide`
-  // is the last reliable signal before navigation; we use sendBeacon there
-  // because regular fetch may be canceled mid-flight on most browsers.
+  // Flush opportunities: tab hidden, page hide. `pagehide` is the last
+  // reliable signal before navigation; we use sendBeacon there because regular
+  // fetch may be canceled mid-flight on most browsers. Once per page: they
+  // act on whichever session is current.
+  if (listening) return;
+  listening = true;
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") void flush();
   });
   window.addEventListener("pagehide", () => { void flush(true); });
 }
 
+// Before consent: keep the last two minutes in memory, send nothing.
+function buffer(opts: BufferOpts) {
+  if (!state) begin(opts, null);
+}
+
+// The customer consented: record under this tab's session and upload.
+function start(opts: StartOpts) {
+  if (!state) { begin(opts, opts.sessionToken); return; }
+  if (state.token || state.stopped) return; // already this tab's session
+  // Buffering: the window goes first, then a fresh snapshot (the recorder
+  // restarts without checkouts) and everything after it.
+  const s = state;
+  s.opts = opts;
+  s.token = opts.sessionToken;
+  s.sequence = savedSequence(opts.sessionToken);
+  const since = Date.now() - WINDOW_LOOKBACK_MS;
+  for (const st of s.window) {
+    if (st.at < since) continue;
+    for (const e of st.events) s.buffer.push(e);
+    s.bufferBytes += st.bytes;
+  }
+  s.window = [];
+  s.startedAtMs = s.buffer[0]?.timestamp ?? Date.now();
+  try { s.stopRecorder?.(); } catch { /* ignore */ }
+  s.stopRecorder = startRrweb(false);
+  void flush();
+}
+
+// Consent withdrawn (or the customer signed out): stop, and drop everything
+// not yet sent. A later buffer() or start() begins afresh.
 function stop() {
-  if (!state || state.stopped) return;
-  state.stopped = true;
-  clearFlushTimer();
-  try { state.stopRecorder?.(); } catch { /* ignore */ }
-  state.stopRecorder = null;
-  try { state.restoreNetwork?.(); } catch { /* ignore */ }
-  state.restoreNetwork = null;
+  if (!state) return;
+  halt(state);
+  state = null;
+}
+
+// Everything recorded so far, sent and answered: the widget waits on this
+// before a submission links the session.
+function flushAll(): Promise<void> {
+  void flush();
+  return Promise.all(Array.from(sending)).then(() => undefined);
 }
 
 function getSessionToken(): string | null {
-  return state?.opts.sessionToken ?? null;
+  return state?.token ?? null;
 }
 
 // Expose on window so the main widget bundle (which doesn't import rrweb)
 // can drive it. Type-narrowed via `__crumbRecord__` so consumers don't have
-// to deal with `unknown`.
+// to deal with `unknown`. buffer and flush are newer than the rest: a widget
+// talking to a cached older recorder finds them missing and records only
+// after consent, as before.
 declare global {
   interface Window {
     __crumbRecord__?: {
+      buffer?: (opts: BufferOpts) => void;
       start: (opts: StartOpts) => void;
       stop: () => void;
+      flush?: () => Promise<void>;
       getSessionToken: () => string | null;
     };
   }
 }
 
-window.__crumbRecord__ = { start, stop, getSessionToken };
+window.__crumbRecord__ = { buffer, start, stop, flush: flushAll, getSessionToken };

@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { eq } from "drizzle-orm";
 import { db, workspaces, findValidSetupToken, claimSetupToken, releaseSetupToken } from "@crumb/db";
 import { SESSION_COOKIE, createSession } from "@/lib/auth";
-import { createWorkspaceWithAdmin } from "@/lib/provision";
+import { RESERVED_SLUGS, createWorkspaceWithAdmin } from "@/lib/provision";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
@@ -26,6 +26,9 @@ export async function bootstrapWorkspace(formData: FormData): Promise<OnboardRes
 
   if (!workspaceName)            return { ok: false, error: "Workspace name is required." };
   if (!SLUG_RE.test(slugRaw))    return { ok: false, error: "Slug must be lowercase letters, numbers, or hyphens (2–64 chars)." };
+  if (RESERVED_SLUGS.has(slugRaw)) {
+    return { ok: false, error: `"${slugRaw}" is reserved for Crumb's own pages. Pick another slug, like ${slugRaw}-team.` };
+  }
   if (!adminName)                return { ok: false, error: "Your name is required." };
   if (!EMAIL_RE.test(adminEmail)) return { ok: false, error: "Enter a valid email." };
 

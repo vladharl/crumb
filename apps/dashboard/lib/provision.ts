@@ -24,15 +24,29 @@ export function initialsFrom(name: string): string {
     .map(s => s[0]?.toUpperCase() ?? "").join("") || "?";
 }
 
-// Resolve `base` to an unused workspace slug, appending -2, -3, … on collision.
-// Used by self-serve signup, which auto-derives the slug from the workspace
-// name and must not error on a clash. There's still a TOCTOU window vs. the
-// unique constraint — createWorkspaceWithAdmin's caller handles the rare insert
-// failure by retrying.
+// Slugs no workspace may take. The public pages live at /<slug>/roadmap and
+// /<slug>/changelog, beside the app's own top-level routes, and a static route
+// always wins over the [slug] segment, so a workspace with one of these slugs
+// would get pages nobody can reach. Every top-level name in app/ and ee/app/
+// (tests/unit/reserved-slugs keeps this in step), plus a few to grow into.
+export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
+  "accounts", "api", "ask", "captures", "changelog", "fonts", "inbox", "initiatives", "insights", "items",
+  "login", "logout", "notifications", "onboard", "qbr", "roadmap", "settings", "signup", "t", "thread",
+  "admin", "app", "auth", "billing", "dashboard", "docs", "help", "invite", "legal", "pricing", "privacy",
+  "public", "status", "support", "terms", "widget",
+]);
+
+// Resolve `base` to an unused workspace slug, appending -2, -3, … on collision
+// or when `base` is reserved. Used by self-serve signup (both when it starts
+// and when the link is confirmed), which auto-derives the slug from the
+// workspace name and must not error on a clash. There's still a TOCTOU window
+// vs. the unique constraint — createWorkspaceWithAdmin's caller handles the
+// rare insert failure by retrying.
 export async function ensureUniqueSlug(base: string): Promise<string> {
-  const root = (base || "workspace").slice(0, 60);
+  const root = (base || "workspace").slice(0, 60).replace(/-+$/, "") || "workspace";
   for (let n = 1; n < 1000; n++) {
     const candidate = n === 1 ? root : `${root}-${n}`;
+    if (RESERVED_SLUGS.has(candidate)) continue;
     const [taken] = await db.select({ id: workspaces.id })
       .from(workspaces).where(eq(workspaces.slug, candidate)).limit(1);
     if (!taken) return candidate;

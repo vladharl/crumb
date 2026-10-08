@@ -252,7 +252,10 @@ export async function updateInitiative(
   if (shippedNow) {
     const entry = await draftChangelogForInitiative(workspace, id);
     if (entry && !entry.publishedAt) {
-      announce = { entryId: entry.id, title: entry.title, body: entry.body, audience: await announcementAudience(workspace.id, id) };
+      const audience = await announcementAudience(workspace.id, id);
+      // Public followers only get a public entry (lib/changelog tellPublicFollowers).
+      if (!entry.isPublic) audience.followers = 0;
+      announce = { entryId: entry.id, title: entry.title, body: entry.body, audience };
     }
   }
 
@@ -300,11 +303,13 @@ export async function bulkSetInitiative(
 }
 
 // ─── Board: roadmap column placement + ordering ─────────────
-// The Initiatives board (Now/Next/Later + Unscheduled) is the primary view.
-// A drag persists the target column AND the new order for every card in that
-// column via a single reorder call. Followers of a public initiative are
-// notified when it lands in a new column, so the board holds that call behind
-// an Undo toast first (InitiativesBoard).
+// The Initiatives board (Now/Next/Later + Unscheduled, and Shipped) is the
+// primary view. A drag persists the target column AND the new order for every
+// card in that column via a single reorder call. Followers of a public
+// initiative are notified when it lands in a new column, so the board holds
+// that call behind an Undo toast first (InitiativesBoard). Shipped is a status,
+// not a column: a drop there goes through updateInitiative, and a shipped
+// initiative keeps its column for if it's un-shipped (lib/roadmap).
 export async function reorderInitiatives(
   column: string | null,
   orderedIds: string[],
@@ -354,7 +359,9 @@ export async function reorderInitiatives(
     const origin = originFromHeaders(headers());
     for (const id of orderedIds) {
       const p = prevById.get(id);
-      if (p && p.isPublic && p.roadmapColumn !== column) {
+      // A shipped initiative shows in Shipped, so a column change is no news.
+      // This emails its widget and public-page followers, each address once.
+      if (p && p.isPublic && p.status !== "shipped" && p.roadmapColumn !== column) {
         void notifyRoadmapFollowers(workspace, id, p.name, `moved to ${ROADMAP_COLUMN_LABEL[column]}`, origin);
       }
     }
@@ -365,7 +372,7 @@ export async function reorderInitiatives(
 // The edit panel's Column control: puts one initiative at the end of a column
 // (null = Unscheduled) without a drag. It saves through reorderInitiatives, so
 // the webhook and the follower email match a drop on the board. Ties keep the
-// board's order (roadmap order, then short id).
+// board's order (roadmap order, then short id); shipped cards aren't in it.
 export async function moveInitiative(
   id: string,
   column: string | null,
@@ -382,6 +389,7 @@ export async function moveInitiative(
     .where(and(
       eq(initiatives.workspaceId, workspace.id),
       column === null ? isNull(initiatives.roadmapColumn) : eq(initiatives.roadmapColumn, column),
+      ne(initiatives.status, "shipped"),
       ne(initiatives.id, id),
     ))
     .orderBy(asc(initiatives.roadmapOrder), asc(initiatives.shortId));

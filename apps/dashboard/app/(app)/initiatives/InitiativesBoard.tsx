@@ -4,15 +4,17 @@ import { useEffect, useRef, useState, useTransition, type CSSProperties } from "
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card, Switch } from "@crumb/ui";
+import type { Announce } from "@/lib/changelog";
+import { AnnouncePrompt } from "@/app/(app)/changelog/Announce";
 import { InitiativeStatusPill } from "./InitiativeChip";
-import { reorderInitiatives, setInitiativePublic } from "./actions";
+import { reorderInitiatives, setInitiativePublic, updateInitiative } from "./actions";
 import { MOVE_UNDONE, moveEmailsFollowers, movedMessage } from "./useColumnMove";
 import { formatArr } from "@/lib/priority";
 import { sendAfterDelay, STATUS_EMAIL_DELAY_MS } from "@/components/ReplyComposer";
 import { useToast } from "@/components/toast";
 
 export type BoardCol = "now" | "next" | "later";
-export type BoardKey = BoardCol | "unscheduled";
+export type BoardKey = BoardCol | "unscheduled" | "shipped";
 
 export type BoardItem = {
   id: string;
@@ -31,6 +33,7 @@ export type BoardItem = {
   accountCount: number;
   ownerName: string | null;
   createdAt: string; // ISO
+  shippedAt: string | null; // ISO, while shipped (lib/roadmap shippedAtSql)
 };
 
 const COLUMNS: Array<{ key: BoardKey; label: string; hint: string }> = [
@@ -38,11 +41,43 @@ const COLUMNS: Array<{ key: BoardKey; label: string; hint: string }> = [
   { key: "now", label: "Now", hint: "Shipping / in progress" },
   { key: "next", label: "Next", hint: "Up soon" },
   { key: "later", label: "Later", hint: "On the horizon" },
+  { key: "shipped", label: "Shipped", hint: "Recently shipped first" },
 ];
 
-const colOf = (key: BoardKey): BoardCol | null => (key === "unscheduled" ? null : key);
+const colOf = (key: Exclude<BoardKey, "shipped">): BoardCol | null => (key === "unscheduled" ? null : key);
+
+// Shipped is a status, not a column (lib/roadmap): a shipped card sits in
+// Shipped whatever its column, and goes back there if it's un-shipped.
+const laneOf = (i: Pick<BoardItem, "status" | "column">): BoardKey =>
+  i.status === "shipped" ? "shipped" : i.column ?? "unscheduled";
 
 const sortCards = (a: BoardItem, b: BoardItem) => a.order - b.order || a.shortId.localeCompare(b.shortId);
+const newestShipped = (a: BoardItem, b: BoardItem) => (b.shippedAt ?? "").localeCompare(a.shippedAt ?? "") || sortCards(a, b);
+
+// Why Public is locked on an unscheduled card (lib/roadmap onPublicRoadmapSql).
+export const PUBLIC_HINT = "Shows on the roadmap once it's in Now, Next or Later, or Shipped.";
+
+// The shared Switch has no disabled state: a locked one is the same control,
+// inert, and points at the sentence saying why.
+export function PublicSwitch({ on, locked, describedBy, onClick }: {
+  on: boolean;
+  locked: boolean;
+  describedBy: string;
+  onClick: () => void;
+}) {
+  if (!locked) return <Switch on={on} onClick={onClick} />;
+  return (
+    <button
+      type="button"
+      className="switch"
+      role="switch"
+      aria-checked={false}
+      aria-describedby={describedBy}
+      disabled
+      style={{ opacity: 0.55, cursor: "default" }}
+    />
+  );
+}
 
 // Gives each listed card `column`, and its place in the list as its order.
 function placed(list: BoardItem[], column: BoardCol | null, orderedIds: string[]): BoardItem[] {
@@ -83,6 +118,8 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
   const [, startTransition] = useTransition();
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ col: BoardKey; index: number } | null>(null);
+  // The ship-and-announce prompt for a card just dropped on Shipped.
+  const [announce, setAnnounce] = useState<Announce | null>(null);
   const held = useRef<Held | null>(null);
   const server = useRef(initial);
   server.current = initial;
@@ -156,7 +193,7 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
     held.current = { id: card.id, from: { column: card.column, order: card.order }, column, orderedIds, toastId, ...pending };
   }
 
-  const byCol = (key: BoardKey) => items.filter(i => i.column === colOf(key)).sort(sortCards);
+  const byCol = (key: BoardKey) => items.filter(i => laneOf(i) === key).sort(key === "shipped" ? newestShipped : sortCards);
 
   // Scale every initiative's revenue meter against the board's largest, so the
   // bars are comparable across columns. `|| 1` guards the empty board.
@@ -169,9 +206,20 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
       () => setInitiativePublic(id, !cur.isPublic));
   }
 
+  // Dropping on Shipped marks the card shipped through the same update as the
+  // edit panel's Status, so it drafts the changelog entry and offers to announce it.
+  function ship(base: BoardItem[], card: BoardItem) {
+    setError(null);
+    setItems(base.map(i => (i.id === card.id ? { ...i, status: "shipped", shippedAt: new Date().toISOString() } : i)));
+    save(async () => {
+      const r = await updateInitiative(card.id, { status: "shipped" });
+      if (r.ok && r.announce) setAnnounce(r.announce);
+      return r;
+    });
+  }
+
   function handleDrop(targetKey: BoardKey) {
     if (!dragId) return;
-    const target = colOf(targetKey);
     // The latest move of a card wins: its held move is dropped and this one
     // starts from where the card was. A held move of another card saves now.
     const h = held.current;
@@ -181,9 +229,19 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
       if (dropHeld()) { base = unheld(items, h); undone = true; }
     } else h?.flush();
     const dragged = base.find(i => i.id === dragId);
-    if (!dragged) { setDragId(null); setDropTarget(null); return; }
+    setDragId(null);
+    setDropTarget(null);
+    if (!dragged) return;
 
-    const inTarget = base.filter(i => i.column === target).sort(sortCards);
+    // Only unshipped cards drag, so this always ships one.
+    if (targetKey === "shipped") {
+      if (undone) toast.show({ message: MOVE_UNDONE });
+      ship(base, dragged);
+      return;
+    }
+
+    const target = colOf(targetKey);
+    const inTarget = base.filter(i => laneOf(i) === targetKey).sort(sortCards);
     const colList = inTarget.filter(i => i.id !== dragId);
     let index = dropTarget && dropTarget.col === targetKey ? dropTarget.index : colList.length;
     index = Math.max(0, Math.min(index, colList.length));
@@ -193,8 +251,6 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
     // Private and unscheduled cards (and moves within a column) email no one.
     const emails = target !== null && moveEmailsFollowers(dragged, target);
 
-    setDragId(null);
-    setDropTarget(null);
     if (undone && !emails) toast.show({ message: MOVE_UNDONE });
     if (noop) {
       if (undone) setItems(base);
@@ -227,53 +283,67 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
         </Card>
       )}
       {canManage && items.length > 0 && (
-        <span className="board-drag-hint text-xs muted">Drag cards to schedule and reorder them, or open one to set its column. Toggle <strong style={{ fontWeight: 600 }}>Public</strong> to show an initiative on the customer roadmap. Moving a public card to another column emails its followers, after a few seconds to undo.</span>
+        <span className="board-drag-hint text-xs muted">Drag cards to schedule and reorder them, or open one to set its column. Drop one on <strong style={{ fontWeight: 600 }}>Shipped</strong> to mark it shipped and announce it. Toggle <strong style={{ fontWeight: 600 }}>Public</strong> to show an initiative on the customer roadmap. Moving a public card to another column emails its followers, after a few seconds to undo.</span>
       )}
       <div className="board-cols">
         {COLUMNS.map(c => {
           const colItems = byCol(c.key);
           const isColTarget = dropTarget?.col === c.key;
+          // Shipped runs full width under the board, its cards on the board's
+          // own grid (each padded as a column pads its cards, so they line up).
+          // It's ordered by ship date, so its cards don't drag.
+          const shipped = c.key === "shipped";
+          const movable = canManage && !shipped;
           return (
-            <div key={c.key} className="col gap-2">
+            <div key={c.key} className="col gap-2" style={shipped ? { gridColumn: "1 / -1" } : undefined}>
               <div className="col gap-0" style={{ padding: "2px 2px 6px" }}>
                 <span className="serif text-md">{c.label}</span>
                 <span className="text-xs muted">{c.hint}</span>
               </div>
+              {shipped && announce && (
+                <div style={{ maxWidth: 560 }}>
+                  <AnnouncePrompt announce={announce} onClose={() => setAnnounce(null)} />
+                </div>
+              )}
               <div
-                className="col gap-2"
+                className={shipped ? "board-cols" : "col gap-2"}
                 onDragOver={canManage ? (e => { e.preventDefault(); setDropTarget({ col: c.key, index: colItems.length }); }) : undefined}
                 onDrop={canManage ? (e => { e.preventDefault(); handleDrop(c.key); }) : undefined}
                 style={{
                   minHeight: 80,
                   borderRadius: "var(--r-sm)",
-                  padding: 4,
+                  padding: shipped ? 0 : 4,
                   transition: "background 120ms, box-shadow 120ms",
                   background: isColTarget ? "rgba(226,125,58,0.06)" : "transparent",
                   boxShadow: isColTarget ? "inset 0 0 0 1.5px var(--accent, #E27D3A)" : "none",
                 }}
               >
                 {colItems.length === 0 && (
-                  <div style={{ border: "1px dashed var(--line, var(--hair))", borderRadius: "var(--r-sm)", padding: 14, textAlign: "center" }}>
-                    <span className="text-xs muted">{canManage ? "Drop here" : "—"}</span>
+                  <div style={{ gridColumn: "1 / -1", margin: shipped ? 4 : 0, border: "1px dashed var(--line, var(--hair))", borderRadius: "var(--r-sm)", padding: 14, textAlign: "center" }}>
+                    <span className="text-xs muted">{canManage ? (shipped ? "Drop a card here to mark it shipped" : "Drop here") : "—"}</span>
                   </div>
                 )}
                 {colItems.map((it, idx) => {
-                  const showLineBefore = canManage && isColTarget && dropTarget?.index === idx && dragId !== it.id;
+                  const showLineBefore = movable && isColTarget && dropTarget?.index === idx && dragId !== it.id;
+                  // Customers can't see an unscheduled card, so Public is locked
+                  // there (one already public can still be switched off).
+                  const hidden = laneOf(it) === "unscheduled";
+                  const locked = hidden && !it.isPublic;
                   return (
-                    <div key={it.id}>
+                    <div key={it.id} style={shipped ? { padding: 4 } : undefined}>
                       {showLineBefore && <div style={{ height: 2, background: "var(--accent, #E27D3A)", borderRadius: 2, margin: "2px 0" }} />}
                       <div
-                        draggable={canManage}
-                        onDragStart={canManage ? (e => { setDragId(it.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", it.id); }) : undefined}
-                        onDragEnd={canManage ? (() => { setDragId(null); setDropTarget(null); }) : undefined}
-                        onDragOver={canManage ? (e => {
+                        draggable={movable}
+                        onDragStart={movable ? (e => { setDragId(it.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", it.id); }) : undefined}
+                        onDragEnd={movable ? (() => { setDragId(null); setDropTarget(null); }) : undefined}
+                        onDragOver={movable ? (e => {
                           e.preventDefault();
                           e.stopPropagation();
                           const rect = e.currentTarget.getBoundingClientRect();
                           const before = (e.clientY - rect.top) < rect.height / 2;
                           setDropTarget({ col: c.key, index: idx + (before ? 0 : 1) });
                         }) : undefined}
-                        style={{ cursor: canManage ? "grab" : undefined, opacity: dragId === it.id ? 0.4 : 1 }}
+                        style={{ cursor: movable ? "grab" : undefined, opacity: dragId === it.id ? 0.4 : 1 }}
                       >
                         <Card
                           className="init-card"
@@ -291,7 +361,7 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
                               color: "inherit",
                               textDecoration: "none",
                               borderRadius: "inherit",
-                              cursor: canManage ? "grab" : undefined,
+                              cursor: movable ? "grab" : undefined,
                             }}
                           >
                             <div className="row gap-2 center" style={{ minWidth: 0 }}>
@@ -337,28 +407,38 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
                             )}
                             <div className="row between center" style={{ flexWrap: "wrap", gap: 6 }}>
                               <span className="text-xs muted truncate">{it.ownerName ?? "Unassigned"}</span>
-                              <span className="text-2xs muted mono">{fmtDate(it.createdAt)}</span>
+                              <span className="text-2xs muted mono">
+                                {it.shippedAt ? `Shipped ${fmtDate(it.shippedAt)}` : fmtDate(it.createdAt)}
+                              </span>
                             </div>
                           </Link>
                           {canManage && (
                             <div
-                              className="row gap-2 center"
+                              className="col gap-1"
                               style={{ margin: "0 12px", padding: "8px 0 12px", borderTop: "1px solid var(--line, var(--hair))" }}
                               draggable={false}
                             >
-                              {/* The label names the switch for screen readers. */}
-                              <label className="row gap-2 center" style={{ cursor: "pointer" }}>
-                                <Switch on={it.isPublic} onClick={() => togglePublic(it.id)} />
-                                <span className="text-xs muted">Public</span>
-                              </label>
-                              {it.isPublic && it.followers > 0 && (
-                                <span className="text-xs muted" style={{ marginLeft: "auto" }}>{it.followers} follower{it.followers === 1 ? "" : "s"}</span>
-                              )}
+                              <div className="row gap-2 center">
+                                {/* The label names the switch for screen readers. */}
+                                <label className="row gap-2 center" style={{ cursor: locked ? "default" : "pointer" }}>
+                                  <PublicSwitch
+                                    on={it.isPublic}
+                                    locked={locked}
+                                    describedBy={`pub-hint-${it.id}`}
+                                    onClick={() => togglePublic(it.id)}
+                                  />
+                                  <span className="text-xs muted">Public</span>
+                                </label>
+                                {it.isPublic && it.followers > 0 && (
+                                  <span className="text-xs muted" style={{ marginLeft: "auto" }}>{it.followers} follower{it.followers === 1 ? "" : "s"}</span>
+                                )}
+                              </div>
+                              {hidden && <span id={`pub-hint-${it.id}`} className="text-2xs muted">{PUBLIC_HINT}</span>}
                             </div>
                           )}
                         </Card>
                       </div>
-                      {canManage && isColTarget && dropTarget?.index === idx + 1 && idx === colItems.length - 1 && dragId !== it.id && (
+                      {movable && isColTarget && dropTarget?.index === idx + 1 && idx === colItems.length - 1 && dragId !== it.id && (
                         <div style={{ height: 2, background: "var(--accent, #E27D3A)", borderRadius: 2, margin: "2px 0" }} />
                       )}
                     </div>

@@ -443,7 +443,8 @@ textarea.field { min-height: 84px; }
 .item-row:hover { background: var(--c-surface-2); border-color: var(--c-line-2); }
 .item-row:active { transform: scale(0.995); }
 .item-row .top { display: flex; align-items: center; gap: 8px; }
-.item-row .news-dot { flex: none; width: 7px; height: 7px; border-radius: 999px; background: var(--c-brand, var(--c-accent-ink)); }
+.news-dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 999px; background: var(--c-brand, var(--c-accent-ink)); }
+.tab .news-dot { width: 6px; height: 6px; margin-left: 6px; vertical-align: 2px; }
 .item-row .short { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--c-ink-2); }
 .item-row .age { margin-left: auto; font-size: 11px; color: var(--c-ink-2); white-space: nowrap; }
 .item-row .title { font-size: 13.5px; color: var(--c-ink); font-weight: 500; line-height: 1.45; word-wrap: break-word; }
@@ -614,7 +615,9 @@ textarea.field.reply-box { flex: 1; min-height: 0; max-height: 160px; resize: no
   margin-top: 2px;
 }
 ` +
-// The public roadmap (Now / Next / Later), and email settings as switches.
+// The public roadmap (Now / Next / Later, then Recently shipped), each card
+// with its status; What's new as a plain list of entries; email settings as
+// switches.
 `
 .rm-board { display: flex; flex-direction: column; gap: 18px; }
 .rm-col { display: flex; flex-direction: column; gap: 8px; }
@@ -641,6 +644,15 @@ textarea.field.reply-box { flex: 1; min-height: 0; max-height: 160px; resize: no
 }
 .rm-follow:hover { background: var(--c-surface-2); color: var(--c-ink); }
 .rm-follow.on { background: var(--c-accent-soft); border-color: var(--c-accent); color: var(--c-accent-ink); }
+.rm-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--c-ink-2); }
+
+.news-list { display: flex; flex-direction: column; }
+.news-entry { display: flex; flex-direction: column; gap: 4px; padding: 14px 2px; }
+.news-entry:first-child { padding-top: 2px; }
+.news-entry + .news-entry { border-top: 1px solid var(--c-line); }
+.news-top { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--c-ink-2); }
+.news-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.4; letter-spacing: -0.01em; color: var(--c-ink); overflow-wrap: anywhere; }
+.news-body { margin: 0; font-size: 13px; line-height: 1.55; color: var(--c-ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .set-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; }
 .set-row + .set-row { border-top: 1px solid var(--c-line); }

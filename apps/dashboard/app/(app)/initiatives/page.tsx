@@ -20,7 +20,7 @@ export default async function InitiativesListPage() {
       <PageHead
         crumb="Initiatives"
         title="Initiatives"
-        lede="Group feedback into themed buckets, then move them across Now / Next / Later to shape the roadmap. Mark one public and customers see it in the widget."
+        lede="Group feedback into themed buckets, then move them across Now, Next and Later, and into Shipped, to shape the roadmap. Public ones show in the widget once they're scheduled or shipped."
         actions={canManage ? <NewInitiativeForm /> : null}
       />
       <Suspense fallback={<InitiativesTableSkeleton />}>

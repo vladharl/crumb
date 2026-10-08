@@ -31,7 +31,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }))
 vi.mock("@/app/(app)/changelog/actions", () => ({ publishEntry: vi.fn() }));
 vi.mock("@/app/(app)/thread/[shortId]/actions", () => ({}));
 
-import { announcementAudience, publishChangelogEntry } from "@/lib/changelog";
+import { announcementAudience, draftChangelogForInitiative, publishChangelogEntry } from "@/lib/changelog";
 import { publishedMessage } from "@/app/(app)/changelog/Announce";
 
 // Shipping an initiative and announcing it: the count the vendor confirms is
@@ -90,13 +90,13 @@ describe.skipIf(!reachable && !process.env.CI)("announcing a shipped initiative"
 
     // What the prompt and the confirm count.
     const skipped = { count: 3, sources: ["zendesk"], noEmail: true, muted: true };
-    expect(await announcementAudience(ws!.id, ini!.id)).toEqual({ reach: 3, skipped, emailOn: true, openItems: 4 });
+    expect(await announcementAudience(ws!.id, ini!.id)).toEqual({ reach: 3, followers: 0, alreadyHeard: 0, skipped, emailOn: true, openItems: 4 });
 
     const r = await publishChangelogEntry(ws!, entry!.id, {
       origin: "https://crumb.test",
       markShipped: { workspaceId: ws!.id, actorWorkspaceUserId: pm!.id, role: "admin" },
     });
-    expect(r).toEqual({ ok: true, announced: true, delivered: 3, failed: 0, skipped, emailOn: true, marked: 4 });
+    expect(r).toEqual({ ok: true, announced: true, delivered: 3, failed: 0, followers: 0, skipped, emailOn: true, marked: 4 });
     if (!r.ok) return;
     expect(publishedMessage(r)).toBe(
       "Sent to 3 customers. Marked 4 requests Shipped. 3 can't be emailed: they came in through Zendesk, have no email address, or turned updates off.",
@@ -129,7 +129,7 @@ describe.skipIf(!reachable && !process.env.CI)("announcing a shipped initiative"
     // Publishing twice sends nothing more; a hand-written entry emails no one.
     expect(await publishChangelogEntry(ws!, entry!.id)).toEqual({ ok: false, error: "already_decided" });
     const plain = await publishChangelogEntry(ws!, manual!.id);
-    expect(plain).toEqual({ ok: true, announced: false });
+    expect(plain).toEqual({ ok: true, announced: false, followers: 0 });
     if (plain.ok) expect(publishedMessage(plain)).toBe("Published to your changelog.");
     expect(h.sent).toHaveLength(4);
   });
@@ -188,5 +188,18 @@ describe.skipIf(!reachable && !process.env.CI)("announcing a shipped initiative"
       "qin@initech.test": "Shipped: Black background",
     });
     expect(h.sent).toHaveLength(4);
+  });
+
+  it("drafts a private initiative's entry as private, a public one's as public", async () => {
+    const [ws] = await db.insert(workspaces)
+      .values({ slug: `draft-vis-${randomUUID().slice(0, 8)}`, name: "Acme" })
+      .returning();
+    created.push(ws!.id);
+    const [priv, pub] = await db.insert(initiatives).values([
+      { workspaceId: ws!.id, seq: 1, shortId: "IN-1", name: "Internal billing rework", status: "shipped", isPublic: false },
+      { workspaceId: ws!.id, seq: 2, shortId: "IN-2", name: "Dark mode", status: "shipped", isPublic: true },
+    ]).returning({ id: initiatives.id });
+    expect((await draftChangelogForInitiative(ws!, priv!.id))?.isPublic).toBe(false);
+    expect((await draftChangelogForInitiative(ws!, pub!.id))?.isPublic).toBe(true);
   });
 });

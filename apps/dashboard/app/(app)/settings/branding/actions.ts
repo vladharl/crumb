@@ -86,6 +86,16 @@ export async function saveBranding(input: SaveInput): Promise<SaveResult> {
   return { ok: true };
 }
 
+// The opt-in for the public roadmap and changelog pages (app/[slug]). While
+// it's off, both pages 404 and public followers get no email.
+export async function setPublicPagesEnabled(enabled: boolean): Promise<SaveResult> {
+  const { workspace, user } = await requireSession();
+  if (user.role !== "admin") return { ok: false, error: "Only admins can turn public pages on or off." };
+  await db.update(workspaces).set({ publicPagesEnabled: enabled === true }).where(eq(workspaces.id, workspace.id));
+  revalidatePath("/settings/branding");
+  return { ok: true };
+}
+
 // ─── live site preview ───────────────────────────────────────
 // Fetches the vendor's real site server-side (their browser couldn't — most
 // sites send X-Frame-Options / frame-ancestors) and returns sanitized HTML

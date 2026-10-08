@@ -190,13 +190,20 @@ type View =
   | { kind: "list" }
   | { kind: "admin" }
   | { kind: "roadmap" }
+  | { kind: "news" }
   | { kind: "settings" }
   | { kind: "compose"; type: ItemType; title: string; body: string }
   | { kind: "thread"; shortId: string; reply: string }
   | { kind: "confirm"; shortId: string };
 
-type RoadmapEntry = { id: string; short_id: string; name: string; description: string | null; status: string; following: boolean };
-type RoadmapData = { columns: { now: RoadmapEntry[]; next: RoadmapEntry[]; later: RoadmapEntry[] } };
+// Now, Next and Later, then Recently shipped (the most recent few).
+const LANES = ["now", "next", "later", "shipped"] as const;
+type Lane = (typeof LANES)[number];
+type RoadmapEntry = { id: string; short_id: string; name: string; description: string | null; status: string; following: boolean; lane?: Lane; shipped_at?: string | null };
+type RoadmapData = { columns: Partial<Record<Lane, RoadmapEntry[]>> };
+
+// A published changelog entry ("What's new"), newest first from the API.
+export type NewsEntry = { id: string; title: string; body: string; published_at: string | null };
 
 type NotifPrefs = { replies: boolean; status: boolean; roadmap: boolean; unsubscribed_all: boolean };
 type Me = {
@@ -331,6 +338,10 @@ const NEWS_STATUSES = new Set<Status>(["planned", "progress", "shipped", "declin
 // do, so the "close this request" affordance is hidden.
 const CLOSED_STATUSES = new Set<Status>(["shipped", "declined", "duplicate", "resolved"]);
 
+// An initiative's status in the customer's words: its request-status twin
+// (the dashboard's initiative pill uses the same dots).
+const INITIATIVE_STATUS: Record<string, Status> = { open: "open", in_progress: "progress", shipped: "shipped", parked: "deferred" };
+
 // Text and double-quoted attribute values alike: a teammate named
 // `x" onfocus="…` must not break out of aria-label="Remove ${name}".
 export function escapeHtml(s: string): string {
@@ -415,6 +426,12 @@ export function itemNews(it: ItemSummary, seenReplies = 0, seenStatus?: string):
     reply: (it.vendor_reply_count ?? 0) > seenReplies,
     status: NEWS_STATUSES.has(it.status) && seenStatus !== it.status,
   };
+}
+
+// What's new since the customer last looked: a changelog entry published
+// after the newest one they had seen. Never looked on this device: all are.
+export function newsUnseen(e: NewsEntry, seenAt: string | null): boolean {
+  return !seenAt || Date.parse(e.published_at ?? "") > Date.parse(seenAt);
 }
 
 // A returning customer's first load since unread moved to its own key (the old
@@ -517,11 +534,16 @@ function scoreRoadmap(query: string, e: RoadmapEntry): number {
 // game-over independently of session record.
 const SESSION_TOKEN_KEY = "crumb_replay_token";
 
-function getOrCreateSessionToken(): string {
+function storedSessionToken(): string | null {
   try {
-    const existing = sessionStorage.getItem(SESSION_TOKEN_KEY);
-    if (existing && /^[0-9a-f]{32}$/.test(existing)) return existing;
-  } catch { /* sessionStorage may be blocked; fall through to generate */ }
+    const t = sessionStorage.getItem(SESSION_TOKEN_KEY);
+    return t && /^[0-9a-f]{32}$/.test(t) ? t : null;
+  } catch { return null; } // sessionStorage may be blocked
+}
+
+function getOrCreateSessionToken(): string {
+  const existing = storedSessionToken();
+  if (existing) return existing;
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   const token = Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
@@ -529,36 +551,42 @@ function getOrCreateSessionToken(): string {
   return token;
 }
 
-// Recording is consent-gated: we never record until the customer explicitly
-// opts in (a checkbox in the compose form). Consent is remembered per-tab so a
-// reload mid-session keeps recording without re-asking. Same sessionStorage
-// scope as the replay token above.
+// Recording is consent-gated: nothing is sent until the customer explicitly
+// opts in (a checkbox in the compose form). The choice is remembered per tab,
+// so a reload mid-session keeps it, and it belongs to that customer: whoever is
+// signed in next on this tab starts unasked, with a session of their own.
+// "off" is an explicit no, which also keeps the pre-consent buffer off until
+// they tick again. Same sessionStorage scope as the replay token above.
 const CONSENT_KEY = "crumb_replay_consent";
-function hasRecordConsent(): boolean {
-  try { return sessionStorage.getItem(CONSENT_KEY) === "1"; } catch { return false; }
-}
-function writeRecordConsent(on: boolean): void {
+function recordChoice(owner: string): "on" | "off" | null {
   try {
-    if (on) sessionStorage.setItem(CONSENT_KEY, "1");
-    else sessionStorage.removeItem(CONSENT_KEY);
+    const v = sessionStorage.getItem(CONSENT_KEY);
+    return v === `on:${owner}` ? "on" : v === `off:${owner}` ? "off" : null;
+  } catch { return null; }
+}
+function writeRecordChoice(owner: string, on: boolean): void {
+  try {
+    // Withdrawn, or someone else's session on this tab: the next consent
+    // starts a fresh one.
+    if (!on || !sessionStorage.getItem(CONSENT_KEY)?.endsWith(`:${owner}`)) sessionStorage.removeItem(SESSION_TOKEN_KEY);
+    sessionStorage.setItem(CONSENT_KEY, `${on ? "on" : "off"}:${owner}`);
   } catch { /* sessionStorage may be blocked; recording just won't persist */ }
 }
+function clearRecordChoice(): void {
+  try { sessionStorage.removeItem(CONSENT_KEY); sessionStorage.removeItem(SESSION_TOKEN_KEY); } catch { /* ignore */ }
+}
 
+// The recorder is its own bundle, loaded once /me says the workspace records.
+// `ready` runs when it's there (and again on each later call).
 let recorderInjected = false;
-function ensureRecorder(apiBase: string, workspaceSlug: string, sessionToken: string, captureBodies: boolean) {
-  if (recorderInjected) return;
+function loadRecorder(apiBase: string, ready: () => void) {
+  if (window.__crumbRecord__) { ready(); return; }
+  if (recorderInjected) return; // still loading: its onload runs `ready`
   recorderInjected = true;
-  const startIfReady = () => {
-    // Consent can be withdrawn (or the customer signed out) while the bundle loads.
-    if (window.__crumbRecord__ && hasRecordConsent()) {
-      window.__crumbRecord__.start({ apiBase, workspaceSlug, sessionToken, captureBodies });
-    }
-  };
-  if (window.__crumbRecord__) { startIfReady(); return; }
   const s = document.createElement("script");
   s.src = `${apiBase}/widget-record.js`;
   s.async = true;
-  s.onload = startIfReady;
+  s.onload = ready;
   // If the customer's CSP blocks the script, onload won't fire — that's fine,
   // the widget itself keeps working. Document the CSP gotcha in the README.
   document.head.appendChild(s);
@@ -769,6 +797,11 @@ function init(config: Config) {
   let threadState: AsyncState = { kind: "idle" };
   let roadmap: RoadmapData | null = null;
   let roadmapState: AsyncState = { kind: "idle" };
+  // One lane of the loaded roadmap (none before it loads).
+  const laneOf = (k: Lane): RoadmapEntry[] => roadmap?.columns[k] ?? [];
+  // What's new: loaded on the first open; its tab shows once it has entries.
+  let news: NewsEntry[] | null = null;
+  let newsState: AsyncState = { kind: "idle" };
   // Live fuzzy-search query for the "Your feedback" list. Persists while the
   // panel is open; reset when navigating away from the list (see handlers).
   let searchQuery = "";
@@ -796,9 +829,6 @@ function init(config: Config) {
   // The token the API last reported expired, so onTokenExpired fires once per token.
   let expiredJwt: string | undefined;
   const expiredListeners: Array<() => void> = [];
-  // Set once a sign-out stopped the recorder: it can't restart in this tab,
-  // so its session (the previous customer's) must never be linked again.
-  let replayRetired = false;
   // Where the next render() puts focus: true = the view's first sensible
   // control, a selector = that control. False = keep it where it is.
   let moveFocus: boolean | string = false;
@@ -815,6 +845,7 @@ function init(config: Config) {
       searchQuery = "";
       if (view.kind === "list") markAllStatusesSeen();
     }
+    if (view.kind === "news" && v.kind !== "news") markNewsSeen();
     // Files belong to the composer they were attached in.
     const box = v.kind === "compose" ? "compose" : v.kind === "thread" ? v.shortId : attachFor;
     if (box !== attachFor) { attachFor = box; pendingAttachments = []; attachmentError = null; }
@@ -905,6 +936,22 @@ function init(config: Config) {
     writeStatusSeen(m);
   }
 
+  // ── What's new watermark ───────────────────────────────────
+  // The newest changelog date the customer has seen, per workspace + user;
+  // entries published after it light the tab. Set when they leave the tab, so
+  // the dots stay while they read. Same best-effort storage as the marks above.
+  function newsSeenKey(): string {
+    return `crumb_news_seen:${config.workspace}:${userKey()}`;
+  }
+  function newsSeenAt(): string | null {
+    try { return localStorage.getItem(newsSeenKey()); } catch { return null; }
+  }
+  function markNewsSeen() {
+    const newest = news?.[0]?.published_at; // the API lists newest first
+    if (!newest) return;
+    try { localStorage.setItem(newsSeenKey(), newest); } catch { /* storage blocked */ }
+  }
+
   // Carry the marks over from the keys before these, once, so an update
   // doesn't light every thread already read. A customer with the old reply
   // map is a returning one: seed theirs (marks already on the new key, from a
@@ -933,6 +980,7 @@ function init(config: Config) {
   // box, until that send succeeds. A sign-out or user switch drops them.
   type Drafts = { compose?: { type: ItemType; title: string; body: string }; replies?: Record<string, string> };
   function userKey(): string { return config.jwt ? jwtSub(config.jwt) : config.userEmail; }
+  function hasRecordConsent(): boolean { return recordChoice(userKey()) === "on"; }
   function draftKey(): string { return `crumb_draft:${config.workspace}:${userKey()}`; }
   function readDrafts(): Drafts {
     try { return JSON.parse(sessionStorage.getItem(draftKey()) || "{}") || {}; } catch { return {}; }
@@ -1011,10 +1059,26 @@ function init(config: Config) {
     for (const cb of expiredListeners) { try { cb(); } catch { /* host cb */ } }
   }
 
-  // The replay session to link, only while this customer's consent stands. A
-  // sign-out clears consent, so the next customer never inherits a recording.
+  // The replay session to link: the one this tab started on this customer's
+  // consent, while it stands. Withdrawing consent (or signing out) forgets the
+  // token, so the next session, or customer, never inherits a recording.
   function replayToken(): string | undefined {
-    return !replayRetired && hasRecordConsent() ? window.__crumbRecord__?.getSessionToken?.() ?? undefined : undefined;
+    const token = window.__crumbRecord__?.getSessionToken?.();
+    return token && hasRecordConsent() && token === storedSessionToken() ? token : undefined;
+  }
+
+  // Session record, once /me says this workspace records: until the customer
+  // consents the recorder keeps the last two minutes in this tab's memory
+  // only; consent sends those and records on under this tab's session.
+  function syncRecorder() {
+    const rec = window.__crumbRecord__;
+    if (!rec || !me?.workspace.session_record_enabled) return;
+    const opts = { apiBase: config.apiBase, workspaceSlug: config.workspace, captureBodies: config.recordNetworkBodies };
+    const choice = recordChoice(userKey());
+    if (choice === "on") rec.start({ ...opts, sessionToken: getOrCreateSessionToken() });
+    // They said no: nothing is kept, not even in memory, until they tick again.
+    else if (choice === "off") { try { rec.stop(); } catch { /* ignore */ } }
+    else rec.buffer?.(opts);
   }
 
   // ── usage events (crumb.track) ─────────────────────────────
@@ -1112,12 +1176,10 @@ function init(config: Config) {
         launcher_visibility: w.launcher_visibility,
         launcher_offset_y: w.launcher_offset_y,
       });
-      // Consent-gated: only (re)start recording if the customer already opted
-      // in earlier this tab. A fresh visitor records nothing until they tick
-      // the box in the compose form.
-      if (w.session_record_enabled && hasRecordConsent()) {
-        ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken(), config.recordNetworkBodies);
-      }
+      // The recorder loads now, so the minutes before a customer reports a
+      // bug are there to send if they consent. Nothing leaves the page until
+      // they tick the box in the compose form (or did earlier this tab).
+      if (w.session_record_enabled) loadRecorder(config.apiBase, syncRecorder);
     } catch (err) {
       meState = failed(err);
     }
@@ -1159,10 +1221,21 @@ function init(config: Config) {
     render();
   }
 
+  async function fetchNews() {
+    newsState = { kind: "loading" };
+    try {
+      news = (await call("changelog")).entries as NewsEntry[];
+      newsState = { kind: "idle" };
+    } catch (err) {
+      newsState = failed(err); // no tab; the next open tries again
+    }
+    render();
+  }
+
   async function toggleFollow(initiativeId: string, follow: boolean) {
     const flip = (on: boolean) => {
-      for (const col of ["now", "next", "later"] as const) {
-        const e = roadmap?.columns[col].find(x => x.id === initiativeId);
+      for (const k of LANES) {
+        const e = laneOf(k).find(x => x.id === initiativeId);
         if (e) e.following = on;
       }
     };
@@ -1305,10 +1378,13 @@ function init(config: Config) {
     }
     submitState = { kind: "loading" };
     render();
+    const gen = epoch;
     try {
-      // Attach the recording session token if recording is active. The
-      // server only links sessions that have ≥1 chunk flushed, so a token
-      // here doesn't imply a guaranteed link. Files ride on the first message.
+      // With a recording on, what it holds goes up first (a few seconds at
+      // most), and its token rides along to link it; chunks that land later
+      // join it. Files ride on the first message.
+      if (replayToken()) await Promise.race([window.__crumbRecord__?.flush?.(), new Promise(r => setTimeout(r, 3000))]);
+      if (gen !== epoch) return; // the customer changed while it sent: forgetUser reset the form
       const data = await call("items", "POST", authBody({ type: v.type, title: v.title.trim(), body: v.body.trim(), session_token: replayToken(), context: submissionContext(), attachment_ids: pendingAttachments.map(a => a.id) }));
       const sid: string = data.short_id;
       pendingAttachments = [];
@@ -1521,6 +1597,7 @@ function init(config: Config) {
     if (view.kind === "list") renderList();
     else if (view.kind === "admin") renderAdmin();
     else if (view.kind === "roadmap") renderRoadmap();
+    else if (view.kind === "news") renderNews();
     else if (view.kind === "settings") renderSettings();
     else if (view.kind === "compose") renderCompose(view);
     else if (view.kind === "thread") renderThread(view);
@@ -1577,14 +1654,19 @@ function init(config: Config) {
 
   // The tab strip and its panel. Arrow keys move between tabs (panel keydown);
   // only the selected tab is in the Tab order.
-  function tabbed(active: "feedback" | "roadmap" | "admin", inner: string): string {
+  function tabbed(active: "feedback" | "roadmap" | "news" | "admin", inner: string): string {
     const tabs: Array<[string, string]> = [["feedback", t.yourFeedback]];
     if (me?.has_roadmap) tabs.push(["roadmap", t.roadmap]);
+    if (news?.length) tabs.push(["news", t.whatsNew]);
     if (me?.is_account_admin) tabs.push(["admin", t.admin]);
     // No tabs when there's nothing beyond the feedback list.
     if (tabs.length === 1) return inner;
+    // What's new wears a dot while it has entries the customer hasn't seen.
+    const seenAt = newsSeenAt();
+    const unseen = active === "news" ? 0 : (news ?? []).filter(e => newsUnseen(e, seenAt)).length;
+    const dot = unseen ? `<span class="news-dot" aria-hidden="true"></span><span class="sr-only">, ${t.updates(unseen)}</span>` : "";
     return `<div class="tabs" role="tablist">${tabs.map(([k, label]) =>
-        `<button class="tab" role="tab" id="crumb-tab-${k}" aria-controls="crumb-tabpanel" aria-selected="${k === active}" tabindex="${k === active ? 0 : -1}" data-act="tab" data-tab="${k}">${label}</button>`).join("")}</div>
+        `<button class="tab" role="tab" id="crumb-tab-${k}" aria-controls="crumb-tabpanel" aria-selected="${k === active}" tabindex="${k === active ? 0 : -1}" data-act="tab" data-tab="${k}">${label}${k === "news" ? dot : ""}</button>`).join("")}</div>
       <div class="tabpanel" role="tabpanel" id="crumb-tabpanel" aria-labelledby="crumb-tab-${active}">${inner}</div>`;
   }
 
@@ -1646,15 +1728,18 @@ function init(config: Config) {
       </button>`;
   }
 
-  // A public roadmap initiative, on the Roadmap tab and in search results.
+  // A public roadmap initiative, on the Roadmap tab and in search results:
+  // where it stands, and Follow until it ships (then when it shipped).
   function roadmapCardHtml(e: RoadmapEntry): string {
+    const shipped = e.lane === "shipped";
     return `
       <div class="rm-card">
         <div class="rm-card-top">
           <span class="rm-name">${escapeHtml(e.name)}</span>
-          <button class="rm-follow${e.following ? " on" : ""}" data-act="follow" data-id="${escapeHtml(e.id)}" data-following="${e.following ? "1" : "0"}">${e.following ? t.following : t.follow}</button>
+          ${shipped ? "" : `<button class="rm-follow${e.following ? " on" : ""}" data-act="follow" data-id="${escapeHtml(e.id)}" data-following="${e.following ? "1" : "0"}">${e.following ? t.following : t.follow}</button>`}
         </div>
         ${e.description ? `<p class="rm-desc">${escapeHtml(e.description)}</p>` : ""}
+        <div class="rm-meta">${statusPillHtml(INITIATIVE_STATUS[e.status] ?? "open")}${shipped && e.shipped_at ? timeHtml(e.shipped_at, "rm-when") : ""}</div>
       </div>`;
   }
 
@@ -1672,9 +1757,7 @@ function init(config: Config) {
       .filter(x => x.s >= 0)
       .sort((a, b) => b.s - a.s);
 
-    const rmEntries: RoadmapEntry[] = roadmap
-      ? [...roadmap.columns.now, ...roadmap.columns.next, ...roadmap.columns.later]
-      : [];
+    const rmEntries = ([] as RoadmapEntry[]).concat(...LANES.map(laneOf));
     const rmMatched = rmEntries
       .map(e => ({ e, s: scoreRoadmap(q, e) }))
       .filter(x => x.s >= 0)
@@ -1856,8 +1939,7 @@ function init(config: Config) {
       bodyHtml += errorStateHtml(roadmapState);
     } else if (roadmap) {
       if (followMsg) bodyHtml += `<div class="err" data-live>${escapeHtml(followMsg)}</div>`;
-      const cols = ["now", "next", "later"] as const;
-      const total = cols.reduce((n, k) => n + roadmap!.columns[k].length, 0);
+      const total = LANES.reduce((n, k) => n + laneOf(k).length, 0);
       if (total === 0) {
         bodyHtml += `
           <div class="empty">
@@ -1866,8 +1948,9 @@ function init(config: Config) {
             <p>${t.roadmapEmptyBody}</p>
           </div>`;
       } else {
-        bodyHtml += `<div class="rm-board">` + cols.map(key => {
-          const entries = roadmap!.columns[key];
+        // Recently shipped is the last lane: the newest few, newest first.
+        bodyHtml += `<div class="rm-board">` + LANES.map(key => {
+          const entries = laneOf(key);
           if (entries.length === 0) return "";
           return `
             <div class="rm-col">
@@ -1881,6 +1964,24 @@ function init(config: Config) {
     panel.innerHTML = `
       ${header(t.roadmap, accountName())}
       <div class="body">${tabbed("roadmap", bodyHtml)}</div>`;
+  }
+
+  // What's new: the team's published changelog, newest first, as plain text.
+  // Entries since the customer last looked keep a dot until they leave.
+  function renderNews() {
+    const seenAt = newsSeenAt();
+    const entries = (news ?? []).map(e => `
+      <article class="news-entry">
+        <div class="news-top">
+          ${newsUnseen(e, seenAt) ? `<span class="news-dot" aria-hidden="true"></span><span class="sr-only">${t.newEntry}.</span>` : ""}
+          ${e.published_at ? timeHtml(e.published_at, "news-when") : ""}
+        </div>
+        <h2 class="news-title">${escapeHtml(e.title)}</h2>
+        ${e.body.trim() ? `<p class="news-body">${escapeHtml(e.body.trim())}</p>` : ""}
+      </article>`).join("");
+    panel.innerHTML = `
+      ${header(t.whatsNew, accountName())}
+      <div class="body">${tabbed("news", `<div class="news-list">${entries}</div>`)}</div>`;
   }
 
   // Files waiting to go out with the next send, and why the last one didn't.
@@ -1938,7 +2039,7 @@ function init(config: Config) {
           <input type="checkbox" data-act="record-consent" ${hasRecordConsent() ? "checked" : ""} style="margin-top:2px;flex:none" />
           <span style="display:flex;flex-direction:column;gap:2px">
             <span style="font-size:13px;font-weight:600">${t.recordConsent}</span>
-            <span style="font-size:11px;color:var(--c-ink-2);line-height:1.45">${config.recordNetworkBodies ? t.recordBodies : t.recordNoBodies} ${t.recordMasking}</span>
+            <span style="font-size:11px;color:var(--c-ink-2);line-height:1.45">${config.recordNetworkBodies ? t.recordBodies : t.recordNoBodies} ${t.recordWindow} ${t.recordMasking}</span>
           </span>
         </label>` : ""}
 
@@ -2133,6 +2234,7 @@ function init(config: Config) {
       }
       else if (t === "feedback") setView({ kind: "list" });
       else if (t === "roadmap") { setView({ kind: "roadmap" }); if (roadmap === null) fetchRoadmap(); }
+      else if (t === "news") setView({ kind: "news" });
       return;
     }
     if (act === "open-settings") { memberMsg = null; setView({ kind: "settings" }); return; }
@@ -2220,11 +2322,12 @@ function init(config: Config) {
       return;
     }
     if (act === "record-consent") {
-      // Customer-triggered recording. Checking the box starts rrweb now (the
-      // session_token links to whatever they submit); unchecking stops it.
+      // Ticked: the recorder sends the minutes it kept and records on (the
+      // session_token links to whatever they submit). Unticked: it stops and
+      // drops what it hadn't sent; ticking again starts a fresh session.
       const on = (target as HTMLInputElement).checked;
-      writeRecordConsent(on);
-      if (on) ensureRecorder(config.apiBase, config.workspace, getOrCreateSessionToken(), config.recordNetworkBodies);
+      writeRecordChoice(userKey(), on);
+      if (on) loadRecorder(config.apiBase, syncRecorder);
       else { try { window.__crumbRecord__?.stop(); } catch { /* ignore */ } }
       return;
     }
@@ -2341,6 +2444,7 @@ function init(config: Config) {
     void fetchMe();
     fetchList();
     if (!open) return;
+    if (news === null && newsState.kind !== "loading") void fetchNews();
     if (view.kind === "thread" && threadState.kind === "error") fetchThread(view.shortId);
     else if (view.kind === "roadmap" && roadmapState.kind === "error") fetchRoadmap();
   }
@@ -2393,6 +2497,8 @@ function init(config: Config) {
     if (me === null && meState.kind !== "loading") void fetchMe();
     // Refresh on every open so new vendor replies show (unless one's in flight).
     if (listState.kind !== "loading") fetchList();
+    // What's new loads once a page (its tab appears with it), not on page load.
+    if (news === null && newsState.kind !== "loading") void fetchNews();
     if (shortId) openThread(shortId);
     else render();
   }
@@ -2403,6 +2509,7 @@ function init(config: Config) {
     const a = shadow.activeElement;
     const ours = open && (a ? panel.contains(a) : document.activeElement === document.body);
     if (open && view.kind === "list") markAllStatusesSeen();
+    if (open && view.kind === "news") markNewsSeen();
     open = false;
     expanded = false;
     render();
@@ -2423,13 +2530,13 @@ function init(config: Config) {
     flushUsage(); // their buffered events still go out as them
     usageBuffer = [];
     try { sessionStorage.removeItem(draftKey()); } catch { /* storage blocked */ }
-    // Their consent can't carry over to whoever signs in next.
+    // Their consent, recording and session can't carry over to whoever signs
+    // in next: the recorder drops what it holds and the token goes.
     try { window.__crumbRecord__?.stop(); } catch { /* ignore */ }
-    if (window.__crumbRecord__) replayRetired = true;
-    writeRecordConsent(false);
+    clearRecordChoice();
     epoch++;
-    me = null; items = null; thread = null; roadmap = null;
-    meState = listState = threadState = roadmapState = submitState = closeState = { kind: "idle" };
+    me = null; items = null; thread = null; roadmap = null; news = null;
+    meState = listState = threadState = roadmapState = newsState = submitState = closeState = { kind: "idle" };
     view = { kind: "list" };
     searchQuery = "";
     closeConfirm = false;

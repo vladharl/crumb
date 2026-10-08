@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import {
   db,
   changelogEntries,
@@ -8,9 +8,14 @@ import {
   accountUsers,
   roadmapFollows,
   customerNotifications,
+  publicFollows,
+  workspaces,
+  type ChangelogEntry,
   type Workspace,
 } from "@crumb/db";
 import { emailConfigured, sendShippedAnnouncement } from "@/lib/email";
+import { fewAtATime } from "@/lib/few-at-a-time";
+import { notifyPublicFollowers } from "@/lib/public-follows";
 import { WIDGET_SOURCE } from "@/lib/feedback/source";
 import type { NotifySkipReason } from "@/lib/notify/customer-plan";
 import { roadmapEmailPlan } from "@/lib/roadmap-notify";
@@ -24,9 +29,10 @@ import { log } from "@/lib/log";
 // emails everyone who asked (item submitters on that initiative) or follows it,
 // and can move its open requests to Shipped in the same step. Drafting is
 // intentionally non-AI for v1 — a clean starting point the team edits — so no
-// edition-swap module is needed. Entries written by hand email no one.
+// edition-swap module is needed. Entries written by hand email no customer.
+// Any public entry also goes to the public pages' email followers.
 
-export type ChangelogDraft = { id: string; title: string; body: string; publishedAt: Date | null };
+export type ChangelogDraft = { id: string; title: string; body: string; isPublic: boolean; publishedAt: Date | null };
 
 // The initiative's changelog entry, drafting one from its name and description
 // when it has none yet. Null when the initiative isn't this workspace's, or the
@@ -40,6 +46,7 @@ export async function draftChangelogForInitiative(
       id: changelogEntries.id,
       title: changelogEntries.title,
       body: changelogEntries.body,
+      isPublic: changelogEntries.isPublic,
       publishedAt: changelogEntries.publishedAt,
     };
     const [existing] = await db
@@ -50,7 +57,7 @@ export async function draftChangelogForInitiative(
     if (existing) return existing;
 
     const [ini] = await db
-      .select({ name: initiatives.name, description: initiatives.description })
+      .select({ name: initiatives.name, description: initiatives.description, isPublic: initiatives.isPublic })
       .from(initiatives)
       .where(and(eq(initiatives.workspaceId, ws.id), eq(initiatives.id, initiativeId)))
       .limit(1);
@@ -63,7 +70,10 @@ export async function draftChangelogForInitiative(
         initiativeId,
         title: ini.name,
         body: ini.description ?? "",
-        isPublic: true,
+        // A private initiative's draft stays private: publishing it must not put
+        // its name on the public changelog, the widget's What's new or the
+        // all-updates followers' inbox. The vendor can still make it public.
+        isPublic: ini.isPublic,
         // publishedAt stays null → it's a draft until a human publishes.
       })
       .returning(cols);
@@ -80,9 +90,19 @@ export async function draftChangelogForInitiative(
 export type Skipped = { count: number; sources: string[]; noEmail: boolean; muted: boolean };
 
 // What the ship prompt and the Publish confirm show. `reach` counts customers
-// the announcement would email (emailOn says whether email is set up at all);
-// `openItems` is how many linked requests publishing could mark Shipped.
-export type Audience = { reach: number; skipped: Skipped; emailOn: boolean; openItems: number };
+// the announcement would email and `followers` the public followers it would
+// email besides them (emailOn says whether email is set up at all);
+// `alreadyHeard`, the customers left out because a Shipped email about their
+// own request already told them; `openItems` is how many linked requests
+// publishing could mark Shipped.
+export type Audience = {
+  reach: number;
+  followers: number;
+  alreadyHeard: number;
+  skipped: Skipped;
+  emailOn: boolean;
+  openItems: number;
+};
 
 // The prompt shown when an initiative ships with its entry still a draft.
 export type Announce = { entryId: string; title: string; body: string; audience: Audience };
@@ -93,8 +113,14 @@ const addr = (email: string) => email.trim().toLowerCase();
 
 // Everyone the announcement is for: item submitters on the initiative and its
 // followers, deduped by address. Anyone reachable through either counts once,
-// and asking wins over following for the email's footer. The rest are skipped.
-async function audienceOf(workspaceId: string, initiativeId: string): Promise<{ recipients: Recipient[]; skipped: Skipped }> {
+// and asking wins over following for the email's footer. Whoever a Shipped
+// email about one of these requests (or one merged into them) already reached
+// (`toldBefore`) is left out, as the announcement would be their second. The
+// rest are skipped.
+async function audienceOf(
+  workspaceId: string,
+  initiativeId: string,
+): Promise<{ recipients: Recipient[]; skipped: Skipped; alreadyHeard: number; toldBefore: Set<string> }> {
   const person = {
     id: accountUsers.id,
     email: accountUsers.email,
@@ -102,7 +128,11 @@ async function audienceOf(workspaceId: string, initiativeId: string): Promise<{ 
     unsubscribedAll: accountUsers.unsubscribedAll,
     notifyRoadmap: accountUsers.notifyRoadmap,
   };
-  const [asked, follows] = await Promise.all([
+  const linked = db
+    .select({ id: items.id })
+    .from(items)
+    .where(and(eq(items.workspaceId, workspaceId), eq(items.initiativeId, initiativeId)));
+  const [asked, follows, shippedTold] = await Promise.all([
     db
       .select({ ...person, source: items.source })
       .from(items)
@@ -113,8 +143,22 @@ async function audienceOf(workspaceId: string, initiativeId: string): Promise<{ 
       .from(roadmapFollows)
       .innerJoin(accountUsers, eq(accountUsers.id, roadmapFollows.accountUserId))
       .where(eq(roadmapFollows.initiativeId, initiativeId)),
+    // The loop ledger: a provider accepted their Shipped status email.
+    db
+      .select({ email: accountUsers.email })
+      .from(customerNotifications)
+      .innerJoin(items, eq(items.id, customerNotifications.itemId))
+      .innerJoin(accountUsers, eq(accountUsers.id, customerNotifications.accountUserId))
+      .where(and(
+        eq(items.workspaceId, workspaceId),
+        or(eq(items.initiativeId, initiativeId), inArray(items.mergedIntoId, linked)),
+        eq(customerNotifications.kind, "status"),
+        eq(customerNotifications.toStatus, "shipped"),
+      )),
   ]);
 
+  const toldBefore = new Set(shippedTold.map(t => addr(t.email)));
+  const heard = new Set<string>();
   const reached = new Map<string, Recipient>();
   const missed: Array<{ key: string; why: NotifySkipReason; source: string | null }> = [];
   for (const p of [
@@ -122,6 +166,10 @@ async function audienceOf(workspaceId: string, initiativeId: string): Promise<{ 
     ...follows.map(f => ({ ...f, source: WIDGET_SOURCE, reason: "follow" as const })),
   ]) {
     const key = addr(p.email);
+    if (toldBefore.has(key)) {
+      heard.add(key);
+      continue;
+    }
     // Askers by their item's source (only widget-origin ones opted into
     // Crumb's loop, lib/feedback/source); everyone by their own prefs.
     const plan = roadmapEmailPlan(p, p.source);
@@ -140,7 +188,49 @@ async function audienceOf(workspaceId: string, initiativeId: string): Promise<{ 
       noEmail: left.some(m => m.why === "no_email"),
       muted: left.some(m => m.why === "muted" || m.why === "unsubscribed"),
     },
+    alreadyHeard: heard.size,
+    toldBefore,
   };
+}
+
+// The public followers a public entry is for (lib/public-follows): confirmed,
+// still subscribed, following all updates or the entry's initiative, while the
+// workspace's public pages are on. Lowercased, once per address.
+async function publicFollowerAddresses(workspaceId: string, initiativeId: string | null): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ email: sql<string>`LOWER(${publicFollows.email})` })
+    .from(publicFollows)
+    .innerJoin(workspaces, eq(workspaces.id, publicFollows.workspaceId))
+    .where(and(
+      eq(publicFollows.workspaceId, workspaceId),
+      eq(workspaces.publicPagesEnabled, true),
+      initiativeId
+        ? or(isNull(publicFollows.initiativeId), eq(publicFollows.initiativeId, initiativeId))
+        : isNull(publicFollows.initiativeId),
+      isNotNull(publicFollows.confirmedAt),
+      isNull(publicFollows.unsubscribedAt),
+    ));
+  return rows.map(r => r.email);
+}
+
+// Emails a public entry to those public followers, except the addresses in
+// `skip` (customers already told about it). How many were emailed; never throws.
+function tellPublicFollowers(
+  ws: Workspace,
+  entry: ChangelogEntry,
+  origin: string | null,
+  skip: Iterable<string> = [],
+): Promise<number> {
+  if (!entry.isPublic || !ws.publicPagesEnabled) return Promise.resolve(0);
+  return notifyPublicFollowers({
+    workspaceId: ws.id,
+    initiativeId: entry.initiativeId,
+    kind: "changelog",
+    title: entry.title,
+    summary: entry.body,
+    url: origin ? `${origin}/${ws.slug}/changelog` : null,
+    skip,
+  });
 }
 
 // The initiative's requests still open: what publishing can mark Shipped.
@@ -153,43 +243,55 @@ function openLinked(workspaceId: string, initiativeId: string) {
   );
 }
 
-export async function announcementAudience(workspaceId: string, initiativeId: string): Promise<Audience> {
-  const [{ recipients, skipped }, [open]] = await Promise.all([
-    audienceOf(workspaceId, initiativeId),
-    db.select({ n: sql<number>`COUNT(*)::int` }).from(items).where(openLinked(workspaceId, initiativeId)),
+// Who publishing an entry emails. A hand-written entry (no initiative) reaches
+// only the public followers of all updates.
+export async function announcementAudience(workspaceId: string, initiativeId: string | null): Promise<Audience> {
+  const [who, [open], following] = await Promise.all([
+    initiativeId
+      ? audienceOf(workspaceId, initiativeId)
+      : {
+          recipients: [],
+          skipped: { count: 0, sources: [], noEmail: false, muted: false },
+          alreadyHeard: 0,
+          toldBefore: new Set<string>(),
+        },
+    initiativeId
+      ? db.select({ n: sql<number>`COUNT(*)::int` }).from(items).where(openLinked(workspaceId, initiativeId))
+      : [],
+    publicFollowerAddresses(workspaceId, initiativeId),
   ]);
-  return { reach: recipients.length, skipped, emailOn: emailConfigured(), openItems: open?.n ?? 0 };
-}
-
-// ponytail: four at a time keeps a publish inside one request without bursting
-// the email provider's rate limit (inbox bulk status does the same). Move the
-// sends to the sweep cron if audiences grow into the thousands.
-async function fewAtATime<T>(list: T[], fn: (t: T) => Promise<void>): Promise<void> {
-  const queue = [...list];
-  await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {
-    for (let t = queue.shift(); t !== undefined; t = queue.shift()) await fn(t);
-  }));
+  // Publishing skips the followers it emails as customers or who already heard.
+  const told = new Set([...who.recipients.map(r => addr(r.email)), ...who.toldBefore]);
+  return {
+    reach: who.recipients.length,
+    followers: following.filter(a => !told.has(a)).length,
+    alreadyHeard: who.alreadyHeard,
+    skipped: who.skipped,
+    emailOn: emailConfigured(),
+    openItems: open?.n ?? 0,
+  };
 }
 
 export type PublishResult =
-  | { ok: true; announced: false }
+  | { ok: true; announced: false; followers: number }
   | {
       ok: true;
       announced: true;
       delivered: number; // customers a real provider accepted the email for (never stdout)
       failed: number;    // sends that didn't go through, with email set up
+      followers: number; // public followers emailed (lib/public-follows)
       skipped: Skipped;
       emailOn: boolean;
       marked: number;    // open requests moved to Shipped
     }
   | { ok: false; error: string };
 
-// Publishes a draft. A hand-written entry is only published. An initiative's
-// entry is also emailed to its audience, and with `markShipped` (the acting
-// teammate) its open requests move to Shipped through the status core. A
-// customer the announcement reached isn't sent a Shipped status email too, nor
-// one about a request merged into those; their shipped requests get the loop
-// ledger row from the announcement instead.
+// Publishes a draft. A public entry is emailed to the public followers. An
+// initiative's entry is also emailed to its audience, and with `markShipped`
+// (the acting teammate) its open requests move to Shipped through the status
+// core. A customer the announcement reached isn't sent a Shipped status email
+// too, nor one about a request merged into those; their shipped requests get
+// the loop ledger row from the announcement instead.
 export async function publishChangelogEntry(
   ws: Workspace,
   entryId: string,
@@ -214,12 +316,12 @@ export async function publishChangelogEntry(
       .limit(1);
     return { ok: false, error: exists ? "already_decided" : "not_found" };
   }
-  const initiativeId = entry.initiativeId;
-  if (!initiativeId) return { ok: true, announced: false };
-
   const origin = opts.origin ?? null;
+  const initiativeId = entry.initiativeId;
+  if (!initiativeId) return { ok: true, announced: false, followers: await tellPublicFollowers(ws, entry, origin) };
+
   const emailOn = emailConfigured();
-  const [[ini], { recipients, skipped }] = await Promise.all([
+  const [[ini], { recipients, skipped, toldBefore }] = await Promise.all([
     db
       .select({ name: initiatives.name })
       .from(initiatives)
@@ -280,9 +382,11 @@ export async function publishChangelogEntry(
   }
 
   if (told.size > 0) await recordTold(ws, initiativeId, told);
+  // Public followers the announcement reached, or who already heard, aren't emailed twice.
+  const followers = await tellPublicFollowers(ws, entry, origin, [...told, ...toldBefore]);
 
-  log.info("changelog published", { scope: "crumb/changelog", workspaceId: ws.id, entryId, delivered, failed, marked });
-  return { ok: true, announced: true, delivered, failed, skipped, emailOn, marked };
+  log.info("changelog published", { scope: "crumb/changelog", workspaceId: ws.id, entryId, delivered, failed, followers, marked });
+  return { ok: true, announced: true, delivered, failed, followers, skipped, emailOn, marked };
 }
 
 // Loop ledger: whoever the announcement reached was told their shipped requests
@@ -332,7 +436,8 @@ export type ChangelogListEntry = {
   createdAt: Date;
 };
 
-// All entries for the dashboard (drafts + published), newest first.
+// All entries for the dashboard, newest first: drafts by when they were
+// written (Postgres sorts their null publishedAt first), then published ones.
 export async function listChangelogEntries(workspaceId: string): Promise<ChangelogListEntry[]> {
   return db
     .select({
@@ -346,10 +451,11 @@ export async function listChangelogEntries(workspaceId: string): Promise<Changel
     })
     .from(changelogEntries)
     .where(eq(changelogEntries.workspaceId, workspaceId))
-    .orderBy(changelogEntries.createdAt);
+    .orderBy(desc(changelogEntries.publishedAt), desc(changelogEntries.createdAt));
 }
 
-// Published, public entries for the widget "What's new" tab / public API.
+// Published, public entries for the widget "What's new" tab / public API and
+// the public changelog page, newest first.
 export async function listPublicChangelog(workspaceId: string): Promise<ChangelogListEntry[]> {
   return db
     .select({
@@ -369,5 +475,5 @@ export async function listPublicChangelog(workspaceId: string): Promise<Changelo
         isNotNull(changelogEntries.publishedAt),
       ),
     )
-    .orderBy(changelogEntries.publishedAt);
+    .orderBy(desc(changelogEntries.publishedAt), desc(changelogEntries.createdAt));
 }

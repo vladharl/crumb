@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Card, CardHead, Pill } from "@crumb/ui";
 import { db, replaySessions, items, accountUsers } from "@crumb/db";
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull } from "drizzle-orm";
 import { getActiveSession } from "@/lib/server";
 
 // Lists replay sessions belonging to a single account — currently, only
@@ -65,6 +65,8 @@ export async function AccountSessionsTile({ accountId }: { accountId: string }) 
       eq(replaySessions.workspaceId, workspace.id),
       eq(items.accountId, accountId),
       isNotNull(replaySessions.itemId),
+      // Linked at submit before any chunk landed; nothing to watch until one does.
+      gt(replaySessions.eventCount, 0),
     ))
     .orderBy(desc(replaySessions.startedAt))
     .limit(10);

@@ -3,6 +3,7 @@ import { secretMatches } from "@/lib/secret-match";
 import { sweepOrphanSessions, sweepAgedSessions } from "@/lib/replay/sweep";
 import { sweepOrphanAttachments } from "@/lib/attachments/sweep";
 import { sweepAgedUsageEvents } from "@/lib/usage/sweep";
+import { sweepUnconfirmedFollows } from "@/lib/public-follows";
 import { refreshWebhooks as refreshJiraWebhooks } from "@/lib/integrations/jira";
 
 export const dynamic = "force-dynamic";
@@ -52,7 +53,9 @@ export async function POST(req: Request) {
   const retention = await sweepAgedSessions(opts);
   const attachments = await sweepOrphanAttachments(opts);
   const usageEvents = await sweepAgedUsageEvents(opts);
+  // Public-page follows whose confirmation link lapsed unclicked.
+  const publicFollows = await sweepUnconfirmedFollows();
   // Cloud's per-install Jira status webhooks lapse after 30 days unrefreshed.
   const jiraWebhooks = await refreshJiraWebhooks();
-  return NextResponse.json({ ...result, retention, attachments, usageEvents, jiraWebhooks });
+  return NextResponse.json({ ...result, retention, attachments, usageEvents, publicFollows, jiraWebhooks });
 }

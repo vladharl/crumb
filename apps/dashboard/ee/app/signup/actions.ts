@@ -24,7 +24,8 @@ const MAX_PER_EMAIL = 3;
 const MAX_PER_IP = 10;
 
 function slugify(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+  // Trim hyphens after the cut too, so a long name can't end in "-".
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64).replace(/-+$/, "");
 }
 
 export type SignupResult = { ok: true } | { ok: false; error: string };
