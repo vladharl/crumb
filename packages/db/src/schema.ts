@@ -223,6 +223,20 @@ export const notificationPreferences = pgTable("notification_preferences", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// A member's saved inbox filters. `query` holds the inbox URL's search params;
+// names are unique per member.
+export const inboxViews = pgTable("inbox_views", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceUserId: uuid("workspace_user_id").notNull().references(() => workspaceUsers.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  query: text("query").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqName: unique("inbox_views_user_name_uniq").on(t.workspaceUserId, t.name),
+}));
+
+export type InboxView = typeof inboxViews.$inferSelect;
+
 // ─── accounts (customer side) ────────────────────────────────
 export const accounts = pgTable("accounts", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -278,6 +292,10 @@ export const accountUsers = pgTable("account_users", {
   unsubscribedAll: boolean("unsubscribed_all").notNull().default(false),
   // Capability token embedded in the unsubscribe link (no login needed).
   unsubToken: varchar("unsub_token", { length: 64 }).notNull().default(sql`encode(gen_random_bytes(32), 'hex')`),
+  // Set when a teammate marks this submitter's feedback as spam. New
+  // submissions and email replies from a blocked submitter are refused.
+  // NULL = not blocked.
+  blockedAt: timestamp("blocked_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   uniqEmail: unique().on(t.workspaceId, t.email),
@@ -312,7 +330,13 @@ export const items = pgTable("items", {
   // Generic external-ticket link. One item → at most one external ticket.
   // external_provider tells us which API to call for re-sync.
   externalProvider:   varchar("external_provider", { length: 16 }), // linear | jira | github
+  // The human key shown in the UI (ENG-42, PROJ-7, owner/repo#12).
   externalTicketId:   text("external_ticket_id"),
+  // The tracker's stable id (Linear issue UUID, Jira numeric issue id, GitHub
+  // issue node id or repository id plus number), so a moved or renamed issue
+  // keeps syncing after its human key changes. Null for links made before it
+  // was recorded.
+  externalTicketUid:  text("external_ticket_uid"),
   externalTicketUrl:  text("external_ticket_url"),
   externalStatus:     text("external_status"),
   externalSyncedAt:   timestamp("external_synced_at", { withTimezone: true }),
@@ -371,6 +395,8 @@ export const items = pgTable("items", {
   byWsStatus: index("items_workspace_status_idx").on(t.workspaceId, t.status),
   byAccount: index("items_account_idx").on(t.accountId),
   byMergedInto: index("items_merged_into_idx").on(t.mergedIntoId),
+  // Tracker webhooks find the linked item by its stable id.
+  byExternalTicketUid: index("items_external_ticket_uid_idx").on(t.workspaceId, t.externalProvider, t.externalTicketUid),
 }));
 
 // ─── replies ─────────────────────────────────────────────────
