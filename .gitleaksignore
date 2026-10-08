@@ -1,0 +1,4 @@
+# False positives only: exact finding fingerprints (commit:file:rule:line).
+# docs/API.md examples once used sha256("test")[0:32] as a sample session_token.
+ae39ba0ae60e7061d9d5abe6d7959803fc6dbf5c:docs/API.md:generic-api-key:288
+ae39ba0ae60e7061d9d5abe6d7959803fc6dbf5c:docs/API.md:generic-api-key:563
