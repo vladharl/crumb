@@ -1121,3 +1121,97 @@ ${v.message}
 
 Sent from the in-app Help → Contact form. Reply directly to reach ${v.fromUserName}.`;
 }
+
+// ─── Inactive-signup check-in (to the new admin) ─────────────
+// A plain, personal note: no header art, three answer buttons, and a nudge to
+// just reply (Reply-To is the operator, so a reply lands in their inbox).
+
+export type CheckinVars = {
+  firstName: string;
+  workspaceName: string;
+  buttons: { label: string; url: string }[];
+};
+
+export function renderCheckinHtml(v: CheckinVars): string {
+  const name = escapeHtml(v.firstName);
+  const ws = escapeHtml(v.workspaceName);
+  const buttons = v.buttons.map((b) => `
+            <tr><td style="padding:0 0 10px">
+              <a href="${escapeHtml(b.url)}" style="display:block;padding:12px 16px;border:1px solid rgba(28,24,21,0.18);border-radius:8px;font-size:14px;font-weight:500;color:#1C1815;text-decoration:none">${escapeHtml(b.label)}</a>
+            </td></tr>`).join("");
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%">
+          <tr><td style="padding:0 8px;font-size:15px;color:#2B211B">
+            <p style="margin:0 0 16px">Hi ${name},</p>
+            <p style="margin:0 0 16px">You set up <strong>${ws}</strong> on Crumb yesterday, and it's been quiet since. That's normal, but I wanted to check in.</p>
+            <p style="margin:0 0 20px">Which of these is closest? One click is plenty.</p>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:12px">${buttons}
+            </table>
+            <p style="margin:0 0 16px">Or just reply to this email. It comes straight to me, and I read every one.</p>
+            <p style="margin:0">Vlad<br><span style="color:#6B5C50">Crumb</span></p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export function renderCheckinText(v: CheckinVars): string {
+  return `Hi ${v.firstName},
+
+You set up ${v.workspaceName} on Crumb yesterday, and it's been quiet since. That's normal, but I wanted to check in.
+
+Which of these is closest? One click is plenty.
+
+${v.buttons.map((b) => `${b.label}:\n${b.url}`).join("\n\n")}
+
+Or just reply to this email. It comes straight to me, and I read every one.
+
+Vlad
+Crumb`;
+}
+
+// ─── Check-in answer (to the operator) ───────────────────────
+
+export type CheckinAnswerVars = {
+  workspaceName: string;
+  adminName: string;
+  adminEmail: string;
+  answer: string;
+};
+
+export function renderCheckinAnswerHtml(v: CheckinAnswerVars): string {
+  const name = escapeHtml(v.adminName);
+  const email = escapeHtml(v.adminEmail);
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;background:#FBF7F0;font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,sans-serif;color:#1C1815;line-height:1.55">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FBF7F0">
+      <tr><td align="center" style="padding:48px 16px">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%">
+          <tr><td style="padding:0 8px">
+            <div style="font-size:12px;color:#6B5C50;margin-bottom:8px">Check-in answer · ${escapeHtml(v.workspaceName)}</div>
+            <h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.01em">${escapeHtml(v.answer)}</h1>
+            <p style="margin:0 0 16px;font-size:14px">${name} &lt;<a href="mailto:${email}" style="color:#1C1815">${email}</a>&gt; picked this in the 24-hour check-in email.</p>
+            <p style="margin:0;font-size:12px;color:#6B5C50">Reply to this email to write to ${name} directly.</p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export function renderCheckinAnswerText(v: CheckinAnswerVars): string {
+  return `Check-in answer · ${v.workspaceName}
+
+${v.answer}
+
+${v.adminName} <${v.adminEmail}> picked this in the 24-hour check-in email.
+Reply to this email to write to ${v.adminName} directly.`;
+}

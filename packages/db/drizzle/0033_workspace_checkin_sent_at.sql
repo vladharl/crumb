@@ -1,0 +1,1 @@
+ALTER TABLE "workspaces" ADD COLUMN "checkin_sent_at" timestamp with time zone;
