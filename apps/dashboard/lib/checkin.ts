@@ -48,11 +48,11 @@ export function checkinLinks(origin: string, workspaceUserId: string, signingSec
 }
 
 // ─── the 24-hour sweep (POST /api/v1/internal/checkins, hourly) ──
-// Workspaces created 24 to 72 hours ago where nothing has happened since
-// signup: no item, reply or changelog entry created after the workspace (the
-// sample data is backdated before it) and no widget ping. Their first admin
-// gets the check-in, once (workspaces.checkin_sent_at). The 72-hour edge keeps
-// switching it on from emailing every old, quiet workspace.
+// Workspaces under 72 hours old that have gone quiet: their latest activity
+// (signup, or the newest item, reply or changelog entry; the sample data is
+// backdated before signup) is 24+ hours old, and no widget ping. Their first
+// admin gets the check-in, once (workspaces.checkin_sent_at). The 72-hour edge
+// keeps switching it on from emailing every old, quiet workspace.
 //
 // Off unless CRUMB_CHECKIN_EMAILS=1 and CRUMB_OPS_EMAIL (the Reply-To) is set;
 // while off, a run only reports who would get it.
@@ -71,12 +71,13 @@ export async function sendCheckins(opts: { dryRun: boolean; now?: Date }) {
     JOIN workspace_users wu ON wu.workspace_id = w.id AND wu.role = 'admin'
     WHERE w.checkin_sent_at IS NULL
       AND w.widget_first_ping_at IS NULL
-      AND w.created_at <= ${now}::timestamptz - interval '24 hours'
       AND w.created_at > ${now}::timestamptz - interval '72 hours'
-      AND NOT EXISTS (SELECT 1 FROM items i WHERE i.workspace_id = w.id AND i.created_at > w.created_at)
-      AND NOT EXISTS (SELECT 1 FROM replies r JOIN items i ON i.id = r.item_id
-                      WHERE i.workspace_id = w.id AND r.created_at > w.created_at)
-      AND NOT EXISTS (SELECT 1 FROM changelog_entries c WHERE c.workspace_id = w.id AND c.created_at > w.created_at)
+      AND GREATEST(
+        w.created_at,
+        (SELECT max(i.created_at) FROM items i WHERE i.workspace_id = w.id),
+        (SELECT max(r.created_at) FROM replies r JOIN items i ON i.id = r.item_id WHERE i.workspace_id = w.id),
+        (SELECT max(c.created_at) FROM changelog_entries c WHERE c.workspace_id = w.id)
+      ) <= ${now}::timestamptz - interval '24 hours'
     ORDER BY w.id, wu.created_at
   `)) as unknown as Due[];
 
