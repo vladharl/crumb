@@ -232,6 +232,13 @@
       "when": 1791466955390,
       "tag": "0032_private_initiative_changelog_private",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1793121383109,
+      "tag": "0033_workspace_checkin_sent_at",
+      "breakpoints": true
     }
   ]
 }

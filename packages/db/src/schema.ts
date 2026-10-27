@@ -68,6 +68,9 @@ export const workspaces = pgTable("workspaces", {
   // signal. Stamped once (only while NULL); the Install page's Try-it preview
   // never sets it.
   widgetFirstPingAt: timestamp("widget_first_ping_at", { withTimezone: true }),
+  // When the 24-hour check-in email went to the admin (lib/checkin.ts); set
+  // once, so a workspace never gets it twice.
+  checkinSentAt: timestamp("checkin_sent_at", { withTimezone: true }),
   nextItemSeq: integer("next_item_seq").notNull().default(1),
   // HS256 secret used to verify widget identity JWTs. 64 hex chars = 32 bytes.
   signingSecret: text("signing_secret").notNull().default(sql`encode(gen_random_bytes(32), 'hex')`),

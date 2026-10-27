@@ -21,6 +21,8 @@ import {
   renderDigestHtml, renderDigestText,
   renderPublicFollowConfirmHtml, renderPublicFollowConfirmText,
   renderPublicFollowUpdateHtml, renderPublicFollowUpdateText,
+  renderCheckinHtml, renderCheckinText, renderCheckinAnswerHtml, renderCheckinAnswerText,
+  type CheckinVars, type CheckinAnswerVars,
   type DigestVars, type PublicFollowConfirmVars, type PublicFollowUpdateVars,
 } from "./email/template";
 import { isCloud } from "./tier";
@@ -763,4 +765,42 @@ export async function sendPublicFollowUpdate(m: PublicFollowUpdate): Promise<boo
     link: m.url ?? undefined,
   });
   return result.ok && emailConfigured();
+}
+
+// ─── Inactive-signup check-in (to the new admin) ─────────────
+// From reads as a person, and Reply-To is the operator, so a reply goes
+// straight to their inbox. The buttons are signed links (lib/checkin.ts).
+
+export type Checkin = CheckinVars & { to: string; replyTo: string };
+
+export async function sendCheckin(m: Checkin): Promise<SendResult> {
+  const { from } = selectProvider();
+  // ponytail: signer hardcoded; make it an env var if anyone else sends these.
+  return deliver("checkin", {
+    to: m.to,
+    from: `"Vlad from Crumb" <${senderAddress(from)}>`,
+    replyTo: m.replyTo,
+    subject: "Quick question about Crumb",
+    html: renderCheckinHtml(m),
+    text: renderCheckinText(m),
+    previewLine: `check-in to ${m.to} (${m.workspaceName})`,
+  });
+}
+
+// ─── Check-in answer (to the operator) ───────────────────────
+// Reply-To is the admin who answered, like the support form.
+
+export type CheckinAnswerNotice = CheckinAnswerVars & { to: string };
+
+export async function sendCheckinAnswer(m: CheckinAnswerNotice): Promise<SendResult> {
+  const { from } = selectProvider();
+  return deliver("checkin-answer", {
+    to: m.to,
+    from: noreplyFrom(from),
+    replyTo: m.adminEmail,
+    subject: `Check-in · ${m.workspaceName} · ${m.answer}`,
+    html: renderCheckinAnswerHtml(m),
+    text: renderCheckinAnswerText(m),
+    previewLine: `${m.adminName} <${m.adminEmail}>: ${m.answer}`,
+  });
 }
