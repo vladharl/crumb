@@ -316,7 +316,7 @@ h1, h2, h3, h4 {
   font-size: var(--fs-xs);
   transition: border-color var(--dur-base) var(--ease-out-quart), color var(--dur-base) var(--ease-out-quart);
 }
-.cmdk-btn:hover { color: var(--text); border-color: var(--mute-2); }
+.cmdk-btn:hover { color: var(--text); border-color: rgba(74, 46, 31, 0.3); }
 .cmdk-btn-kbd { font-family: var(--font-mono, monospace); font-size: 11px; letter-spacing: 0.02em; }
 
 /* avatar menu */
@@ -754,7 +754,7 @@ h1, h2, h3, h4 {
   /* transition lives in the MOTION section (shared press-feedback block) */
 }
 .dd-trigger.sm { padding: 4px 8px; font-size: var(--fs-sm); }
-.dd-trigger:hover:not(:disabled) { border-color: var(--mute-2); }
+.dd-trigger:hover:not(:disabled) { border-color: rgba(74, 46, 31, 0.3); }
 .dd-trigger:disabled { opacity: .55; cursor: default; }
 .dd-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dd-value.dd-ph { color: var(--mute); }
@@ -1728,10 +1728,10 @@ details > summary::-webkit-details-marker { display: none; }
   font-weight: 500;
   color: var(--accent-deep);        /* ember-deep: the accessible accent for text on cream */
   text-decoration: none;
-  transition: color var(--dur-fast) var(--ease-out-quart),
-              gap var(--dur-base) var(--ease-out-quart);
+  transition: color var(--dur-fast) var(--ease-out-quart);
 }
-.inbox-empty-link:hover { color: var(--text); gap: 8px; }
+.inbox-empty-link:hover { color: var(--text); }
+.inbox-empty-link:hover svg { transform: translateX(3px); }
 .inbox-empty-link svg { transition: transform var(--dur-base) var(--ease-out-quart); }
 
 /* The trail lands: each crumb scales up from a seed, left to right, settling
@@ -2853,3 +2853,23 @@ details[open]::details-content { block-size: auto; }
      animation has no duration, so switch the fades off here. */
   .inbox-toolbar-main .seg, .settings-nav, .cmdk-list, .bell-list { animation: none; mask-image: none; }
 }
+
+/* Press feedback on the controls that had none. */
+.topnav-item:active,
+.usermenu-item:active,
+.rd-close:active,
+.help-close:active,
+.toast-action:active,
+.toast-close:active { transform: scale(0.97); }
+
+/* Right-anchored popovers grow from the corner they hang from. */
+.usermenu-pop,
+.bell-pop { transform-origin: top right; }
+
+/* Row menu drill panes: forward enters from the right, back from the left. */
+@keyframes pane-in {
+  from { opacity: 0; transform: translateX(calc(var(--dir) * 10px)); }
+}
+/* .dd-menu is a flex column that scrolls: keep the pane at its full height. */
+.pane-slide { flex-shrink: 0; }
+.pane-slide[data-dir] { animation: pane-in var(--dur-base) var(--ease-out-quint); }

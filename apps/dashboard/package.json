@@ -23,7 +23,6 @@
     "@crumb/db": "workspace:*",
     "@crumb/ui": "workspace:*",
     "drizzle-orm": "^0.36.4",
-    "motion": "^11.18.2",
     "next": "14.2.15",
     "nodemailer": "^8.0.8",
     "postgres": "^3.4.5",

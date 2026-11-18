@@ -164,7 +164,14 @@ export function RowActionMenu({
   const toast = useToast();
   const confirm = useConfirm();
   const [open, setOpen] = useState(false);
-  const [pane, setPane] = useState<Pane>("root");
+  const [pane, setPaneRaw] = useState<Pane>("root");
+  // Slide direction for a pane change: 1 drills in, -1 goes back, 0 on open.
+  const [dir, setDir] = useState<1 | -1 | 0>(0);
+  const paneDepth = (p: Pane) => (p === "root" ? 0 : p === "reason" ? 2 : 1);
+  const setPane = (p: Pane) => {
+    setDir(paneDepth(p) >= paneDepth(pane) ? 1 : -1);
+    setPaneRaw(p);
+  };
   // The reason-required status the "reason" pane is asking a reason for.
   const [reasonFor, setReasonFor] = useState<VendorStatus | null>(null);
   const [copied, setCopied] = useState(false);
@@ -182,7 +189,8 @@ export function RowActionMenu({
     // Choosing or leaving puts focus back on the ⋯ button, as a menu button does.
     if (menuRef.current?.contains(document.activeElement)) btnRef.current?.focus();
     setOpen(false);
-    setPane("root");
+    setPaneRaw("root");
+    setDir(0);
     setReasonFor(null);
     setCopied(false);
   }
@@ -393,8 +401,15 @@ export function RowActionMenu({
             minWidth: 190,
             zIndex: 80,
             visibility: coords ? "visible" : "hidden",
+            overflowX: "hidden",
           }}
         >
+          <div
+            key={pane}
+            className="pane-slide"
+            data-dir={dir || undefined}
+            style={{ "--dir": dir } as React.CSSProperties}
+          >
           {pane === "root" && (
             <>
               {opt({ label: "Open thread", onClick: () => router.push(`/thread/${shortId}`) })}
@@ -457,6 +472,7 @@ export function RowActionMenu({
               )}
             </>
           )}
+          </div>
         </div>,
         document.body,
       )}

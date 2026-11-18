@@ -1742,8 +1742,8 @@ function LoopAge({ row, turn, nowMs }: { row: InboxRow; turn: LoopTurn; nowMs: n
 function WaitIc({ label }: { label: string }) {
   return (
     <svg role="img" aria-label={label} width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ verticalAlign: "-1px", marginRight: 4 }}>
-      <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.75" />
-      <path d="M8 4.5V8l2.5 1.75" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M8 4.5V8l2.5 1.75" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
