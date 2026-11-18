@@ -9,7 +9,7 @@ export default function NotFound() {
   return (
     <main style={{
       background: "var(--cream)",
-      minHeight: "100vh",
+      minHeight: "100dvh",
       display: "grid",
       placeItems: "center",
       padding: 16,

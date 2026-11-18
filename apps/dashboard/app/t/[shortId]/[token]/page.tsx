@@ -29,7 +29,7 @@ export default async function HostedThreadPage({ params }: { params: { shortId: 
   const shown = await customerStatusOf(item.id);
 
   return (
-    <main style={{ minHeight: "100vh", padding: "48px 16px" }}>
+    <main style={{ minHeight: "100dvh", padding: "48px 16px" }}>
       <div className="col gap-4" style={{ maxWidth: 560, margin: "0 auto" }}>
         <span className="row gap-2 serif text-lg">
           {accent && <span aria-hidden style={{ color: accent }}>&#9679;</span>}

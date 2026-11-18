@@ -12,7 +12,7 @@ export default function ContinuePage({ searchParams }: { searchParams: { token?:
   return (
     <main style={{
       background: "var(--cream)",
-      minHeight: "100vh",
+      minHeight: "100dvh",
       display: "grid",
       placeItems: "center",
       padding: 16,

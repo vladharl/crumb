@@ -215,7 +215,7 @@ h1, h2, h3, h4 {
 .app {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* ── Top bar ─────────────────────────────────────────────────── */
@@ -328,7 +328,7 @@ h1, h2, h3, h4 {
   width: 220px;
   background: var(--paper, var(--surface));
   border: 1px solid var(--line, var(--hair));
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   box-shadow: var(--sh-soft);
   z-index: 60;
   overflow: hidden;
@@ -364,13 +364,13 @@ h1, h2, h3, h4 {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 12vh 24px 24px;
+  padding: 12dvh 24px 24px;
 }
 .cmdk {
   width: min(560px, 100%);
   background: var(--paper, var(--surface));
   border: 1px solid var(--line, var(--hair));
-  border-radius: var(--r-md);
+  border-radius: var(--r-xl);
   box-shadow: var(--sh-soft);
   overflow: hidden;
 }
@@ -404,7 +404,7 @@ h1, h2, h3, h4 {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.cmdk-list { max-height: 50vh; overflow: auto; padding: 6px; }
+.cmdk-list { max-height: 50dvh; overflow: auto; padding: 6px; }
 .cmdk-opt {
   display: flex;
   align-items: center;
@@ -724,7 +724,7 @@ h1, h2, h3, h4 {
 .mention-menu {
   position: absolute; left: 0; right: 0; bottom: calc(100% + 4px);
   background: var(--paper, var(--surface)); border: 1px solid var(--line, var(--hair));
-  border-radius: var(--r-sm); box-shadow: var(--sh-soft); padding: 4px; z-index: 20;
+  border-radius: var(--r-lg); box-shadow: var(--sh-soft); padding: 4px; z-index: 20;
   max-height: 220px; overflow: auto;
 }
 .mention-opt {
@@ -769,7 +769,7 @@ h1, h2, h3, h4 {
   max-width: 320px;
   background: var(--paper, var(--surface));
   border: 1px solid var(--line, var(--hair));
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   box-shadow: var(--sh-soft);
   padding: 4px;
   z-index: 50;
@@ -2198,7 +2198,7 @@ details > summary::-webkit-details-marker { display: none; }
   border-radius: var(--r-md);
   box-shadow: var(--sh-soft);
   width: min(560px, 100%);
-  max-height: min(90vh, 720px);
+  max-height: min(90dvh, 720px);
   overflow: auto;
   position: relative;
 }
@@ -2213,31 +2213,11 @@ details > summary::-webkit-details-marker { display: none; }
   .sheet {
     width: 100%;
     max-width: 100%;
-    max-height: 92vh;
+    max-height: 92dvh;
     border-radius: var(--r-lg) var(--r-lg) 0 0;
     border-bottom: 0;
     padding-bottom: env(safe-area-inset-bottom);
     animation: sheet-up 0.3s var(--ease-out-quart);
-  }
-  /* Grab handle — the affordance that says "drag / dismiss". */
-  .sheet-handle {
-    display: block;
-    position: sticky;
-    top: 0;
-    height: 22px;
-    background: var(--surface);
-    z-index: 2;
-  }
-  .sheet-handle::before {
-    content: "";
-    position: absolute;
-    top: 9px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 36px;
-    height: 4px;
-    border-radius: 999px;
-    background: var(--hair-strong);
   }
 }
 @keyframes sheet-up {
@@ -2820,4 +2800,56 @@ details > summary::-webkit-details-marker { display: none; }
 
 @media (max-width: 640px) {
   .help-panel { width: 100%; border-left: 0; }
+}
+
+/* ── Design-audit fixes (2026-11-18) ───────────────────────── */
+
+/* <details> opens with a height transition where the browser supports
+   interpolate-size, matching the reply drawer. Others open instantly. */
+:root { interpolate-size: allow-keywords; }
+details::details-content {
+  block-size: 0;
+  overflow: clip;
+  transition: block-size .26s var(--ease-out-quart), content-visibility .26s allow-discrete;
+}
+details[open]::details-content { block-size: auto; }
+
+/* Form error: the invalid field shakes once. */
+@keyframes shake {
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
+}
+.input[aria-invalid="true"] { animation: shake .3s; }
+
+/* Scroll areas fade at the edge that has more content. The scroll timeline
+   is inactive when nothing overflows, so content that fits is not masked.
+   The two tab strips hide their scrollbars, so the fade is their only cue. */
+@property --fade-start { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --fade-end { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@supports (animation-timeline: scroll()) {
+  .inbox-toolbar-main .seg,
+  .settings-nav,
+  .cmdk-list,
+  .bell-list {
+    mask-image: linear-gradient(to right, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+    animation: scroll-fade linear both;
+    animation-timeline: scroll(self inline);
+  }
+  .cmdk-list,
+  .bell-list {
+    mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+    animation-timeline: scroll(self block);
+  }
+}
+@keyframes scroll-fade {
+  0% { --fade-start: 0px; --fade-end: 24px; }
+  10%, 90% { --fade-start: 24px; --fade-end: 24px; }
+  100% { --fade-start: 24px; --fade-end: 0px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The catch-all above shortens animations to 0.01ms; a scroll-driven
+     animation has no duration, so switch the fades off here. */
+  .inbox-toolbar-main .seg, .settings-nav, .cmdk-list, .bell-list { animation: none; mask-image: none; }
 }

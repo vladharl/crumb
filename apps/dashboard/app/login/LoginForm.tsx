@@ -42,6 +42,7 @@ export function LoginForm({ next, stdoutHint }: { next: string | null; stdoutHin
         e.preventDefault();
         const form = new FormData(e.currentTarget);
         const email = String(form.get("email") ?? "");
+        setState({ kind: "idle" }); // clears aria-invalid, so a repeat error shakes again
         startTransition(async () => {
           const res = await requestMagicLink(form);
           if (res.ok) setState({ kind: "sent", email });
@@ -61,6 +62,7 @@ export function LoginForm({ next, stdoutHint }: { next: string | null; stdoutHin
           autoComplete="email"
           className="input"
           placeholder="you@yourcompany.com"
+          aria-invalid={state.kind === "error" ? true : undefined}
           disabled={pending}
         />
       </Field>

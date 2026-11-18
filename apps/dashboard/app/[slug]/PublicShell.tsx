@@ -43,7 +43,7 @@ export function PublicShell({ ws, page, title, lede, width, children }: {
 }) {
   const accent = HEX.test(ws.accent) ? ws.accent : null;
   return (
-    <main style={{ minHeight: "100vh", padding: "40px 16px 64px" }}>
+    <main style={{ minHeight: "100dvh", padding: "40px 16px 64px" }}>
       <div className="col gap-6" style={{ maxWidth: width, margin: "0 auto" }}>
         <header className="col gap-5">
           <div className="row gap-3" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>

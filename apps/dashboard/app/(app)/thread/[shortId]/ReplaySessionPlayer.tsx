@@ -321,7 +321,7 @@ export function ReplaySessionPlayer({ replayId, chunks, durationMs, viewportW, v
       }}
       style={{
         background: "var(--bg)", borderRadius: "var(--r-md)",
-        width: netEvents.length ? "min(1320px, 94vw)" : "min(1100px, 92vw)", maxHeight: "92vh",
+        width: netEvents.length ? "min(1320px, 94vw)" : "min(1100px, 92vw)", maxHeight: "92dvh",
         display: "flex", flexDirection: "column", overflow: "hidden",
         border: "var(--border)",
       }}

@@ -8,7 +8,7 @@ const HEX = /^#[0-9a-f]{6}$/i;
 const CSS =
   `:root{--bg:#FBF7F0;--surface:#FDFAF4;--text:#4A2E1F;--text-2:#6A4528;--mute:rgba(74,46,31,.74);` +
   `--hair:rgba(74,46,31,.10);--focus-ring:#9C4C17;--accent-soft:#FCE9D6}` +
-  `*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;` +
+  `*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:16px;` +
   `background:var(--bg);color:var(--text);font:13px/1.5 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}` +
   `main{width:380px;max-width:100%;background:var(--surface);border:1px solid var(--hair);border-radius:6px;padding:28px}` +
   `.eyebrow{margin:0 0 8px;font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}` +

@@ -35,7 +35,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Search
   return (
     <main style={{
       background: "var(--cream)",
-      minHeight: "100vh",
+      minHeight: "100dvh",
       display: "grid",
       placeItems: "center",
       padding: 16,

@@ -24,7 +24,7 @@ export default async function OnboardPage({ searchParams }: { searchParams: { to
   return (
     <main style={{
       background: "var(--cream)",
-      minHeight: "100vh",
+      minHeight: "100dvh",
       display: "grid",
       placeItems: "center",
       padding: 16,

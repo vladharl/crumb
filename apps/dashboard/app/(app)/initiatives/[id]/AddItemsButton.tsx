@@ -92,7 +92,7 @@ export function AddItemsButton({ initiativeId }: { initiativeId: string }) {
             borderRadius: "var(--r-md)",
             padding: 20,
             width: "min(640px, 100%)",
-            maxHeight: "85vh",
+            maxHeight: "85dvh",
             boxShadow: "var(--sh-soft)",
           }}
         >

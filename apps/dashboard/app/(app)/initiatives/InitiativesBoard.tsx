@@ -309,7 +309,7 @@ export function InitiativesBoard({ initial, canManage }: { initial: BoardItem[];
                 onDrop={canManage ? (e => { e.preventDefault(); handleDrop(c.key); }) : undefined}
                 style={{
                   minHeight: 80,
-                  borderRadius: "var(--r-sm)",
+                  borderRadius: shipped ? "var(--r-md)" : "var(--r-xl)",
                   padding: shipped ? 0 : 4,
                   transition: "background 120ms, box-shadow 120ms",
                   background: isColTarget ? "rgba(226,125,58,0.06)" : "transparent",
