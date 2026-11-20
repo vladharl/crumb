@@ -402,6 +402,7 @@ export function RowActionMenu({
             zIndex: 80,
             visibility: coords ? "visible" : "hidden",
             overflowX: "hidden",
+            transformOrigin: "top right",
           }}
         >
           <div

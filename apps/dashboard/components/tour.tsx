@@ -248,7 +248,7 @@ function SpotlightOverlay({
           borderRadius: "var(--r-md)",
           boxShadow: "0 0 0 9999px rgba(28, 24, 21, 0.55)",
           pointerEvents: "none",
-          transition: "top 180ms ease, left 180ms ease, width 180ms ease, height 180ms ease",
+          transition: "top 180ms cubic-bezier(0.25, 1, 0.5, 1), left 180ms cubic-bezier(0.25, 1, 0.5, 1), width 180ms cubic-bezier(0.25, 1, 0.5, 1), height 180ms cubic-bezier(0.25, 1, 0.5, 1)",
           zIndex: 70,
         }}
       />
